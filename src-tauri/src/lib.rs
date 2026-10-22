@@ -1,74 +1,107 @@
-// Núcleo en Rust: lectura de hojas de cálculo.
-// Soporta .csv (crate `csv`) y .xlsx / .xlsm / .xlsb / .xls / .ods (crate `calamine`).
+// Punto de entrada del núcleo en Rust de WEPO.
+// Cada módulo atiende un tipo de documento; aquí solo se exponen sus
+// funciones a la interfaz como comandos de Tauri.
 
-use calamine::{open_workbook_auto, Reader};
-use serde::Serialize;
-use std::path::Path;
+mod sheets;
 
-#[derive(Serialize)]
-pub struct Sheet {
-    name: String,
-    rows: Vec<Vec<String>>,
+use std::sync::Mutex;
+
+use sheets::{SheetDocument, SheetView};
+use tauri::State;
+
+/// Hoja de cálculo abierta actualmente (WEPO abre un documento a la vez).
+#[derive(Default)]
+struct OpenSheet(Mutex<Option<SheetDocument>>);
+
+/// Ejecuta `action` sobre el libro abierto y devuelve la hoja `sheet` actualizada.
+fn with_sheet(
+    state: &State<OpenSheet>,
+    sheet: u32,
+    action: impl FnOnce(&mut SheetDocument) -> Result<(), String>,
+) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    action(doc)?;
+    doc.view(sheet)
 }
 
-#[derive(Serialize)]
-pub struct Workbook {
-    sheets: Vec<Sheet>,
-}
-
-fn read_csv(path: &str) -> Result<Workbook, String> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(false) // la primera fila es una fila más, como en Excel
-        .flexible(true) // permite filas con distinto número de columnas
-        .from_path(path)
-        .map_err(|e| e.to_string())?;
-
-    let rows = reader
-        .records()
-        .map(|rec| rec.map(|r| r.iter().map(String::from).collect()))
-        .collect::<Result<Vec<Vec<String>>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    let name = Path::new(path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Hoja1".into());
-
-    Ok(Workbook { sheets: vec![Sheet { name, rows }] })
-}
-
-fn read_spreadsheet(path: &str) -> Result<Workbook, String> {
-    let mut wb = open_workbook_auto(path).map_err(|e| e.to_string())?;
-    let mut sheets = Vec::new();
-
-    for name in wb.sheet_names().to_owned() {
-        let range = wb.worksheet_range(&name).map_err(|e| e.to_string())?;
-
-        // Si los datos empiezan en, por ejemplo, C5, rellenamos con celdas
-        // vacías para que cada valor quede en su posición real.
-        let (row0, col0) = range.start().unwrap_or((0, 0));
-        let mut rows: Vec<Vec<String>> = vec![Vec::new(); row0 as usize];
-
-        for r in range.rows() {
-            let mut row = vec![String::new(); col0 as usize];
-            row.extend(r.iter().map(|cell| cell.to_string()));
-            rows.push(row);
-        }
-
-        sheets.push(Sheet { name, rows });
-    }
-
-    Ok(Workbook { sheets })
-}
-
-/// Abre cualquier hoja de cálculo soportada y la devuelve como texto por celda.
 #[tauri::command]
-fn open_spreadsheet(path: String) -> Result<Workbook, String> {
-    if path.to_lowercase().ends_with(".csv") {
-        read_csv(&path)
-    } else {
-        read_spreadsheet(&path)
-    }
+fn sheet_new(state: State<OpenSheet>) -> Result<SheetView, String> {
+    let doc = SheetDocument::new_empty()?;
+    let view = doc.view(0)?;
+    *state.0.lock().map_err(|e| e.to_string())? = Some(doc);
+    Ok(view)
+}
+
+#[tauri::command]
+fn sheet_open(state: State<OpenSheet>, path: String) -> Result<SheetView, String> {
+    let doc = SheetDocument::open(&path)?;
+    let view = doc.view(0)?;
+    *state.0.lock().map_err(|e| e.to_string())? = Some(doc);
+    Ok(view)
+}
+
+#[tauri::command]
+fn sheet_view(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |_| Ok(()))
+}
+
+/// Contenido "crudo" de una celda: la fórmula si la tiene, o el valor.
+#[tauri::command]
+fn sheet_cell_input(state: State<OpenSheet>, sheet: u32, row: i32, col: i32) -> Result<String, String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.cell_input(sheet, row, col)
+}
+
+#[tauri::command]
+fn sheet_set_cell(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row: i32,
+    col: i32,
+    input: String,
+) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.set_cell(sheet, row, col, &input))
+}
+
+#[tauri::command]
+fn sheet_clear(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.clear_range(sheet, row1, col1, row2, col2))
+}
+
+#[tauri::command]
+fn sheet_undo(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.undo())
+}
+
+#[tauri::command]
+fn sheet_redo(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.redo())
+}
+
+/// Agrega una hoja nueva y devuelve su vista.
+#[tauri::command]
+fn sheet_add(state: State<OpenSheet>) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let index = doc.add_sheet()?;
+    doc.view(index)
+}
+
+/// Guarda en .xlsx (libro completo) o .csv (solo la hoja `sheet`).
+#[tauri::command]
+fn sheet_save(state: State<OpenSheet>, path: String, sheet: u32) -> Result<(), String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.save(&path, sheet)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -76,7 +109,19 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_spreadsheet])
+        .manage(OpenSheet::default())
+        .invoke_handler(tauri::generate_handler![
+            sheet_new,
+            sheet_open,
+            sheet_view,
+            sheet_cell_input,
+            sheet_set_cell,
+            sheet_clear,
+            sheet_undo,
+            sheet_redo,
+            sheet_add,
+            sheet_save,
+        ])
         .run(tauri::generate_context!())
-        .expect("error al iniciar la aplicación");
+        .expect("error al iniciar WEPO");
 }

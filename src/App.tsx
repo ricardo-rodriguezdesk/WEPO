@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import Home from "./screens/Home";
 import SheetEditor from "./editors/sheets/SheetEditor";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
-import type { Workbook } from "./lib/spreadsheet";
-import { emptyWorkbook, openSpreadsheet } from "./lib/spreadsheet";
+import type { SheetView } from "./lib/spreadsheet";
+import { sheetApi } from "./lib/spreadsheet";
 import "./App.css";
 
 /** Documento abierto actualmente. `id` cambia con cada apertura para reiniciar el editor. */
@@ -15,7 +15,8 @@ type OpenDocument = {
   id: number;
   kind: DocKind;
   fileName: string;
-  workbook?: Workbook;
+  path: string | null;
+  sheet?: SheetView;
 };
 
 export default function App() {
@@ -23,32 +24,47 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const nextId = useRef(1);
+  const dirty = useRef(false); // el editor avisa si hay cambios sin guardar
 
-  function newDocument(kind: DocKind) {
-    setError(null);
-    setDoc({
-      id: nextId.current++,
-      kind,
-      fileName: "Sin título",
-      workbook: kind === "sheets" ? emptyWorkbook() : undefined,
+  /** Pregunta antes de cerrar un documento con cambios sin guardar. */
+  async function confirmDiscard(): Promise<boolean> {
+    if (!dirty.current) return true;
+    return ask("Tienes cambios sin guardar. ¿Quieres descartarlos?", {
+      title: "WEPO",
+      kind: "warning",
+      okLabel: "Descartar",
+      cancelLabel: "Cancelar",
     });
   }
 
+  function show(next: OpenDocument | null, message: string | null = null) {
+    dirty.current = false;
+    setError(message);
+    setDoc(next);
+  }
+
+  async function newDocument(kind: DocKind) {
+    try {
+      const sheet = kind === "sheets" ? await sheetApi.create() : undefined;
+      show({ id: nextId.current++, kind, fileName: "Sin título", path: null, sheet });
+    } catch (e) {
+      show(null, `No se pudo crear el documento: ${e}`);
+    }
+  }
+
   async function openPath(path: string) {
+    if (!(await confirmDiscard())) return;
     const name = fileNameOf(path);
     const kind = kindFromPath(path);
     if (!kind) {
-      setDoc(null);
-      setError(`WEPO todavía no puede abrir archivos .${extensionOf(path) || "sin extensión"} (${name}).`);
+      show(null, `WEPO todavía no puede abrir archivos .${extensionOf(path) || "sin extensión"} (${name}).`);
       return;
     }
     try {
-      const workbook = kind === "sheets" ? await openSpreadsheet(path) : undefined;
-      setError(null);
-      setDoc({ id: nextId.current++, kind, fileName: name, workbook });
+      const sheet = kind === "sheets" ? await sheetApi.open(path) : undefined;
+      show({ id: nextId.current++, kind, fileName: name, path, sheet });
     } catch (e) {
-      setDoc(null);
-      setError(`No se pudo abrir ${name}: ${e}`);
+      show(null, `No se pudo abrir ${name}: ${e}`);
     }
   }
 
@@ -61,6 +77,10 @@ export default function App() {
       ],
     });
     if (path) await openPath(path);
+  }
+
+  async function goHome() {
+    if (await confirmDiscard()) show(null);
   }
 
   // Abrir archivos arrastrados desde Finder a la ventana.
@@ -86,14 +106,18 @@ export default function App() {
     return <Home onNew={newDocument} onOpen={openDialog} dragging={dragging} error={error} />;
   }
 
-  const common = {
-    fileName: doc.fileName,
-    onHome: () => setDoc(null),
-    onOpen: openDialog,
-  };
+  const common = { fileName: doc.fileName, onHome: goHome, onOpen: openDialog };
 
-  if (doc.kind === "sheets" && doc.workbook) {
-    return <SheetEditor key={doc.id} workbook={doc.workbook} {...common} />;
+  if (doc.kind === "sheets" && doc.sheet) {
+    return (
+      <SheetEditor
+        key={doc.id}
+        initialView={doc.sheet}
+        path={doc.path}
+        onDirtyChange={(value) => (dirty.current = value)}
+        {...common}
+      />
+    );
   }
   return <ComingSoon key={doc.id} kind={doc.kind} {...common} />;
 }

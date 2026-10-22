@@ -17,7 +17,9 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
 ## Tecnología
 
 - **[Tauri 2](https://tauri.app/)**: aplicación de escritorio de pocos MB, mucho más ligera que una basada en Electron.
-- **Rust**: núcleo que lee y escribe los formatos de archivo ([calamine](https://github.com/tafia/calamine), [csv](https://github.com/BurntSushi/rust-csv)).
+- **Rust**: núcleo que lee y escribe los formatos de archivo.
+  - [IronCalc](https://github.com/ironcalc/ironcalc): motor de hojas de cálculo con fórmulas, deshacer/rehacer y lectura y escritura de .xlsx.
+  - [calamine](https://github.com/tafia/calamine) y [csv](https://github.com/BurntSushi/rust-csv): lectura de .xls, .xlsb, .ods y .csv.
 - **React + TypeScript**: interfaz de cada editor.
 - **[TanStack Virtual](https://tanstack.com/virtual)**: la cuadrícula solo dibuja las celdas visibles, así que los archivos grandes se mantienen fluidos.
 
@@ -34,7 +36,8 @@ src/                      Interfaz (React + TypeScript)
 └── lib/                  Tipos de documento y comunicación con Rust
 
 src-tauri/                Núcleo nativo (Rust)
-└── src/lib.rs            Lectura de hojas de cálculo
+├── src/lib.rs            Comandos que la interfaz puede llamar
+└── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular y guardar
 ```
 
 ## Ejecutar en desarrollo
@@ -46,11 +49,31 @@ npm install
 npm run tauri dev
 ```
 
+Pruebas del núcleo en Rust:
+
+```bash
+cd src-tauri
+cargo test
+```
+
+## Atajos de WEPO Sheets
+
+| Acción | Atajo |
+|---|---|
+| Escribir en una celda | Empieza a teclear, o F2 / doble clic para editar lo que ya tiene |
+| Confirmar y bajar / ir a la derecha | Enter / Tab |
+| Cancelar la edición | Esc |
+| Seleccionar un rango | Shift + flechas, o arrastrar con el mouse |
+| Borrar la selección | Delete |
+| Deshacer / rehacer | ⌘Z / ⌘⇧Z |
+| Guardar / guardar como | ⌘S / ⌘⇧S |
+
 ## Hoja de ruta
 
 - [x] Abrir hojas de cálculo (.xlsx, .xls, .ods, .csv) con todas sus hojas
 - [x] Pantalla de inicio y apertura de archivos por extensión o arrastrándolos a la ventana
-- [ ] WEPO Sheets: editar celdas, navegar con el teclado, fórmulas y guardar en .xlsx y .csv
+- [x] WEPO Sheets: editar celdas, navegar con el teclado, fórmulas, deshacer/rehacer y guardar en .xlsx y .csv
+- [ ] WEPO Sheets: copiar y pegar, formato de celdas (negritas, colores, número), ancho de columnas
 - [ ] WEPO Write: abrir, editar y guardar .docx
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [ ] Exportar a PDF

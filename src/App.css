@@ -69,6 +69,7 @@ body { background: var(--bg); }
   cursor: pointer;
 }
 .btn:hover { border-color: var(--muted); }
+.btn-icon { min-width: 30px; padding: 4px 8px; font-size: 15px; line-height: 1; }
 .btn-primary {
   padding: 8px 18px;
   font-weight: 600;
@@ -98,6 +99,8 @@ body { background: var(--bg); }
 }
 .toolbar-icon { display: grid; color: var(--kind-accent); }
 .toolbar-app { font-weight: 600; white-space: nowrap; }
+.toolbar-group { display: flex; gap: 4px; }
+.toolbar-dirty { color: var(--kind-accent); font-weight: 700; }
 .toolbar-file {
   color: var(--muted);
   overflow: hidden;
