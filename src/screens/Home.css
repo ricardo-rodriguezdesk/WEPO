@@ -1,0 +1,101 @@
+.home {
+  position: relative;
+  height: 100vh;
+  overflow: auto;
+  padding: 56px 48px 40px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.home-hero { margin-bottom: 40px; }
+.home-logo {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+.home-tagline {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.home-section { margin-bottom: 36px; }
+.home-section h2 {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.home-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.home-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 20px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--kind-accent);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.home-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--kind-accent);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+.home-card-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  color: var(--kind-accent);
+  background: var(--kind-soft);
+}
+.home-card-label { font-size: 16px; font-weight: 600; }
+.home-card-app { font-size: 12px; color: var(--muted); }
+.home-card-formats {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.home-open { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.home-drop-hint { color: var(--muted); }
+.home-error {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.home-drop-overlay {
+  position: fixed;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+  pointer-events: none;
+}

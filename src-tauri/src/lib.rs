@@ -61,8 +61,9 @@ fn read_spreadsheet(path: &str) -> Result<Workbook, String> {
     Ok(Workbook { sheets })
 }
 
+/// Abre cualquier hoja de cálculo soportada y la devuelve como texto por celda.
 #[tauri::command]
-fn open_file(path: String) -> Result<Workbook, String> {
+fn open_spreadsheet(path: String) -> Result<Workbook, String> {
     if path.to_lowercase().ends_with(".csv") {
         read_csv(&path)
     } else {
@@ -75,7 +76,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_file])
+        .invoke_handler(tauri::generate_handler![open_spreadsheet])
         .run(tauri::generate_context!())
         .expect("error al iniciar la aplicación");
 }

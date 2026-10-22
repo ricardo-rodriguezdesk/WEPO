@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "suite-office",
+  "productName": "WEPO",
   "version": "0.1.0",
-  "identifier": "com.ricardorodriguezarellano.suite-office",
+  "identifier": "com.ricardorodriguezarellano.wepo",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "suite-office",
-        "width": 800,
-        "height": 600
+        "title": "WEPO",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480
       }
     ],
     "security": {

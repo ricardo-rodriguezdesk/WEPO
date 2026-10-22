@@ -1,119 +1,131 @@
+/* Estilos globales de WEPO: colores, tipografía y piezas compartidas. */
+
 :root {
   --bg: #ffffff;
+  --surface: #ffffff;
   --chrome: #f5f5f7;
   --border: #e1e1e6;
   --grid-line: #ececf0;
   --text: #1d1d1f;
   --muted: #6e6e73;
-  --accent: #1f7a4d; /* verde de hoja de cálculo */
-  --accent-soft: #e3f2ea;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --accent: #5b5bd6;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+
+  /* Un color propio para cada editor */
+  --write: #3b6fd8;
+  --write-soft: #e8effc;
+  --sheets: #1f8a55;
+  --sheets-soft: #e3f4ea;
+  --present: #d9572b;
+  --present-soft: #fcebe4;
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1e1e1e;
+    --surface: #262628;
     --chrome: #2a2a2c;
     --border: #3a3a3c;
     --grid-line: #313133;
     --text: #f5f5f7;
     --muted: #98989d;
-    --accent: #3ccf85;
-    --accent-soft: #1f3a2c;
+    --accent: #8b8bf0;
+    --danger: #ff8a7a;
+    --danger-soft: #3a201c;
+
+    --write: #6f9bf0;
+    --write-soft: #1f2a40;
+    --sheets: #3ccf85;
+    --sheets-soft: #1f3a2c;
+    --present: #f08a62;
+    --present-soft: #3d2620;
   }
 }
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; }
+body { background: var(--bg); }
 
-.app { display: flex; flex-direction: column; height: 100vh; }
+/* Cada editor y tarjeta toma el color de su tipo */
+.kind-write { --kind-accent: var(--write); --kind-soft: var(--write-soft); }
+.kind-sheets { --kind-accent: var(--sheets); --kind-soft: var(--sheets-soft); }
+.kind-present { --kind-accent: var(--present); --kind-soft: var(--present-soft); }
 
-.toolbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 12px;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--border);
-}
-.toolbar button, .sheet-tabs button {
-  font: inherit; color: var(--text);
-  background: var(--bg);
+/* Botones */
+.btn {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 12px;
   cursor: pointer;
 }
-.file-name { color: var(--muted); }
-
-.formula-bar {
-  display: flex; align-items: center;
-  border-bottom: 1px solid var(--border);
-  height: 30px;
+.btn:hover { border-color: var(--muted); }
+.btn-primary {
+  padding: 8px 18px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }
-.cell-ref {
-  width: 80px; text-align: center;
-  border-right: 1px solid var(--border);
-  font-variant-numeric: tabular-nums;
-}
-.formula-bar input {
-  flex: 1; height: 100%; border: 0; padding: 0 8px;
-  font: inherit; color: var(--text); background: var(--bg); outline: none;
-}
+.btn-primary:hover { filter: brightness(1.08); border-color: var(--accent); }
 
-.error { padding: 8px 12px; background: #fdecea; color: #a1281e; }
+/* Estructura de un editor */
+.editor { display: flex; flex-direction: column; height: 100vh; }
 
-.grid-scroll { flex: 1; overflow: auto; position: relative; }
-.grid-canvas { position: relative; }
-
-.col-headers {
-  position: sticky; top: 0; z-index: 2;
-  height: 24px;
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
   background: var(--chrome);
-}
-.corner {
-  position: absolute; top: 0; height: 24px; z-index: 3;
-  background: var(--chrome);
-  border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
-.col-header, .row-header {
-  position: absolute;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--chrome);
+.toolbar-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.toolbar-icon { display: grid; color: var(--kind-accent); }
+.toolbar-app { font-weight: 600; white-space: nowrap; }
+.toolbar-file {
   color: var(--muted);
-  font-size: 12px;
-  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.col-header {
-  top: 0; height: 24px;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.row-header {
-  z-index: 1;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.col-header.active, .row-header.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
-.cell {
-  position: absolute;
-  padding: 0 6px;
-  line-height: 24px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  border-right: 1px solid var(--grid-line);
-  border-bottom: 1px solid var(--grid-line);
-  cursor: cell;
+/* Editores aún no construidos */
+.coming-soon {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
 }
-.cell.number { text-align: right; font-variant-numeric: tabular-nums; }
-.cell.selected { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 0; }
-
-.sheet-tabs {
-  display: flex; gap: 4px;
-  padding: 6px 12px;
-  background: var(--chrome);
-  border-top: 1px solid var(--border);
+.coming-soon-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 8px;
+  border-radius: 16px;
+  color: var(--kind-accent);
+  background: var(--kind-soft);
 }
-.sheet-tabs button.active { border-color: var(--accent); color: var(--accent); }
+.coming-soon h2 { margin: 0; color: var(--text); font-size: 18px; }
+.coming-soon p { margin: 0; }
