@@ -23,7 +23,8 @@ export function fontFamily(name: string): string {
   return name ? `"${name}", ${FALLBACK_FONTS}` : FALLBACK_FONTS;
 }
 
-export function cellCss(style: StyleView, numeric: boolean): CSSProperties {
+/** `zoom` agranda o achica la letra junto con la cuadrícula. */
+export function cellCss(style: StyleView, numeric: boolean, zoom = 1): CSSProperties {
   const decorations = [style.u && "underline", style.strike && "line-through"].filter(Boolean);
   const horizontal = style.h ?? (numeric ? "right" : "left");
 
@@ -31,7 +32,7 @@ export function cellCss(style: StyleView, numeric: boolean): CSSProperties {
     fontWeight: style.b ? 700 : undefined,
     fontStyle: style.i ? "italic" : undefined,
     textDecoration: decorations.length ? decorations.join(" ") : undefined,
-    fontSize: `${style.size}pt`,
+    fontSize: `${style.size * zoom}pt`,
     fontFamily: fontFamily(style.font),
     color: style.color ?? undefined,
     background: style.fill ?? undefined,

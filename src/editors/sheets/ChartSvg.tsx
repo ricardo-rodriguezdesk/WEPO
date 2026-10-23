@@ -28,9 +28,10 @@ function label(v: number): string {
   return Math.abs(v) >= 10000 ? compactFormat.format(v) : numberFormat.format(v);
 }
 
-type Props = { chart: ChartView; width: number; height: number };
+/** `width` y `height` son el tamaño real; `scale` (el zoom) solo agranda el dibujo. */
+type Props = { chart: ChartView; width: number; height: number; scale?: number };
 
-export default function ChartSvg({ chart, width, height }: Props) {
+export default function ChartSvg({ chart, width, height, scale = 1 }: Props) {
   const pie = chart.kind === "pie" || chart.kind === "doughnut";
   const series = chart.series;
   const titleH = chart.title ? 30 : 8;
@@ -43,7 +44,7 @@ export default function ChartSvg({ chart, width, height }: Props) {
   const plot = { x: 8, y: titleH, w: width - 16 - legendW, h: height - titleH - 8 };
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="chart-svg" fontFamily={FONT}>
+    <svg width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`} className="chart-svg" fontFamily={FONT}>
       <rect width={width} height={height} fill="var(--chart-bg, #fff)" />
       {chart.title && (
         <text x={width / 2} y={21} textAnchor="middle" fontSize="15" fontWeight="600" fill="var(--chart-text, #222)">

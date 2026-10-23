@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
@@ -42,7 +42,9 @@ import { findFunction, suggestFunctions } from "./functions";
 import { canPointAt, cycleReference, findRefs } from "./formulaRefs";
 import type { FormulaLanguage } from "../../lib/preferences";
 import { getFormulaLanguage, setFormulaLanguage } from "../../lib/preferences";
-import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH } from "./layout";
+import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH, clampZoom, stepZoom } from "./layout";
+import ZoomControl from "./ZoomControl";
+import { loadZoom, saveZoom } from "../../lib/zoom";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
@@ -122,6 +124,8 @@ export default function SheetEditor(props: Props) {
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
   const [dialog, setDialog] = useState<"conditional" | "validation" | "print" | null>(null);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  // Zoom de la hoja (1 = 100 %). Solo cambia cómo se ve, no el archivo.
+  const [zoom, setZoomState] = useState(() => loadZoom(props.path));
   const [listOpen, setListOpen] = useState(false);
   // Gráfica o imagen seleccionada, y si su panel de edición está abierto.
   const [selectedDrawing, setSelectedDrawing] = useState<number | null>(null);
@@ -163,10 +167,14 @@ export default function SheetEditor(props: Props) {
 
   // Anchos y altos: casi todos son los normales; Rust manda solo las excepciones.
   // Las filas y columnas ocultas miden 0.
-  const colAxis = useMemo(
-    () => new Axis(DEFAULT_COL_WIDTH, [...view.col_widths, ...view.hidden_cols.map((c) => [c, 0] as [number, number])]),
+  // `baseCols` y `baseRows` son las medidas reales (las del archivo y la impresión);
+  // `colAxis` y `rowAxis`, las mismas con el zoom aplicado, para dibujar.
+  const colCustom = useMemo(
+    () => [...view.col_widths, ...view.hidden_cols.map((c) => [c, 0] as [number, number])],
     [view.col_widths, view.hidden_cols],
   );
+  const baseCols = useMemo(() => new Axis(DEFAULT_COL_WIDTH, colCustom), [colCustom]);
+  const colAxis = useMemo(() => new Axis(DEFAULT_COL_WIDTH, colCustom, zoom), [colCustom, zoom]);
   // Alto automático: filas con letra más grande o texto en varias líneas crecen
   // solas, como en Excel, salvo que el alto se haya fijado a mano.
   const autoHeights = useMemo(() => {
@@ -179,22 +187,19 @@ export default function SheetEditor(props: Props) {
       row.forEach(([text, , styleId], c) => {
         const style = view.styles[styleId];
         if (!style || !text || (style.size <= baseSize && !style.wrap)) return;
-        const lines = style.wrap ? wrappedLines(text, style, colAxis.size(c) - 12) : 1;
+        const lines = style.wrap ? wrappedLines(text, style, baseCols.size(c) - 12) : 1;
         height = Math.max(height, lines * lineHeight(style) + 6);
       });
       if (height > DEFAULT_ROW_HEIGHT) result.push([r + 1, height]);
     });
     return result;
-  }, [rows, view.styles, view.row_heights, view.hidden_rows, colAxis]);
-  const rowAxis = useMemo(
-    () =>
-      new Axis(DEFAULT_ROW_HEIGHT, [
-        ...autoHeights,
-        ...view.row_heights,
-        ...view.hidden_rows.map((r) => [r, 0] as [number, number]),
-      ]),
+  }, [rows, view.styles, view.row_heights, view.hidden_rows, baseCols]);
+  const rowCustom = useMemo(
+    () => [...autoHeights, ...view.row_heights, ...view.hidden_rows.map((r) => [r, 0] as [number, number])],
     [autoHeights, view.row_heights, view.hidden_rows],
   );
+  const baseRows = useMemo(() => new Axis(DEFAULT_ROW_HEIGHT, rowCustom), [rowCustom]);
+  const rowAxis = useMemo(() => new Axis(DEFAULT_ROW_HEIGHT, rowCustom, zoom), [rowCustom, zoom]);
 
   // Barras de datos, íconos y calificaciones, por celda.
   const decorations = useMemo(() => {
@@ -615,7 +620,7 @@ export default function SheetEditor(props: Props) {
     if (!resize) return;
     const onMove = (e: MouseEvent) => {
       const delta = (resize.axis === "col" ? e.clientX : e.clientY) - resize.startPos;
-      setResize({ ...resize, size: Math.max(12, Math.round(resize.startSize + delta)) });
+      setResize({ ...resize, size: Math.max(12 * zoom, Math.round(resize.startSize + delta)) });
     };
     const onUp = () => {
       const { axis, index, size, startSize } = resize;
@@ -626,8 +631,10 @@ export default function SheetEditor(props: Props) {
         axis === "col"
           ? index >= selection.c1 && index <= selection.c2 && wholeCols ? [selection.c1, selection.c2] : [index, index]
           : index >= selection.r1 && index <= selection.r2 && wholeRows ? [selection.r1, selection.r2] : [index, index];
+      // La guía se arrastra con zoom; al archivo va la medida real.
+      const real = Math.max(1, Math.round(size / zoom));
       mutate(() =>
-        axis === "col" ? sheetApi.columnWidth(sheet, from, to, size) : sheetApi.rowHeight(sheet, from, to, size),
+        axis === "col" ? sheetApi.columnWidth(sheet, from, to, real) : sheetApi.rowHeight(sheet, from, to, real),
       );
     };
     window.addEventListener("mousemove", onMove);
@@ -698,8 +705,8 @@ export default function SheetEditor(props: Props) {
     });
     if (!path) return;
     try {
-      const x = Math.max(0, scrollX + 40);
-      const y = Math.max(0, scrollY + 40);
+      const x = Math.max(0, Math.round((scrollX + 40) / zoom));
+      const y = Math.max(0, Math.round((scrollY + 40) / zoom));
       const { id, view: next } = await sheetApi.addImage(sheet, path, x, y);
       setView(next);
       markDirty();
@@ -943,13 +950,83 @@ export default function SheetEditor(props: Props) {
     await run(() => saveTo(finalPath));
   }
 
+  // ───────────── zoom ─────────────
+
+  /**
+   * Punto que debe quedarse quieto al cambiar el zoom (el del puntero o el centro):
+   * su posición en la hoja sin zoom (`x`, `y`) y en la pantalla (`px`, `py`).
+   */
+  const zoomAnchor = useRef<{ x: number; y: number; px: number; py: number; zoom: number } | null>(null);
+
+  function setZoom(next: number, anchor?: { x: number; y: number }) {
+    const value = clampZoom(next);
+    if (value === zoom) return;
+    const el = scrollRef.current;
+    if (el) {
+      const box = el.getBoundingClientRect();
+      const px = Math.max(0, (anchor?.x ?? box.left + box.width / 2) - box.left - HEADER_WIDTH);
+      const py = Math.max(0, (anchor?.y ?? box.top + box.height / 2) - box.top - HEADER_HEIGHT);
+      zoomAnchor.current = { x: (el.scrollLeft + px) / zoom, y: (el.scrollTop + py) / zoom, px, py, zoom: value };
+    }
+    setZoomState(value);
+    saveZoom(path, value);
+  }
+
+  // Después de redibujar con el zoom nuevo, se desplaza para que el punto quede donde estaba.
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    const el = scrollRef.current;
+    if (!anchor || !el || anchor.zoom !== zoom) return;
+    zoomAnchor.current = null;
+    colVirtualizer.measure();
+    rowVirtualizer.measure();
+    el.scrollLeft = Math.max(0, anchor.x * zoom - anchor.px);
+    el.scrollTop = Math.max(0, anchor.y * zoom - anchor.py);
+  }, [zoom]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pellizcar en el trackpad, o ⌃ + rueda del mouse.
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const setZoomRef = useRef(setZoom);
+  setZoomRef.current = setZoom;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // Chrome y Windows mandan el pellizco como rueda con ctrlKey.
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setZoomRef.current(zoomRef.current * Math.exp(-e.deltaY * 0.01), { x: e.clientX, y: e.clientY });
+    };
+    // Safari y WebKit (la app en Mac) lo mandan como gesto.
+    let start = 1;
+    type Gesture = Event & { scale: number; clientX: number; clientY: number };
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      start = zoomRef.current;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const g = e as Gesture;
+      setZoomRef.current(start * g.scale, { x: g.clientX, y: g.clientY });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", onGestureStart);
+    el.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart);
+      el.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, []);
+
   // ───────────── imprimir ─────────────
 
   async function startPrint(options: PrintOptions) {
     setDialog(null);
     await commit();
     // Una selección de filas o columnas completas se recorta hasta donde hay datos.
-    const range = options.area === "selection" ? clampToData(rows, selection) : usedRange(view, colAxis, rowAxis);
+    const range = options.area === "selection" ? clampToData(rows, selection) : usedRange(view, baseCols, baseRows);
     if (!range) {
       showStatus({ text: "La hoja está vacía: no hay nada que imprimir.", error: true });
       return;
@@ -984,8 +1061,8 @@ export default function SheetEditor(props: Props) {
   useEffect(() => setPrintJob(null), [view]);
 
   // Órdenes que llegan del menú de la app o de los atajos (⌘S, ⌘⇧S, ⌘F, ⌘P).
-  const commands = useRef({ saveDocument, setFindOpen, setDialog });
-  commands.current = { saveDocument, setFindOpen, setDialog };
+  const commands = useRef({ saveDocument, setFindOpen, setDialog, setZoom, zoom });
+  commands.current = { saveDocument, setFindOpen, setDialog, setZoom, zoom };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
@@ -993,11 +1070,21 @@ export default function SheetEditor(props: Props) {
       else if (command === "save-as") c.saveDocument(true);
       else if (command === "find") c.setFindOpen(true);
       else if (command === "print") c.setDialog("print");
+      else if (command === "zoom-in") c.setZoom(stepZoom(c.zoom, 1));
+      else if (command === "zoom-out") c.setZoom(stepZoom(c.zoom, -1));
+      else if (command === "zoom-reset") c.setZoom(1);
     });
     function onKey(e: globalThis.KeyboardEvent) {
       if (!e.metaKey) return;
       const key = e.key.toLowerCase();
-      const command = key === "s" ? (e.shiftKey ? "save-as" : "save") : key === "f" ? "find" : key === "p" ? "print" : null;
+      const command =
+        key === "s" ? (e.shiftKey ? "save-as" : "save")
+        : key === "f" ? "find"
+        : key === "p" ? "print"
+        : key === "=" || key === "+" ? "zoom-in"
+        : key === "-" ? "zoom-out"
+        : key === "0" ? "zoom-reset"
+        : null;
       if (command) {
         e.preventDefault();
         runCommand(command);
@@ -1323,7 +1410,7 @@ export default function SheetEditor(props: Props) {
     let box = cellBox;
     // Texto largo: se desborda sobre las celdas vacías de la derecha, como en Excel.
     if (text && !numeric && !cellStyle.wrap && (!cellStyle.h || cellStyle.h === "left") && !extra.includes("merged") && !deco) {
-      const needed = textWidth(text, cellStyle) + 12;
+      const needed = textWidth(text, cellStyle) * zoom + 12;
       if (needed > box.width) {
         let width = box.width;
         for (let k = c + 1; width < needed && k < c + 30 && canSpillInto(r, k); k++) width += colAxis.size(k);
@@ -1337,7 +1424,7 @@ export default function SheetEditor(props: Props) {
       <div
         key={key}
         className={cellClasses(r, c, numeric, extra)}
-        style={{ ...cellCss(cellStyle, numeric), ...box }}
+        style={{ ...cellCss(cellStyle, numeric, zoom), ...box }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           if (selectedDrawing !== null) setSelectedDrawing(null);
@@ -1721,6 +1808,7 @@ export default function SheetEditor(props: Props) {
             }}
             onChange={updateDrawing}
             onEdit={(id) => setChartPanel(id)}
+            zoom={zoom}
           />
 
           {/* Números de fila fijos a la izquierda (los de filas inmovilizadas, aparte) */}
@@ -1805,11 +1893,11 @@ export default function SheetEditor(props: Props) {
               label="Editar celda"
               value={editing.value}
               style={{
-                ...cellCss(activeStyle, false),
+                ...cellCss(activeStyle, false, zoom),
                 top: HEADER_HEIGHT + rowAxis.start(editing.cell.r) + (editingFrozen?.r ? scrollY : 0),
                 left: HEADER_WIDTH + colAxis.start(editing.cell.c) + (editingFrozen?.c ? scrollX : 0),
-                height: Math.max(rowAxis.size(editing.cell.r), DEFAULT_ROW_HEIGHT),
-                width: Math.max(colAxis.size(editing.cell.c), editing.value.length * 8 + 20),
+                height: Math.max(rowAxis.size(editing.cell.r), DEFAULT_ROW_HEIGHT * zoom),
+                width: Math.max(colAxis.size(editing.cell.c), (editing.value.length * 8 + 20) * zoom),
                 background: activeStyle.fill ?? undefined,
                 // El borde de la caja de edición es el del editor, no el de la celda.
                 borderTop: undefined,
@@ -1867,6 +1955,7 @@ export default function SheetEditor(props: Props) {
             {status.text}
           </span>
         )}
+        <ZoomControl zoom={zoom} onChange={(z) => setZoom(z)} />
       </SheetTabs>
 
       {editing && assist && !assistDismissed && (assist.suggestions.length > 0 || assist.signature) && (
@@ -1932,7 +2021,7 @@ export default function SheetEditor(props: Props) {
         />
       )}
       {printJob && (
-        <PrintSheet job={printJob} view={view} cols={colAxis} rows={rowAxis} merged={merged} decorations={decorations} />
+        <PrintSheet job={printJob} view={view} cols={baseCols} rows={baseRows} merged={merged} decorations={decorations} />
       )}
       {dialog === "validation" && (
         <ValidationDialog

@@ -12,6 +12,8 @@ type Props = {
   /** Se llama al soltar después de mover o redimensionar. */
   onChange: (id: number, patch: DrawingPatch) => void;
   onEdit: (id: number) => void;
+  /** Zoom de la hoja: las posiciones vienen sin zoom y se dibujan multiplicadas. */
+  zoom: number;
 };
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -19,7 +21,7 @@ type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 /** Gráficas e imágenes flotando sobre la cuadrícula. Se mueven arrastrando y se redimensionan con las asas. */
-export default function DrawingLayer({ drawings, selected, onSelect, onChange, onEdit }: Props) {
+export default function DrawingLayer({ drawings, selected, onSelect, onChange, onEdit, zoom }: Props) {
   const [images, setImages] = useState<Record<number, string>>({});
   // Mientras se arrastra, la posición se muestra aquí y solo se guarda al soltar.
   const [preview, setPreview] = useState<{ id: number; box: Box } | null>(null);
@@ -57,8 +59,9 @@ export default function DrawingLayer({ drawings, selected, onSelect, onChange, o
   function move(e: ReactPointerEvent) {
     const current = drag.current;
     if (!current) return;
-    const dx = e.clientX - current.startX;
-    const dy = e.clientY - current.startY;
+    // El mouse se mueve en pantalla; la gráfica se guarda sin zoom.
+    const dx = (e.clientX - current.startX) / zoom;
+    const dy = (e.clientY - current.startY) / zoom;
     const s = current.start;
     let box: Box;
     if (current.handle === "move") {
@@ -115,7 +118,12 @@ export default function DrawingLayer({ drawings, selected, onSelect, onChange, o
           <div
             key={d.id}
             className={`drawing${isSelected ? " selected" : ""}`}
-            style={{ left: HEADER_WIDTH + box.x, top: HEADER_HEIGHT + box.y, width: box.w, height: box.h }}
+            style={{
+              left: HEADER_WIDTH + box.x * zoom,
+              top: HEADER_HEIGHT + box.y * zoom,
+              width: box.w * zoom,
+              height: box.h * zoom,
+            }}
             onPointerDown={(e) => start(e, d, "move")}
             onPointerMove={move}
             onPointerUp={end}
@@ -130,7 +138,7 @@ export default function DrawingLayer({ drawings, selected, onSelect, onChange, o
             aria-label={d.type === "chart" ? `Gráfica ${d.title || d.kind}` : `Imagen ${d.name}`}
           >
             {d.type === "chart" ? (
-              <ChartSvg chart={d} width={box.w} height={box.h} />
+              <ChartSvg chart={d} width={box.w} height={box.h} scale={zoom} />
             ) : images[d.id] ? (
               <img src={images[d.id]} alt={d.name} draggable={false} />
             ) : (

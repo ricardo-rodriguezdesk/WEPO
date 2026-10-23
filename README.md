@@ -115,6 +115,7 @@ También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`gi
 | Deshacer / rehacer | ⌘Z / ⌘⇧Z |
 | Guardar / guardar como | ⌘S / ⌘⇧S |
 | Imprimir o exportar a PDF | ⌘P |
+| Acercar / alejar / 100 % | ⌘+ / ⌘− / ⌘0, pellizcar en el trackpad, o el control de zoom junto a las pestañas |
 | Nueva hoja de cálculo / abrir archivo | ⌘N / ⌘O |
 | Salir de WEPO | ⌘Q (avisa si hay cambios sin guardar) |
 
@@ -140,6 +141,7 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg
+- [x] WEPO Sheets: zoom de la hoja de 25 % a 400 %
 
 ## Licencia
 

@@ -57,13 +57,19 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("find", "Buscar y reemplazar…", Some("CmdOrCtrl+F"))?)
         .build()?;
 
+    let view = SubmenuBuilder::new(app, "Visualización")
+        .item(&item("zoom-in", "Acercar", Some("CmdOrCtrl+="))?)
+        .item(&item("zoom-out", "Alejar", Some("CmdOrCtrl+-"))?)
+        .item(&item("zoom-reset", "Tamaño real (100 %)", Some("CmdOrCtrl+0"))?)
+        .build()?;
+
     let window = SubmenuBuilder::new(app, "Ventana")
         .item(&PredefinedMenuItem::minimize(app, Some("Minimizar"))?)
         .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
         .item(&PredefinedMenuItem::fullscreen(app, Some("Pantalla completa"))?)
         .build()?;
 
-    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &window]).build()
+    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &window]).build()
 }
 
 /// Una opción del menú: la interfaz decide qué hacer.

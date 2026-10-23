@@ -488,3 +488,30 @@
 .chart-series-item small { margin-left: auto; color: var(--muted); }
 .chart-series-color { width: 12px; height: 12px; border-radius: 3px; }
 .chart-delete { width: 100%; color: var(--danger); }
+
+/* Zoom de la hoja, a la derecha de las pestañas */
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.sheet-status + .zoom-control { margin-left: 12px; }
+.zoom-step,
+.zoom-percent {
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.zoom-step { width: 24px; font-size: 16px; line-height: 1; }
+.zoom-percent { min-width: 52px; padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.zoom-step:hover:not(:disabled),
+.zoom-percent:hover { background: var(--border); color: var(--text); }
+.zoom-step:disabled { opacity: 0.35; cursor: default; }
+.zoom-slider { width: 110px; accent-color: var(--kind-accent); cursor: pointer; }
