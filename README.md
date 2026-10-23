@@ -32,7 +32,7 @@ src/                      Interfaz (React + TypeScript)
 ├── screens/Home.tsx      Pantalla de inicio: crear o abrir
 ├── editors/
 │   ├── sheets/           WEPO Sheets
-│   ├── write/            WEPO Write (editor y lector/escritor de .docx)
+│   ├── write/            WEPO Write: editor, páginas (extensions.ts) y lector/escritor de .docx
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
 ├── components/           Piezas compartidas (barra superior, íconos)
 └── lib/                  Tipos de documento, recientes, órdenes del menú y comunicación con Rust
@@ -118,6 +118,20 @@ WEPO también funciona en Linux (Ubuntu 22.04 o más nuevo, Debian, Fedora y sim
   npm run tauri dev
   ```
 
+## Atajos de WEPO Write
+
+En Windows y Linux, ⌘ es Ctrl.
+
+| Atajo | Qué hace |
+|---|---|
+| ⌘B / ⌘I / ⌘U | Negrita, cursiva, subrayado |
+| ⌘K | Insertar o editar un vínculo (⌘ + clic lo abre) |
+| ⌘↩ | Salto de página |
+| ⌘F | Buscar y reemplazar |
+| ⌘S / ⌘⇧S | Guardar / Guardar como (.docx, .md o .txt) |
+| ⌘P | Imprimir o exportar a PDF |
+| Doble clic en el encabezado o el pie | Editarlos |
+
 ## Atajos de WEPO Sheets
 
 | Acción | Atajo |
@@ -177,7 +191,9 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: gráficas (columnas, barras, líneas, áreas, pastel, dona, dispersión) que se leen y guardan en .xlsx
 - [x] WEPO Sheets: imágenes (PNG, JPEG, GIF)
 - [x] WEPO Write: abrir, editar y guardar .docx (también .md y .txt)
-- [ ] WEPO Write: comentarios, control de cambios, encabezados y pies de página
+- [x] WEPO Write: páginas reales con saltos de página, encabezado y pie con número de página (se leen y guardan en .docx)
+- [x] WEPO Write: buscar y reemplazar, interlineado, espacio entre párrafos y sangrías
+- [ ] WEPO Write: comentarios y control de cambios
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg

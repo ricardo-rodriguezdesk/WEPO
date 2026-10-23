@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { JSONContent } from "@tiptap/react";
 import type { WriteDocument } from "../editors/write/docx";
-import { LETTER, readDocx, readMarkdown, readText, writeDocx, writeMarkdown } from "../editors/write/docx";
+import { LETTER, NO_HEADER_FOOTER, readDocx, readMarkdown, readText, writeDocx, writeMarkdown } from "../editors/write/docx";
 import { extensionOf } from "./documents";
 
 function toBase64(bytes: Uint8Array): string {
@@ -25,7 +25,7 @@ const decoder = new TextDecoder("utf-8");
 const encoder = new TextEncoder();
 
 export function emptyDocument(): WriteDocument {
-  return { content: { type: "doc", content: [{ type: "paragraph" }] }, page: LETTER, unsupported: [] };
+  return { content: { type: "doc", content: [{ type: "paragraph" }] }, page: LETTER, headerFooter: structuredClone(NO_HEADER_FOOTER), unsupported: [] };
 }
 
 /** Formatos que WEPO Write sabe guardar tal cual. */
@@ -41,10 +41,17 @@ export async function openWriteDocument(path: string): Promise<WriteDocument> {
 }
 
 /** Guarda en .docx, .md o .txt según la extensión. `plain` es el texto del documento (para .txt). */
-export async function saveWriteDocument(path: string, content: JSONContent, page: WriteDocument["page"], plain: string, title: string) {
+export async function saveWriteDocument(
+  path: string,
+  content: JSONContent,
+  page: WriteDocument["page"],
+  headerFooter: WriteDocument["headerFooter"],
+  plain: string,
+  title: string,
+) {
   const ext = extensionOf(path);
   let bytes: Uint8Array;
-  if (ext === "docx") bytes = await writeDocx(content, page, title);
+  if (ext === "docx") bytes = await writeDocx(content, page, title, headerFooter);
   else if (ext === "md") bytes = encoder.encode(writeMarkdown(content));
   else if (ext === "txt") bytes = encoder.encode(plain.endsWith("\n") ? plain : `${plain}\n`);
   else throw new Error(`WEPO Write todavía no guarda archivos .${ext}`);

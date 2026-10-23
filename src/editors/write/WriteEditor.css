@@ -5,9 +5,11 @@
   flex: 1;
   overflow: auto;
   padding: 28px 24px 48px;
-  background: color-mix(in srgb, var(--chrome) 60%, var(--border));
+  background: var(--write-canvas);
 }
+.write-editor { --write-canvas: color-mix(in srgb, var(--chrome) 60%, var(--border)); }
 .write-page {
+  position: relative;
   box-sizing: border-box;
   margin: 0 auto;
   color: #1d1d1f;
@@ -24,7 +26,8 @@
   font-family: Calibri, "Carlito", -apple-system, "Segoe UI", Arial, sans-serif;
   font-size: 11pt;
   line-height: 1.35;
-  min-height: 100%;
+  /* Sin esto el margen del primer párrafo se sale y descuadra la medición de páginas. */
+  display: flow-root;
   white-space: pre-wrap;
   -webkit-user-select: text;
   user-select: text;
@@ -58,6 +61,99 @@
 }
 .write-content ::selection { background: color-mix(in srgb, var(--kind-accent) 28%, transparent); }
 
+/* Encabezado y pie de cada hoja (doble clic para editarlos) */
+.write-hf {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: Calibri, "Carlito", -apple-system, "Segoe UI", Arial, sans-serif;
+  font-size: 9pt;
+  color: #595959;
+  white-space: pre;
+  overflow: hidden;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.write-hf:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kind-accent) 35%, transparent); border-radius: 3px; }
+.write-hf:empty::after, .write-hf span:empty::after { content: ""; }
+
+/* El corte entre hojas: lo que falta de la hoja, su pie, el espacio gris y el encabezado de la siguiente */
+.write-gap { display: block; -webkit-user-select: none; user-select: none; }
+.write-gap-fill { pointer-events: none; }
+.write-gap-band {
+  position: relative;
+  height: var(--page-gap);
+  background: var(--write-canvas);
+  box-shadow: inset 0 6px 6px -6px rgba(0, 0, 0, 0.18), inset 0 -6px 6px -6px rgba(0, 0, 0, 0.18);
+  cursor: default;
+}
+.write-gap-band span {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--muted);
+  font-family: -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Salto de página puesto a mano */
+.write-page-break {
+  position: relative;
+  height: 14px;
+  margin: 0;
+  border-top: 1px dashed #b5b5b5;
+  cursor: default;
+}
+.write-page-break::after {
+  content: "Salto de página";
+  position: absolute;
+  left: 50%;
+  top: -8px;
+  transform: translateX(-50%);
+  padding: 0 6px;
+  font-size: 9px;
+  color: #8a8a8a;
+  background: #fff;
+  font-family: -apple-system, "Segoe UI", sans-serif;
+}
+.write-page-break.ProseMirror-selectednode { border-top-color: var(--kind-accent); }
+
+/* Resultados de buscar */
+.write-content .write-match { background: #fff3a3; border-radius: 2px; }
+.write-content .write-match.current { background: #ffb347; }
+
+/* Menú de interlineado */
+.write-menu { display: flex; flex-direction: column; min-width: 240px; padding: 4px 0; }
+.write-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 6px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.write-menu button:hover { background: color-mix(in srgb, var(--kind-accent) 12%, transparent); }
+.write-menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
+.write-menu-check { width: 16px; text-align: center; color: var(--kind-accent); }
+
+/* Diálogos de párrafo y de encabezado */
+.paragraph-form { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px 12px; margin-bottom: 8px; }
+.pf-label { color: var(--muted); font-size: 13px; }
+.pf-num { width: 80px; }
+.hf-section { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.hf-section legend { padding: 0 4px; font-size: 12px; color: var(--muted); }
+.hf-section .input { width: 100%; box-sizing: border-box; }
+.hf-align { display: flex; gap: 14px; margin-top: 8px; }
+.hf-fields { flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
 .write-style { width: 104px; }
 .write-table-label { font-size: 12px; color: var(--muted); margin: 0 2px 0 4px; }
 .write-table-btn { padding: 2px 8px; font-size: 12px; }
@@ -77,13 +173,21 @@
 .write-footer .sheet-status { margin-left: auto; }
 .write-footer .sheet-status + .zoom-control { margin-left: 12px; }
 
-/* Imprimir: solo la página, sin barras; los márgenes los pone @page (ver WriteEditor). */
+/* Imprimir: solo las hojas, sin barras. Cada corte de la pantalla es un salto de hoja real,
+   así que lo impreso queda igual que lo que se ve (con encabezado, pie y número de página). */
 @media print {
   html, body, #root { height: auto !important; overflow: visible !important; background: #fff !important; }
   .write-editor { display: block; height: auto; }
   .write-editor > :not(.write-canvas) { display: none !important; }
   .write-canvas { padding: 0; overflow: visible; background: none; }
-  .write-page { width: auto !important; min-height: 0 !important; padding: 0 !important; box-shadow: none; zoom: 1 !important; }
+  .write-page { margin: 0; border-radius: 0; box-shadow: none; zoom: 1 !important; }
+  .write-gap-band { display: none !important; }
+  /* El salto conserva su alto para que las hojas impresas coincidan con la pantalla. */
+  .write-page-break { border-top-color: transparent; }
+  .write-page-break::after { content: none; }
+  .write-gap .write-hf-header { break-before: page; page-break-before: always; }
+  .write-hf:hover { box-shadow: none; }
+  .write-content .write-match { background: none; }
   .write-content { white-space: pre-wrap; }
   .write-content p.is-editor-empty:first-child::before { content: none; }
 }

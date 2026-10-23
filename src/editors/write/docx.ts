@@ -6,12 +6,15 @@
 //
 // Se conserva: párrafos, títulos, negrita, cursiva, subrayado, tachado,
 // fuente, tamaño, color, resaltado, alineación, listas (con niveles),
-// tablas, imágenes, vínculos, saltos de línea y el tamaño y márgenes de la
-// página. Lo demás (encabezados y pies, notas al pie, comentarios, cuadros
-// de texto…) se reporta en `unsupported` para no sobrescribir el original.
+// tablas, imágenes, vínculos, saltos de línea y de página, interlineado,
+// espaciado y sangrías, encabezado y pie de página (texto con número de
+// página) y el tamaño y márgenes de la página. Lo demás (notas al pie,
+// comentarios, cuadros de texto…) se reporta en `unsupported` para no
+// sobrescribir el original.
 
 import JSZip from "jszip";
 import type { JSONContent } from "@tiptap/react";
+import type { HeaderFooter } from "./extensions";
 
 /** Tamaño y márgenes de la página, en twips (1/1440 de pulgada), como en Word. */
 export type PageSize = { width: number; height: number; top: number; right: number; bottom: number; left: number };
@@ -19,9 +22,15 @@ export type PageSize = { width: number; height: number; top: number; right: numb
 /** Carta con márgenes de 2.5 cm, lo normal en México. */
 export const LETTER: PageSize = { width: 12240, height: 15840, top: 1417, right: 1701, bottom: 1417, left: 1701 };
 
+/** Encabezado y pie de página del documento (el mismo en todas las páginas). */
+export type HeaderFooterSet = { header: HeaderFooter; footer: HeaderFooter; skipFirst: boolean };
+
+export const NO_HEADER_FOOTER: HeaderFooterSet = { header: { text: "", align: "center" }, footer: { text: "", align: "center" }, skipFirst: false };
+
 export type WriteDocument = {
   content: JSONContent;
   page: PageSize;
+  headerFooter: HeaderFooterSet;
   /** Cosas del archivo que WEPO Write todavía no conserva. */
   unsupported: string[];
 };
@@ -126,6 +135,36 @@ type StyleInfo = {
   numPr: Element | undefined;
 };
 type ListInfo = { numId: string; level: number; ordered: boolean };
+
+/** Marca temporal de un salto de página dentro de un párrafo (luego se parte el párrafo ahí). */
+const PAGE_MARK = "__pageBreak";
+const TWIPS_PER_PT = 20;
+
+/** Interlineado, espaciado y sangrías de un párrafo (pPr) en el formato del editor. */
+function paragraphFormat(pPr: Element | undefined, inList: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const spacing = child(pPr, "spacing");
+  if (spacing) {
+    const before = attr(spacing, "before");
+    const after = attr(spacing, "after");
+    const line = attr(spacing, "line");
+    const rule = attr(spacing, "lineRule") ?? "auto";
+    if (before !== null && attr(spacing, "beforeAutospacing") !== "1") out.spaceBefore = Number(before) / TWIPS_PER_PT;
+    if (after !== null && attr(spacing, "afterAutospacing") !== "1") out.spaceAfter = Number(after) / TWIPS_PER_PT;
+    if (line !== null && Number(line) > 0) out.lineHeight = rule === "auto" ? Math.round((Number(line) / 240) * 100) / 100 : `${Number(line) / TWIPS_PER_PT}pt`;
+  }
+  // En las listas la sangría la pone la numeración.
+  const ind = child(pPr, "ind");
+  if (ind && !inList) {
+    const left = attr(ind, "left") ?? attr(ind, "start");
+    const first = attr(ind, "firstLine");
+    const hanging = attr(ind, "hanging");
+    if (left !== null && Number(left)) out.indent = Number(left) / TWIPS_PER_PT;
+    if (first !== null && Number(first)) out.firstLine = Number(first) / TWIPS_PER_PT;
+    else if (hanging !== null && Number(hanging)) out.firstLine = -Number(hanging) / TWIPS_PER_PT;
+  }
+  return out;
+}
 type Mark = { type: string; attrs?: Record<string, unknown> };
 
 class Reader {
@@ -253,6 +292,10 @@ class Reader {
               if (text) out.push({ type: "text", text, ...(all.length ? { marks: all } : {}) });
             } else if (part.localName === "tab") {
               out.push({ type: "text", text: "\t", ...(all.length ? { marks: all } : {}) });
+            } else if (part.localName === "br" && attr(part, "type") === "page") {
+              out.push({ type: PAGE_MARK });
+            } else if (part.localName === "br" && attr(part, "type") === "column") {
+              // Las columnas no existen en WEPO: el salto de columna se ignora.
             } else if (part.localName === "br" || part.localName === "cr") {
               out.push({ type: "hardBreak" });
             } else if (part.localName === "drawing") {
@@ -306,10 +349,13 @@ class Reader {
     await this.inline(p, styleMarks, content);
     const attrs: Record<string, unknown> = {};
     if (textAlign) attrs.textAlign = textAlign;
+    if (flag(child(pPr, "pageBreakBefore"))) content.unshift({ type: PAGE_MARK });
+    const inList = Boolean(child(pPr, "numPr"));
+    Object.assign(attrs, paragraphFormat(pPr, inList));
     const node: JSONContent =
       level !== null
         ? { type: "heading", attrs: { ...attrs, level }, ...(content.length ? { content } : {}) }
-        : { type: "paragraph", ...(textAlign ? { attrs } : {}), ...(content.length ? { content } : {}) };
+        : { type: "paragraph", ...(Object.keys(attrs).length ? { attrs } : {}), ...(content.length ? { content } : {}) };
 
     // La numeración puede venir en el párrafo o en su estilo (o en el estilo base).
     let numPr = child(pPr, "numPr");
@@ -324,7 +370,10 @@ class Reader {
       const styleLevel = /list (?:bullet|number) (\d)$/.exec(this.styles.get(styleId ?? "")?.name ?? "");
       const lvl = Number(attr(child(numPr, "ilvl"), "val") ?? (styleLevel ? Number(styleLevel[1]) - 1 : 0));
       const format = this.numbering.get(numId)?.[lvl] ?? "decimal";
-      return { node: node.type === "heading" ? { ...node, type: "paragraph", attrs: undefined } : node, list: { numId, level: lvl, ordered: format !== "bullet" } };
+      const item = node.type === "heading" ? { ...node, type: "paragraph", attrs: undefined } : node;
+      // En una lista no se parten párrafos por saltos de página.
+      if (item.content) item.content = item.content.filter((c) => c.type !== PAGE_MARK);
+      return { node: item, list: { numId, level: lvl, ordered: format !== "bullet" } };
     }
     return { node, list: null };
   }
@@ -362,7 +411,7 @@ class Reader {
         const { node, list } = await this.paragraph(el);
         if (!list) {
           closeLists();
-          out.push(node);
+          out.push(...splitAtPageBreaks(node));
           continue;
         }
         // Un elemento de lista: se acomoda en el nivel que le toca.
@@ -394,6 +443,101 @@ class Reader {
   }
 }
 
+/** Parte un párrafo en sus saltos de página: texto, salto, texto. */
+function splitAtPageBreaks(node: JSONContent): JSONContent[] {
+  const content = node.content ?? [];
+  if (!content.some((c) => c.type === PAGE_MARK)) return [node];
+  const out: JSONContent[] = [];
+  let part: JSONContent[] = [];
+  const { content: _content, ...shell } = node;
+  const flush = () => {
+    if (part.length) out.push({ ...shell, content: part });
+    part = [];
+  };
+  for (const c of content) {
+    if (c.type === PAGE_MARK) {
+      flush();
+      out.push({ type: "pageBreak" });
+    } else part.push(c);
+  }
+  flush();
+  return out;
+}
+
+/** Texto de un encabezado o pie: los campos de número de página se vuelven [Página] y [Páginas]. */
+function headerFooterText(root: Element, unsupported: Set<string>): HeaderFooter {
+  const parts: string[] = [];
+  let align: HeaderFooter["align"] = "left";
+  const field = (instr: string) => {
+    const name = instr.trim().split(/\s+/)[0]?.toUpperCase();
+    return name === "PAGE" ? "[Página]" : name === "NUMPAGES" || name === "SECTIONPAGES" ? "[Páginas]" : name === "DATE" || name === "TIME" ? "[Fecha]" : name === "FILENAME" ? "[Archivo]" : null;
+  };
+  const paragraphs = Array.from(root.getElementsByTagNameNS(W, "p"));
+  paragraphs.forEach((p, i) => {
+    const jc = attr(child(child(p, "pPr"), "jc"), "val");
+    if (i === 0 || (!parts.join("").trim() && jc)) align = jc === "center" ? "center" : jc === "right" || jc === "end" ? "right" : "left";
+    let text = "";
+    let instr: string | null = null;
+    let inResult = false;
+    const walk = (el: Element) => {
+      for (const node of kids(el)) {
+        const name = node.localName;
+        if (name === "fldSimple") {
+          text += field(attr(node, "instr") ?? "") ?? node.textContent ?? "";
+        } else if (name === "fldChar") {
+          const type = attr(node, "fldCharType");
+          if (type === "begin") (instr = ""), (inResult = false);
+          else if (type === "separate") inResult = true;
+          else if (type === "end") {
+            if (instr !== null) text += field(instr) ?? "";
+            instr = null;
+            inResult = false;
+          }
+        } else if (name === "instrText") {
+          if (instr !== null) instr += node.textContent ?? "";
+        } else if (name === "t") {
+          if (instr === null && !inResult) text += node.textContent ?? "";
+          else if (instr !== null && inResult && !field(instr)) text += node.textContent ?? "";
+        } else if (name === "tab") {
+          if (instr === null) text += "   ";
+        } else if (name === "drawing" || name === "pict" || name === "tbl" || name === "AlternateContent") {
+          unsupported.add("imágenes o tablas en el encabezado o el pie");
+        } else if (name !== "pPr" && name !== "rPr") walk(node);
+      }
+    };
+    walk(p);
+    if (text.trim()) parts.push(text.trim());
+  });
+  return { text: parts.join(" · "), align };
+}
+
+async function readHeaderFooter(zip: JSZip, reader: Reader, sectPr: Element | undefined): Promise<HeaderFooterSet> {
+  const result: HeaderFooterSet = structuredClone(NO_HEADER_FOOTER);
+  const load = async (ref: Element | undefined): Promise<HeaderFooter | null> => {
+    const id = ref?.getAttributeNS(R, "id") ?? ref?.getAttribute("r:id");
+    const rel = id ? reader.rels.get(id) : undefined;
+    if (!rel) return null;
+    const xml = await zip.file(rel.target.startsWith("/") ? rel.target.slice(1) : `word/${rel.target}`)?.async("string");
+    return xml ? headerFooterText(parse(xml).documentElement, reader.unsupported) : null;
+  };
+  for (const kind of ["header", "footer"] as const) {
+    const refs = kids(sectPr, `${kind}Reference`);
+    const byType = (type: string) => refs.find((r) => (attr(r, "type") ?? "default") === type);
+    const main = await load(byType("default"));
+    if (main) result[kind] = main;
+    if (flag(child(sectPr, "titlePg"))) {
+      const first = await load(byType("first"));
+      if (!first || !first.text) result.skipFirst = Boolean(result.header.text || result.footer.text || result.skipFirst || main?.text);
+      else if (first.text !== main?.text) reader.unsupported.add("encabezado o pie distinto en la primera página");
+    }
+    if (byType("even")) {
+      const even = await load(byType("even"));
+      if (even?.text && even.text !== main?.text) reader.unsupported.add("encabezados distintos en páginas pares");
+    }
+  }
+  return result;
+}
+
 function pageFrom(sectPr: Element | undefined): PageSize {
   const size = child(sectPr, "pgSz");
   const margin = child(sectPr, "pgMar");
@@ -421,11 +565,12 @@ export async function readDocx(data: Uint8Array): Promise<WriteDocument> {
   if (!body) throw new Error("El documento está vacío o dañado");
   const content = await reader.blocks(body);
   const sectPr = child(body, "sectPr");
-  if (child(sectPr, "headerReference") || child(sectPr, "footerReference")) reader.unsupported.add("encabezados y pies de página");
   if (kids(body, "p").some((p) => child(child(p, "pPr"), "sectPr"))) reader.unsupported.add("varias secciones");
+  const headerFooter = await readHeaderFooter(zip, reader, sectPr);
   return {
     content: { type: "doc", content: content.length ? content : [{ type: "paragraph" }] },
     page: pageFrom(sectPr),
+    headerFooter,
     unsupported: [...reader.unsupported],
   };
 }
@@ -521,6 +666,18 @@ class Writer {
   paragraph(node: JSONContent, extra = ""): string {
     let props = extra;
     if (node.type === "heading") props = `<w:pStyle w:val="Heading${node.attrs?.level ?? 1}"/>` + props;
+    const a = node.attrs ?? {};
+    const twips = (v: unknown) => Math.round(Number(v) * 20);
+    const spacing: string[] = [];
+    if (a.spaceBefore !== null && a.spaceBefore !== undefined) spacing.push(`w:before="${twips(a.spaceBefore)}"`);
+    if (a.spaceAfter !== null && a.spaceAfter !== undefined) spacing.push(`w:after="${twips(a.spaceAfter)}"`);
+    if (typeof a.lineHeight === "number") spacing.push(`w:line="${Math.round(a.lineHeight * 240)}" w:lineRule="auto"`);
+    else if (typeof a.lineHeight === "string" && /^[\d.]+pt$/.test(a.lineHeight)) spacing.push(`w:line="${twips(parseFloat(a.lineHeight))}" w:lineRule="exact"`);
+    if (spacing.length) props += `<w:spacing ${spacing.join(" ")}/>`;
+    const ind: string[] = [];
+    if (a.indent) ind.push(`w:left="${twips(a.indent)}"`);
+    if (a.firstLine) ind.push(Number(a.firstLine) > 0 ? `w:firstLine="${twips(a.firstLine)}"` : `w:hanging="${twips(-Number(a.firstLine))}"`);
+    if (ind.length && !extra.includes("<w:numPr>")) props += `<w:ind ${ind.join(" ")}/>`;
     const align = node.attrs?.textAlign as string | undefined;
     if (align && align !== "left") props += `<w:jc w:val="${align === "justify" ? "both" : align}"/>`;
     const pPr = props ? `<w:pPr>${props}</w:pPr>` : "";
@@ -590,6 +747,8 @@ class Writer {
         return `<w:p>${this.image(node)}</w:p>`;
       case "blockquote":
         return (node.content ?? []).map((c) => this.paragraph(c, '<w:pStyle w:val="Quote"/>')).join("");
+      case "pageBreak":
+        return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
       case "horizontalRule":
         return '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>';
       case "codeBlock":
@@ -625,6 +784,23 @@ class Writer {
   }
 }
 
+/** Párrafo de un encabezado o pie, con los campos de página como campos de Word. */
+function headerFooterXml(kind: "hdr" | "ftr", hf: HeaderFooter | null): string {
+  let runs = "";
+  if (hf?.text) {
+    for (const part of hf.text.split(/(\[Página\]|\[Páginas\]|\[Fecha\]|\[Archivo\])/)) {
+      if (!part) continue;
+      const instr = part === "[Página]" ? "PAGE" : part === "[Páginas]" ? "NUMPAGES" : part === "[Fecha]" ? 'DATE \\@ "dd/MM/yyyy"' : part === "[Archivo]" ? "FILENAME" : null;
+      runs += instr
+        ? `<w:fldSimple w:instr=" ${escapeXml(instr)} "><w:r><w:t>1</w:t></w:r></w:fldSimple>`
+        : `<w:r><w:t xml:space="preserve">${escapeXml(part)}</w:t></w:r>`;
+    }
+  }
+  const jc = hf && hf.align !== "left" ? `<w:jc w:val="${hf.align}"/>` : "";
+  const style = kind === "hdr" ? "Header" : "Footer";
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${kind} xmlns:w="${W}" xmlns:r="${R}"><w:p><w:pPr><w:pStyle w:val="${style}"/>${jc}</w:pPr>${runs}</w:p></w:${kind}>`;
+}
+
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="es-MX"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
@@ -637,14 +813,31 @@ ${[1, 2, 3, 4, 5, 6]
 <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="60"/><w:contextualSpacing/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720" w:right="720"/></w:pPr><w:rPr><w:i/><w:color w:val="404040"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Header"><w:name w:val="header"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
 </w:styles>`;
 
-export async function writeDocx(content: JSONContent, page: PageSize, title = ""): Promise<Uint8Array> {
+export async function writeDocx(content: JSONContent, page: PageSize, title = "", hf: HeaderFooterSet = NO_HEADER_FOOTER): Promise<Uint8Array> {
   const writer = new Writer(page);
   let body = (content.content ?? []).map((b) => writer.block(b)).join("");
-  body += `<w:sectPr><w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>`;
+  // Encabezado y pie: header1/footer1 para todas las páginas; header2/footer2 vacíos para la portada.
+  const parts: { name: string; kind: "hdr" | "ftr"; xml: string }[] = [];
+  let refs = "";
+  if (hf.header.text || hf.footer.text) {
+    const add = (kind: "hdr" | "ftr", type: "default" | "first", value: HeaderFooter | null) => {
+      const base = kind === "hdr" ? "header" : "footer";
+      const name = `${base}${parts.filter((p) => p.kind === kind).length + 1}.xml`;
+      parts.push({ name, kind, xml: headerFooterXml(kind, value) });
+      refs += `<w:${base}Reference w:type="${type}" r:id="${writer.rel(base, name)}"/>`;
+    };
+    add("hdr", "default", hf.header);
+    if (hf.skipFirst) add("hdr", "first", null);
+    add("ftr", "default", hf.footer);
+    if (hf.skipFirst) add("ftr", "first", null);
+  }
+  body += `<w:sectPr>${refs}<w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>${hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}</w:body></w:document>`;
 
   const zip = new JSZip();
@@ -654,7 +847,7 @@ export async function writeDocx(content: JSONContent, page: PageSize, title = ""
     .join("");
   put(
     "[Content_Types].xml",
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${parts.map((p) => `<Override PartName="/word/${p.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${p.kind === "hdr" ? "header" : "footer"}+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
   );
   put(
     "_rels/.rels",
@@ -668,6 +861,7 @@ export async function writeDocx(content: JSONContent, page: PageSize, title = ""
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${REL}/numbering" Target="numbering.xml"/>${writer.rels.join("")}</Relationships>`,
   );
   for (const m of writer.media) put(`word/media/${m.name}`, m.data);
+  for (const p of parts) put(`word/${p.name}`, p.xml);
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   put(
     "docProps/core.xml",

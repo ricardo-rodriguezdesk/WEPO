@@ -12,12 +12,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import EditorToolbar from "../../components/EditorToolbar";
-import { AlignIcon, ColorButton, FONTS, SIZES, Separator, ToolButton } from "../sheets/FormatBar";
+import { AlignIcon, ColorButton, FONTS, Popover, SIZES, Separator, ToolButton } from "../sheets/FormatBar";
 import ZoomControl from "../sheets/ZoomControl";
 import LinkDialog from "../sheets/LinkDialog";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import type { PageSize, WriteDocument } from "./docx";
-import { LETTER } from "./docx";
+import type { HeaderFooterSet, PageSize, WriteDocument } from "./docx";
+import { LETTER, NO_HEADER_FOOTER } from "./docx";
+import type { PageLayout, ParagraphFormat } from "./extensions";
+import { PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, currentParagraphFormat, fillFields } from "./extensions";
+import HeaderFooterDialog from "./HeaderFooterDialog";
+import ParagraphDialog from "./ParagraphDialog";
+import WriteFindBar from "./WriteFindBar";
 import { imageDataUrl, saveWriteDocument } from "../../lib/write";
 import { extensionOf, fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
@@ -64,10 +69,31 @@ export default function WriteEditor(props: Props) {
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [zoom, setZoomState] = useState(() => loadZoom(props.path));
   const [linkDialog, setLinkDialog] = useState<{ text: string; href: string | null } | null>(null);
+  const [headerFooter, setHeaderFooter] = useState<HeaderFooterSet>(initial.headerFooter ?? NO_HEADER_FOOTER);
+  const [hfDialog, setHfDialog] = useState(false);
+  const [paragraphDialog, setParagraphDialog] = useState<ParagraphFormat | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [pages, setPages] = useState(1);
   // Un archivo con cosas que WEPO todavía no conserva se guarda como copia.
   const [protectedPath] = useState(initial.unsupported.length ? props.path : null);
   const [notice, setNotice] = useState(initial.unsupported.length > 0);
   const loading = useRef(true);
+
+  // Lo que la paginación necesita saber de la hoja (se lee en cada medición).
+  const layout = useRef<PageLayout>(null!);
+  layout.current = {
+    width: px(page.width),
+    height: px(page.height),
+    top: px(page.top),
+    right: px(page.right),
+    bottom: px(page.bottom),
+    left: px(page.left),
+    header: headerFooter.header,
+    footer: headerFooter.footer,
+    skipFirst: headerFooter.skipFirst,
+    fileName,
+    zoom,
+  };
 
   const extensions = useMemo(
     () => [
@@ -84,6 +110,10 @@ export default function WriteEditor(props: Props) {
       TableHeader,
       TableCell,
       CharacterCount,
+      PageBreak,
+      ParagraphFormatExtension,
+      Search,
+      Pagination.configure({ layout: () => layout.current, onPages: setPages }),
       Placeholder.configure({ placeholder: "Escribe aquí…" }),
     ],
     [],
@@ -105,6 +135,16 @@ export default function WriteEditor(props: Props) {
     loading.current = false;
   }, []);
 
+  // Con otra hoja, otro encabezado o zoom, las páginas se vuelven a cortar.
+  useEffect(() => {
+    editor?.commands.refreshPages();
+  }, [editor, page, headerFooter, zoom, fileName]);
+
+  function markDirty() {
+    setDirty(true);
+    onDirtyChange(true);
+  }
+
   // Los mensajes normales desaparecen solos; los errores se quedan.
   useEffect(() => {
     if (!status || status.error) return;
@@ -125,7 +165,7 @@ export default function WriteEditor(props: Props) {
   async function saveTo(target: string) {
     if (!editor) return false;
     try {
-      await saveWriteDocument(target, editor.getJSON(), page, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""));
+      await saveWriteDocument(target, editor.getJSON(), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""));
       markSaved(target);
       const note = extensionOf(target) === "docx" ? "" : " (como texto: sin imágenes ni la mayoría del formato)";
       setStatus({ text: `Guardado${note}` });
@@ -206,8 +246,9 @@ export default function WriteEditor(props: Props) {
 
   // ───────────── órdenes del menú y atajos ─────────────
 
-  const commands = useRef({ saveDocument, print, setZoom, zoom, openLinkDialog });
-  commands.current = { saveDocument, print, setZoom, zoom, openLinkDialog };
+  const openFind = () => setFindOpen(true);
+  const commands = useRef({ saveDocument, print, setZoom, zoom, openLinkDialog, openFind });
+  commands.current = { saveDocument, print, setZoom, zoom, openLinkDialog, openFind };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
@@ -217,6 +258,7 @@ export default function WriteEditor(props: Props) {
       else if (command === "zoom-in") c.setZoom(stepZoom(c.zoom, 1));
       else if (command === "zoom-out") c.setZoom(stepZoom(c.zoom, -1));
       else if (command === "zoom-reset") c.setZoom(1);
+      else if (command === "find") c.openFind();
     });
     function onKey(e: globalThis.KeyboardEvent) {
       if (!hasModifier(e)) return;
@@ -227,6 +269,7 @@ export default function WriteEditor(props: Props) {
         : key === "=" || key === "+" ? "zoom-in"
         : key === "-" ? "zoom-out"
         : key === "0" ? "zoom-reset"
+        : key === "f" ? "find"
         : null;
       if (command) {
         e.preventDefault();
@@ -261,7 +304,16 @@ export default function WriteEditor(props: Props) {
   });
 
   const pageLabel = PAGE_SIZES.find((s) => s.width === page.width && s.height === page.height)?.label ?? "Personalizado";
-  const pageCss = `@page { size: ${page.width / 1440}in ${page.height / 1440}in; margin: ${page.top / 1440}in ${page.right / 1440}in ${page.bottom / 1440}in ${page.left / 1440}in; }`;
+  // Las páginas ya vienen cortadas (con su encabezado y pie), así que la hoja impresa no lleva márgenes propios.
+  const pageCss = `@page { size: ${page.width / 1440}in ${page.height / 1440}in; margin: 0; }`;
+
+  // Doble clic en el encabezado o el pie: editarlos.
+  function onPageDoubleClick(e: React.MouseEvent) {
+    if ((e.target as HTMLElement).closest("[data-hf]")) {
+      e.preventDefault();
+      setHfDialog(true);
+    }
+  }
 
   const toolbarActions = (
     <div className="toolbar-group">
@@ -287,7 +339,16 @@ export default function WriteEditor(props: Props) {
     <div className="editor kind-write write-editor">
       <style>{`@media print { ${pageCss} }`}</style>
       <EditorToolbar kind="write" fileName={fileName} dirty={dirty} onHome={onHome} onOpen={onOpen} actions={toolbarActions} />
-      {editor && <WriteBar editor={editor} onLink={openLinkDialog} onImage={insertImage} />}
+      {editor && (
+        <WriteBar
+          editor={editor}
+          onLink={openLinkDialog}
+          onImage={insertImage}
+          onHeaderFooter={() => setHfDialog(true)}
+          onParagraph={() => setParagraphDialog(currentParagraphFormat(editor))}
+        />
+      )}
+      {findOpen && editor && <WriteFindBar editor={editor} onClose={() => setFindOpen(false)} />}
 
       {notice && (
         <div className="sheet-notice write-notice" role="status">
@@ -304,21 +365,24 @@ export default function WriteEditor(props: Props) {
       <div className="write-canvas">
         <div
           className="write-page"
-          style={{
-            width: px(page.width),
-            minHeight: px(page.height),
-            padding: `${px(page.top)}px ${px(page.right)}px ${px(page.bottom)}px ${px(page.left)}px`,
-            zoom,
-          }}
+          style={{ width: px(page.width), padding: `0 ${px(page.right)}px`, zoom, ["--page-gap" as string]: `${PAGE_GAP}px` }}
           onMouseDown={onContentMouseDown}
+          onDoubleClick={onPageDoubleClick}
         >
+          <div
+            className="write-hf write-hf-header"
+            data-hf="header"
+            style={{ height: px(page.top), justifyContent: headerFooter.header.align === "left" ? "flex-start" : headerFooter.header.align === "right" ? "flex-end" : "center" }}
+          >
+            <span>{headerFooter.skipFirst ? "" : fillFields(headerFooter.header.text, 1, pages, fileName)}</span>
+          </div>
           <EditorContent editor={editor} />
         </div>
       </div>
 
       <footer className="write-footer">
         <span>
-          {counts?.words ?? 0} {counts?.words === 1 ? "palabra" : "palabras"} · {counts?.characters ?? 0} caracteres
+          {pages} {pages === 1 ? "página" : "páginas"} · {counts?.words ?? 0} {counts?.words === 1 ? "palabra" : "palabras"} · {counts?.characters ?? 0} caracteres
         </span>
         <label className="write-page-size">
           Página:
@@ -328,8 +392,7 @@ export default function WriteEditor(props: Props) {
               const size = PAGE_SIZES.find((s) => s.label === e.target.value);
               if (!size) return;
               setPage((p) => ({ ...p, width: size.width, height: size.height }));
-              setDirty(true);
-              onDirtyChange(true);
+              markDirty();
             }}
           >
             {PAGE_SIZES.map((s) => (
@@ -357,6 +420,29 @@ export default function WriteEditor(props: Props) {
           }}
         />
       )}
+      {hfDialog && (
+        <HeaderFooterDialog
+          value={headerFooter}
+          onSave={(value) => {
+            setHeaderFooter(value);
+            markDirty();
+          }}
+          onClose={() => {
+            setHfDialog(false);
+            editor?.commands.focus();
+          }}
+        />
+      )}
+      {paragraphDialog && (
+        <ParagraphDialog
+          value={paragraphDialog}
+          onSave={(value) => editor?.chain().focus().setParagraphFormat(value).run()}
+          onClose={() => {
+            setParagraphDialog(null);
+            editor?.commands.focus();
+          }}
+        />
+      )}
       <p className="write-print-hint" hidden>
         {isMac ? "Guardar como PDF" : isWindows ? "Microsoft Print to PDF" : "Imprimir a un archivo"}
       </p>
@@ -365,7 +451,17 @@ export default function WriteEditor(props: Props) {
 }
 
 /** Barra de formato de WEPO Write. */
-function WriteBar({ editor, onLink, onImage }: { editor: Editor; onLink: () => void; onImage: () => void }) {
+const LINE_SPACINGS: { value: number; label: string }[] = [
+  { value: 1, label: "Sencillo" },
+  { value: 1.15, label: "1.15" },
+  { value: 1.5, label: "1.5" },
+  { value: 2, label: "Doble" },
+];
+/** Media pulgada, como el tabulador de Word. */
+const INDENT_STEP = 36;
+
+function WriteBar(props: { editor: Editor; onLink: () => void; onImage: () => void; onHeaderFooter: () => void; onParagraph: () => void }) {
+  const { editor, onLink, onImage } = props;
   // Se vuelve a dibujar cuando cambia la selección o el formato.
   const s = useEditorState({
     editor,
@@ -384,8 +480,19 @@ function WriteBar({ editor, onLink, onImage }: { editor: Editor; onLink: () => v
       ordered: e.isActive("orderedList"),
       link: e.isActive("link"),
       table: e.isActive("table"),
+      list: e.isActive("listItem"),
+      format: currentParagraphFormat(e),
     }),
   });
+  const indent = (step: number) => {
+    if (s.list) {
+      if (step > 0) chain().sinkListItem("listItem").run();
+      else chain().liftListItem("listItem").run();
+      return;
+    }
+    const next = Math.max(0, (s.format.indent ?? 0) + step * INDENT_STEP);
+    chain().setParagraphFormat({ indent: next || null }).run();
+  };
   const chain = () => editor.chain().focus();
   const sizeNumber = s.size ? Math.round(parseFloat(s.size) * (s.size.endsWith("px") ? 0.75 : 1)) : 11;
   const sizes = SIZES.includes(sizeNumber) ? SIZES : [...SIZES, sizeNumber].sort((a, b) => a - b);
@@ -490,12 +597,61 @@ function WriteBar({ editor, onLink, onImage }: { editor: Editor; onLink: () => v
           <text x="2" y="20.5" fontSize="7" fill="currentColor" stroke="none">3</text>
         </svg>
       </ToolButton>
-      <ToolButton label="Reducir sangría (⇧Tab)" onClick={() => chain().liftListItem("listItem").run()}>
+      <ToolButton label="Reducir sangría" onClick={() => indent(-1)}>
         <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M7 9l-3 3 3 3"]} />
       </ToolButton>
-      <ToolButton label="Aumentar sangría (Tab)" onClick={() => chain().sinkListItem("listItem").run()}>
+      <ToolButton label="Aumentar sangría" onClick={() => indent(1)}>
         <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M4 9l3 3-3 3"]} />
       </ToolButton>
+      <Popover
+        button={(toggle, open) => (
+          <ToolButton label="Interlineado y espacio entre párrafos" pressed={open} onClick={toggle}>
+            <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M5 4v16", "M3 6l2-2 2 2", "M3 18l2 2 2-2"]} />
+          </ToolButton>
+        )}
+      >
+        {(close) => (
+          <div className="write-menu" role="menu">
+            {LINE_SPACINGS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={s.format.lineHeight === o.value}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => (chain().setParagraphFormat({ lineHeight: o.value }).run(), close())}
+              >
+                <span className="write-menu-check">{s.format.lineHeight === o.value ? "✓" : ""}</span>
+                {o.label}
+              </button>
+            ))}
+            <hr />
+            <button
+              type="button"
+              role="menuitem"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => (chain().setParagraphFormat({ spaceBefore: s.format.spaceBefore ? null : 12 }).run(), close())}
+            >
+              <span className="write-menu-check" />
+              {s.format.spaceBefore ? "Quitar espacio antes del párrafo" : "Agregar espacio antes del párrafo"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => (chain().setParagraphFormat({ spaceAfter: s.format.spaceAfter === 0 ? null : 0 }).run(), close())}
+            >
+              <span className="write-menu-check" />
+              {s.format.spaceAfter === 0 ? "Agregar espacio después del párrafo" : "Quitar espacio después del párrafo"}
+            </button>
+            <hr />
+            <button type="button" role="menuitem" onClick={() => (close(), props.onParagraph())}>
+              <span className="write-menu-check" />
+              Opciones de párrafo…
+            </button>
+          </div>
+        )}
+      </Popover>
 
       <Separator />
       <ToolButton label={keys("Vínculo (⌘K)")} pressed={s.link} onClick={onLink}>
@@ -516,7 +672,19 @@ function WriteBar({ editor, onLink, onImage }: { editor: Editor; onLink: () => v
           <path d="M3 9h18M3 14h18M9 4v16M15 4v16" />
         </svg>
       </ToolButton>
-      <ToolButton label="Quitar formato" onClick={() => chain().unsetAllMarks().clearNodes().run()}>
+      <ToolButton label={keys("Salto de página (⌘↩)")} onClick={() => chain().setPageBreak().run()}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+          <path d="M6 3v5h12V3M6 21v-5h12v5" />
+          <path d="M3 12h3M9 12h2M13 12h2M18 12h3" />
+        </svg>
+      </ToolButton>
+      <ToolButton label="Encabezado y pie de página" onClick={props.onHeaderFooter}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+          <rect x="4" y="3" width="16" height="18" rx="1.5" />
+          <path d="M4 7.5h16M4 16.5h16" />
+        </svg>
+      </ToolButton>
+      <ToolButton label="Quitar formato" onClick={() => chain().unsetAllMarks().clearNodes().setParagraphFormat({ lineHeight: null, spaceBefore: null, spaceAfter: null, indent: null, firstLine: null }).run()}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
           <path d="M6 5h12M12 5l-3 14M4 20l16-16" />
         </svg>

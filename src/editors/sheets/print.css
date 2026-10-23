@@ -13,7 +13,8 @@
 /* La hoja se dibuja fuera de #root (con un portal), así que al imprimir basta con ocultar la app. */
 @media print {
   html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
-  #root { display: none !important; }
+  /* Solo cuando hay una hoja por imprimir: WEPO Write imprime su propia página. */
+  body:has(> .print-root) #root { display: none !important; }
   .print-root {
     display: block;
     color: #000;
