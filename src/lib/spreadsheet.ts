@@ -60,7 +60,37 @@ export type SheetView = {
   notes: NoteView[];
   /** Hipervínculos (filas y columnas desde 1). */
   links: LinkView[];
+  /** Tablas ("Dar formato como tabla"), desde 1; incluyen encabezados y totales. */
+  tables: TableView[];
+  /** Encabezado, pie, filas que se repiten y área de impresión. */
+  page: PageView;
 };
+
+export type TableStyle = "azul" | "verde" | "naranja" | "gris" | "dorado" | "celeste" | "oscuro";
+export type TableView = {
+  row1: number;
+  col1: number;
+  row2: number;
+  col2: number;
+  name: string;
+  style: TableStyle;
+  banded: boolean;
+  totals: boolean;
+};
+
+export type PageView = {
+  header: string;
+  footer: string;
+  /** [primera, última] fila que se repite arriba en cada página (desde 1). */
+  repeat_rows: [number, number] | null;
+  /** [fila1, columna1, fila2, columna2], desde 1. */
+  print_area: [number, number, number, number] | null;
+};
+
+export type CompareOp = "between" | "not_between" | "equal" | "not_equal" | "greater" | "less" | "greater_or_equal" | "less_or_equal";
+
+/** Condición de un filtro: texto (contiene, empieza con…) o números (mayor que, entre…). */
+export type FilterCondition = { op: string; value: string; value2?: string | null };
 
 export type NoteView = { row: number; col: number; text: string; author: string };
 
@@ -72,10 +102,10 @@ export type SelectionStats = { count: number; numbers: number; sum: number; min:
 
 export type PasteMode = "values" | "formats" | "transpose";
 
-/** Filtro de una columna (desde 0): valores que se quedan visibles. */
-export type ColumnFilter = { col: number; keep: string[] };
+/** Filtro de una columna (desde 0): los valores que se quedan visibles, o una condición. */
+export type ColumnFilter = { col: number; keep?: string[] | null; condition?: FilterCondition | null };
 
-export type ChartType = "column" | "bar" | "line" | "area" | "pie" | "doughnut" | "scatter";
+export type ChartType = "column" | "bar" | "line" | "area" | "pie" | "doughnut" | "scatter" | "combo";
 
 export type SeriesView = {
   name: string;
@@ -98,6 +128,11 @@ export type ChartView = {
   title: string;
   legend: boolean;
   series: SeriesView[];
+  stacked: boolean;
+  labels: boolean;
+  /** Títulos del eje de categorías (o X) y del de valores (o Y). */
+  x_title: string;
+  y_title: string;
 };
 
 export type ImageView = { type: "image"; id: number; x: number; y: number; w: number; h: number; name: string };
@@ -112,6 +147,10 @@ export type DrawingPatch = {
   kind?: ChartType;
   title?: string;
   legend?: boolean;
+  stacked?: boolean;
+  labels?: boolean;
+  x_title?: string;
+  y_title?: string;
   /** Nuevo rango de datos, como "A1:C7". */
   data?: string;
 };
@@ -134,9 +173,20 @@ export type ValidationView = {
   items: string[];
   /** Cómo se definió: "Sí, No" o "=$H$1:$H$5". */
   source: string;
+  /** Solo las listas muestran la flecha. */
+  kind: "list" | "number" | "date";
+  spec: ListSource;
+  /** "Número entero entre 1 y 10" */
+  rule: string;
+  message: string | null;
 };
 
-export type ListSource = { kind: "items"; items: string[] } | { kind: "range"; range: string };
+/** Qué se permite en las celdas: una lista, números o fechas ("2026-01-31"). */
+export type ListSource =
+  | { kind: "items"; items: string[] }
+  | { kind: "range"; range: string }
+  | { kind: "number"; integer: boolean; op: CompareOp; a: number; b: number | null }
+  | { kind: "date"; op: CompareOp; a: string; b: string | null };
 
 /** Una regla de formato condicional tal como la describe el motor. */
 export type ConditionalRule = {
@@ -261,7 +311,7 @@ export const sheetApi = {
     invoke<SheetView>("sheet_filter", {
       sheet,
       ...rect(range),
-      filters: filters.map((f) => ({ col: f.col + 1, keep: f.keep })),
+      filters: filters.map((f) => ({ col: f.col + 1, keep: f.keep ?? null, condition: f.condition ?? null })),
     }),
   find: async (sheet: number, query: string, options: FindOptions): Promise<FindMatch[]> => {
     const found = await invoke<FindMatch[]>("sheet_find", { sheet, query, ...options });
@@ -278,9 +328,25 @@ export const sheetApi = {
   addIconSet: (sheet: number, range: Range, preset: string) =>
     invoke<SheetView>("sheet_cf_icons", { sheet, ...rect(range), preset }),
   deleteConditionalRule: (sheet: number, index: number) => invoke<SheetView>("sheet_cf_delete", { sheet, index }),
-  /** Pone una lista desplegable en el rango, o la quita con `null`. */
-  setValidation: (sheet: number, range: Range, source: ListSource | null) =>
-    invoke<SheetView>("sheet_validation", { sheet, ...rect(range), source }),
+  /** Pone una validación (lista, números o fechas) en el rango, o la quita con `null`. */
+  setValidation: (sheet: number, range: Range, source: ListSource | null, message?: string) =>
+    invoke<SheetView>("sheet_validation", { sheet, ...rect(range), source, message: message ?? null }),
+
+  // Tablas, configuración de página y duplicados
+  createTable: (sheet: number, range: Range, style: TableStyle, banded: boolean, totals: boolean) =>
+    invoke<SheetView>("sheet_table_create", { sheet, ...rect(range), style, banded, totals }),
+  updateTable: (sheet: number, name: string, style: TableStyle, banded: boolean, totals: boolean, remove = false) =>
+    invoke<SheetView>("sheet_table_update", { sheet, name, style, banded, totals, remove }),
+  pageSetup: (sheet: number, header: string, footer: string, repeatRows: string, printArea: string) =>
+    invoke<SheetView>("sheet_page_setup", { sheet, header, footer, repeatRows, printArea }),
+  /** Quita las filas repetidas según `cols` (desde 0). */
+  removeDuplicates: (sheet: number, range: Range, cols: number[], header: boolean) =>
+    invoke<{ removed: number; view: SheetView }>("sheet_remove_duplicates", {
+      sheet,
+      ...rect(range),
+      cols: cols.map((c) => c + 1),
+      header,
+    }),
 
   // Gráficas e imágenes
   addChart: (sheet: number, range: Range, kind: ChartType) =>

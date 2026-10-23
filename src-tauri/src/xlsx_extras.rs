@@ -13,13 +13,21 @@ use std::io::{Cursor, Read, Write};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-/// Una validación tal como está en el XML: rango(s) y fórmula de la lista.
-#[derive(Clone, Debug, PartialEq)]
+/// Una validación tal como está en el XML.
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct RawValidation {
     /// Rangos separados por espacios, p. ej. "B2:B20 D2".
     pub sqref: String,
-    /// `"Sí,No"` (lista escrita) o `$H$1:$H$5` / `Hoja2!$A$1:$A$9` (rango).
+    /// "list", "whole" (número entero), "decimal" o "date".
+    pub kind: String,
+    /// "between", "greaterThan"… (no aplica a las listas).
+    pub operator: String,
+    /// Lista: `"Sí,No"` (escrita) o `$H$1:$H$5` / `Hoja2!$A$1:$A$9` (rango).
+    /// Números y fechas: el primer límite (las fechas como número de serie).
     pub formula1: String,
+    pub formula2: Option<String>,
+    /// Mensaje propio cuando el valor no es válido.
+    pub error: Option<String>,
 }
 
 /// Lo que agregamos a cada hoja al guardar.
@@ -28,6 +36,38 @@ pub struct SheetExtras {
     pub validations: Vec<RawValidation>,
     pub drawings: Vec<RawDrawing>,
     pub notes: Vec<RawNote>,
+    pub tables: Vec<RawTable>,
+    pub page: Option<RawPage>,
+}
+
+/// Una tabla lista para escribirla (tableN.xml).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawTable {
+    /// Número único en todo el libro (desde 1).
+    pub id: u32,
+    pub name: String,
+    /// Toda la tabla ("A1:C7") y la parte con filtro, sin la fila de totales ("A1:C6").
+    pub reference: String,
+    pub filter_ref: String,
+    /// Nombre de cada columna (el texto de su encabezado).
+    pub columns: Vec<String>,
+    /// "TableStyleMedium2"…
+    pub style: String,
+    pub banded: bool,
+    pub totals: bool,
+}
+
+/// Configuración de página de una hoja, ya con los códigos de Excel.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct RawPage {
+    /// "&CReporte &D"
+    pub header: String,
+    pub footer: String,
+    /// Fórmula de las filas que se repiten ('Hoja1'!$1:$1) y del área de impresión.
+    pub titles: Option<String>,
+    pub area: Option<String>,
+    /// Posición de la hoja en el libro (para localSheetId).
+    pub sheet_index: u32,
 }
 
 /// Nota de una celda, lista para escribirla (fila y columna desde 0).
@@ -75,11 +115,17 @@ pub struct RawSeries {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawChart {
-    /// column, bar, line, area, pie, doughnut, scatter
+    /// column, bar, line, area, pie, doughnut, scatter o combo (columnas + la última serie como línea)
     pub kind: String,
     pub title: String,
     pub legend: bool,
     pub series: Vec<RawSeries>,
+    pub stacked: bool,
+    /// Valores escritos sobre las barras o puntos.
+    pub labels: bool,
+    /// Títulos del eje de categorías (o X) y del de valores (o Y).
+    pub x_title: String,
+    pub y_title: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -328,11 +374,11 @@ pub fn read_drawings(path: &str) -> Result<(Vec<(String, Vec<RawDrawing>)>, bool
                 drawings.push(RawDrawing { anchor, content });
             }
         }
-        // Tablas, tablas dinámicas u otros dibujos "heredados" (VML) que no
+        // Tablas dinámicas u otros dibujos "heredados" (VML) que no
         // conservamos. El VML que acompaña a las notas sí: WEPO lo vuelve a escribir.
         let has_notes = sheet_rels.values().any(|(kind, _)| kind == "comments");
         unsupported |= sheet_rels.values().any(|(kind, _)| match kind.as_str() {
-            "table" | "pivotTable" => true,
+            "pivotTable" => true,
             "vmlDrawing" => !has_notes,
             _ => false,
         });
@@ -341,6 +387,113 @@ pub fn read_drawings(path: &str) -> Result<(Vec<(String, Vec<RawDrawing>)>, bool
         }
     }
     Ok((result, unsupported))
+}
+
+/// Encabezado y pie de cada hoja, y sus filas que se repiten y área de impresión
+/// (nombres definidos _xlnm.Print_Titles y _xlnm.Print_Area del libro).
+pub fn read_pages(path: &str) -> Result<Vec<(String, RawPage)>, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let entries = read_zip(&bytes)?;
+    let paths = sheet_paths(&entries)?;
+    let mut pages: Vec<(String, RawPage)> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), RawPage { sheet_index: i as u32, ..Default::default() }))
+        .collect();
+
+    for (i, (_, sheet_path)) in paths.iter().enumerate() {
+        let Some(xml) = entry(&entries, sheet_path) else { continue };
+        let mut reader = Reader::from_reader(xml);
+        let mut buf = Vec::new();
+        let mut inside: Option<&str> = None;
+        loop {
+            match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+                Event::Start(e) if e.local_name().as_ref() == "oddHeader" => inside = Some("header"),
+                Event::Start(e) if e.local_name().as_ref() == "oddFooter" => inside = Some("footer"),
+                Event::End(e) if matches!(e.local_name().as_ref(), "oddHeader" | "oddFooter") => inside = None,
+                Event::Text(t) => {
+                    let text = t.xml10_content().to_string();
+                    match inside {
+                        Some("header") => pages[i].1.header.push_str(&text),
+                        Some("footer") => pages[i].1.footer.push_str(&text),
+                        _ => {}
+                    }
+                }
+                Event::GeneralRef(r) => match inside {
+                    Some("header") => pages[i].1.header.push_str(&entity(&r)),
+                    Some("footer") => pages[i].1.footer.push_str(&entity(&r)),
+                    _ => {}
+                },
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+    }
+
+    if let Some(workbook) = entry(&entries, "xl/workbook.xml") {
+        let mut reader = Reader::from_reader(workbook);
+        let mut buf = Vec::new();
+        let mut current: Option<(String, Option<usize>)> = None;
+        let mut text = String::new();
+        loop {
+            match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+                Event::Start(e) if e.local_name().as_ref() == "definedName" => {
+                    let a = attributes(&e);
+                    current = Some((a.get("name").cloned().unwrap_or_default(), a.get("localSheetId").and_then(|i| i.parse().ok())));
+                    text.clear();
+                }
+                Event::Text(t) if current.is_some() => text.push_str(&t.xml10_content()),
+                Event::GeneralRef(r) if current.is_some() => text.push_str(&entity(&r)),
+                Event::End(e) if e.local_name().as_ref() == "definedName" => {
+                    if let Some((name, Some(index))) = current.take() {
+                        if let Some((_, page)) = pages.get_mut(index) {
+                            match name.as_str() {
+                                "_xlnm.Print_Titles" => page.titles = Some(text.clone()),
+                                "_xlnm.Print_Area" => page.area = Some(text.clone()),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+    }
+    Ok(pages.into_iter().filter(|(_, p)| !p.header.is_empty() || !p.footer.is_empty() || p.titles.is_some() || p.area.is_some()).collect())
+}
+
+/// Estilo de cada tabla del archivo (nombre de la tabla → "TableStyleMedium2").
+pub fn read_table_styles(path: &str) -> Result<HashMap<String, String>, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let entries = read_zip(&bytes)?;
+    let mut styles = HashMap::new();
+    for (name, data) in &entries {
+        if !(name.starts_with("xl/tables/") && name.ends_with(".xml")) {
+            continue;
+        }
+        let mut reader = Reader::from_reader(data.as_slice());
+        let mut buf = Vec::new();
+        let mut table = String::new();
+        loop {
+            match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+                Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "table" => {
+                    table = attributes(&e).get("name").cloned().unwrap_or_default();
+                }
+                Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "tableStyleInfo" => {
+                    if let Some(style) = attributes(&e).get("name") {
+                        styles.insert(table.clone(), style.clone());
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+    }
+    Ok(styles)
 }
 
 fn drawing_ids(sheet_xml: &[u8]) -> Result<Vec<String>, String> {
@@ -465,7 +618,18 @@ fn parse_chart(xml: &[u8]) -> Result<(Option<RawChart>, bool), String> {
     let mut reader = Reader::from_reader(xml);
     let mut buf = Vec::new();
     let mut stack: Vec<String> = Vec::new();
-    let mut chart = RawChart { kind: String::new(), title: String::new(), legend: false, series: Vec::new() };
+    let mut chart = RawChart {
+        kind: String::new(),
+        title: String::new(),
+        legend: false,
+        series: Vec::new(),
+        stacked: false,
+        labels: false,
+        x_title: String::new(),
+        y_title: String::new(),
+    };
+    // Posición del eje de valores que se está leyendo (en dispersión, "b" es el eje X).
+    let mut axis_pos = String::new();
     let mut chart_types = 0;
     let mut partial = false;
     let mut series: Option<RawSeries> = None;
@@ -486,7 +650,10 @@ fn parse_chart(xml: &[u8]) -> Result<(Option<RawChart>, bool), String> {
                         if in_plot =>
                     {
                         chart_types += 1;
-                        if chart_types == 1 {
+                        if chart_types == 2 && chart.kind == "column" && local == "lineChart" {
+                            // Columnas con una línea encima: gráfica combinada.
+                            chart.kind = "combo".into();
+                        } else if chart_types == 1 {
                             chart.kind = match local.as_str() {
                                 "barChart" | "bar3DChart" => "column",
                                 "lineChart" | "line3DChart" => "line",
@@ -503,7 +670,14 @@ fn parse_chart(xml: &[u8]) -> Result<(Option<RawChart>, bool), String> {
                         }
                     }
                     "barDir" if chart_types == 1 && a.get("val").is_some_and(|v| v == "bar") => chart.kind = "bar".into(),
-                    "ser" if chart_types == 1 => series = Some(RawSeries::default()),
+                    "grouping" if chart_types == 1 => {
+                        chart.stacked = a.get("val").is_some_and(|v| v == "stacked" || v == "percentStacked");
+                    }
+                    "showVal" if stack.iter().any(|s| s == "dLbls") => {
+                        chart.labels |= a.get("val").is_some_and(|v| v == "1" || v == "true");
+                    }
+                    "axPos" => axis_pos = a.get("val").cloned().unwrap_or_default(),
+                    "ser" if chart_types == 1 || chart.kind == "combo" => series = Some(RawSeries::default()),
                     "legend" => chart.legend = true,
                     "autoTitleDeleted" => title_deleted = a.get("val").is_some_and(|v| v == "1" || v == "true"),
                     "srgbClr" => {
@@ -531,7 +705,18 @@ fn parse_chart(xml: &[u8]) -> Result<(Option<RawChart>, bool), String> {
                 let in_ser = stack.iter().any(|s| s == "ser");
                 let parent = |name: &str| stack.iter().any(|s| s == name);
                 if local == "t" && parent("title") && !in_ser {
-                    chart.title.push_str(&text);
+                    if parent("catAx") || parent("dateAx") {
+                        chart.x_title.push_str(&text);
+                    } else if parent("valAx") {
+                        // En dispersión los dos ejes son de valores: el de abajo es el X.
+                        if chart.kind == "scatter" && axis_pos == "b" {
+                            chart.x_title.push_str(&text);
+                        } else {
+                            chart.y_title.push_str(&text);
+                        }
+                    } else {
+                        chart.title.push_str(&text);
+                    }
                 }
                 if let Some(s) = series.as_mut() {
                     match local.as_str() {
@@ -574,25 +759,35 @@ fn parse_validations(xml: &[u8]) -> Result<Vec<RawValidation>, String> {
     let mut reader = Reader::from_reader(xml);
     let mut buf = Vec::new();
     let mut found = Vec::new();
-    let mut current: Option<(String, bool)> = None; // (sqref, es de tipo lista)
-    let mut in_formula = false;
-    let mut formula = String::new();
+    let mut current: Option<RawValidation> = None;
+    // En qué fórmula estamos (1 o 2) y su texto.
+    let mut in_formula = 0;
+    let mut formulas = [String::new(), String::new()];
     loop {
         match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
             Event::Start(e) if e.local_name().as_ref() == "dataValidation" => {
                 let a = attributes(&e);
-                let is_list = a.get("type").map(|t| t == "list").unwrap_or(false);
-                current = Some((a.get("sqref").cloned().unwrap_or_default(), is_list));
-                formula.clear();
+                let kind = a.get("type").cloned().unwrap_or_default();
+                current = matches!(kind.as_str(), "list" | "whole" | "decimal" | "date").then(|| RawValidation {
+                    sqref: a.get("sqref").cloned().unwrap_or_default(),
+                    operator: a.get("operator").cloned().unwrap_or_else(|| "between".into()),
+                    error: a.get("error").cloned().filter(|e| !e.is_empty()),
+                    kind,
+                    ..Default::default()
+                });
+                formulas = [String::new(), String::new()];
             }
-            Event::Start(e) if e.local_name().as_ref() == "formula1" => in_formula = true,
-            Event::End(e) if e.local_name().as_ref() == "formula1" => in_formula = false,
-            Event::Text(t) if in_formula => formula.push_str(&t.xml10_content()),
-            Event::GeneralRef(r) if in_formula => formula.push_str(&entity(&r)),
+            Event::Start(e) if e.local_name().as_ref() == "formula1" => in_formula = 1,
+            Event::Start(e) if e.local_name().as_ref() == "formula2" => in_formula = 2,
+            Event::End(e) if matches!(e.local_name().as_ref(), "formula1" | "formula2") => in_formula = 0,
+            Event::Text(t) if in_formula > 0 => formulas[in_formula - 1].push_str(&t.xml10_content()),
+            Event::GeneralRef(r) if in_formula > 0 => formulas[in_formula - 1].push_str(&entity(&r)),
             Event::End(e) if e.local_name().as_ref() == "dataValidation" => {
-                if let Some((sqref, true)) = current.take() {
-                    if !sqref.is_empty() && !formula.is_empty() {
-                        found.push(RawValidation { sqref, formula1: formula.clone() });
+                if let Some(mut v) = current.take() {
+                    if !v.sqref.is_empty() && !formulas[0].is_empty() {
+                        v.formula1 = formulas[0].clone();
+                        v.formula2 = Some(formulas[1].clone()).filter(|f| !f.is_empty());
+                        found.push(v);
                     }
                 }
             }
@@ -634,8 +829,16 @@ fn validations_xml(validations: &[RawValidation]) -> String {
     let items: String = validations
         .iter()
         .map(|v| {
+            let operator = if v.kind == "list" { String::new() } else { format!(r#" operator="{}""#, escape(&v.operator)) };
+            let error = v
+                .error
+                .as_ref()
+                .map(|e| format!(r#" errorTitle="WEPO" error="{}""#, escape(e)))
+                .unwrap_or_default();
+            let formula2 = v.formula2.as_ref().map(|f| format!("<formula2>{}</formula2>", escape(f))).unwrap_or_default();
             format!(
-                r#"<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="{}"><formula1>{}</formula1></dataValidation>"#,
+                r#"<dataValidation type="{}"{operator} allowBlank="1" showErrorMessage="1"{error} sqref="{}"><formula1>{}</formula1>{formula2}</dataValidation>"#,
+                escape(&v.kind),
                 escape(&v.sqref),
                 escape(&v.formula1)
             )
@@ -651,6 +854,92 @@ const AFTER_LEGACY_DRAWING: &[&str] = &[
 ];
 
 const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+/// Etiquetas que van después de <headerFooter> en una hoja.
+const AFTER_HEADER_FOOTER: &[&str] = &[
+    "<rowBreaks", "<colBreaks", "<customProperties", "<cellWatches", "<ignoredErrors", "<smartTags", "<drawing",
+    "<legacyDrawing", "<legacyDrawingHF", "<drawingHF", "<picture", "<oleObjects", "<controls", "<webPublishItems",
+    "<tableParts", "<extLst", "</worksheet>",
+];
+
+/// Etiquetas que van después de <tableParts>.
+const AFTER_TABLE_PARTS: &[&str] = &["<extLst", "</worksheet>"];
+
+fn table_xml(table: &RawTable) -> String {
+    let columns: String = table
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let label = if table.totals && i == 0 { r#" totalsRowLabel="Total""# } else { "" };
+            format!(r#"<tableColumn id="{}" name="{}"{label}/>"#, i + 1, escape(name))
+        })
+        .collect();
+    let totals = if table.totals { r#" totalsRowCount="1""# } else { "" };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS_MAIN}" id="{id}" name="{name}" displayName="{name}" ref="{reference}"{totals}><autoFilter ref="{filter}"/><tableColumns count="{count}">{columns}</tableColumns><tableStyleInfo name="{style}" showFirstColumn="0" showLastColumn="0" showRowStripes="{bands}" showColumnStripes="0"/></table>"#,
+        id = table.id,
+        name = escape(&table.name),
+        reference = table.reference,
+        filter = table.filter_ref,
+        count = table.columns.len(),
+        style = escape(&table.style),
+        bands = u8::from(table.banded),
+    )
+}
+
+/// Quita un elemento completo (<tag …>…</tag> o <tag …/>) si está.
+fn remove_element(xml: &str, tag: &str) -> String {
+    let open = format!("<{tag}");
+    let Some(start) = xml.match_indices(&open).map(|(i, _)| i).find(|&i| matches!(xml[i + open.len()..].chars().next(), Some(' ' | '>' | '/'))) else {
+        return xml.to_string();
+    };
+    let rest = &xml[start..];
+    let end = if let Some(close) = rest.find(&format!("</{tag}>")) {
+        close + tag.len() + 3
+    } else if let Some(close) = rest.find("/>") {
+        close + 2
+    } else {
+        return xml.to_string();
+    };
+    format!("{}{}", &xml[..start], &xml[start + end..])
+}
+
+/// Pone las filas que se repiten y el área de impresión en los nombres definidos del libro.
+fn set_print_names(workbook: &str, pages: &[&RawPage]) -> String {
+    let mut xml = workbook.to_string();
+    // Primero se quitan los que ya hubiera para esas hojas.
+    for page in pages {
+        for name in ["_xlnm.Print_Titles", "_xlnm.Print_Area"] {
+            for quote in ['"', '\''] {
+                let marker = format!("name={quote}{name}{quote} localSheetId={quote}{}{quote}", page.sheet_index);
+                while let Some(i) = xml.find(&marker) {
+                    let start = xml[..i].rfind("<definedName").unwrap_or(i);
+                    let Some(end) = xml[start..].find("</definedName>").map(|e| start + e + "</definedName>".len()) else { break };
+                    xml.replace_range(start..end, "");
+                }
+            }
+        }
+    }
+    let mut names = String::new();
+    for page in pages {
+        if let Some(titles) = &page.titles {
+            names.push_str(&format!(r#"<definedName name="_xlnm.Print_Titles" localSheetId="{}">{}</definedName>"#, page.sheet_index, escape(titles)));
+        }
+        if let Some(area) = &page.area {
+            names.push_str(&format!(r#"<definedName name="_xlnm.Print_Area" localSheetId="{}">{}</definedName>"#, page.sheet_index, escape(area)));
+        }
+    }
+    if names.is_empty() {
+        return xml.replace("<definedNames></definedNames>", "").replace("<definedNames/>", "");
+    }
+    if let Some(i) = xml.find("</definedNames>") {
+        xml.insert_str(i, &names);
+    } else if let Some(i) = xml.find("</sheets>") {
+        xml.insert_str(i + "</sheets>".len(), &format!("<definedNames>{names}</definedNames>"));
+    }
+    xml
+}
 
 /// Las notas en el formato de Excel: el texto (commentsN.xml) y el cuadro amarillo
 /// que se ve al pasar el mouse, que Excel todavía dibuja con VML (vmlDrawingN.vml).
@@ -805,64 +1094,91 @@ fn chart_xml(chart: &RawChart) -> String {
     };
     let kind = chart.kind.as_str();
     let pie = matches!(kind, "pie" | "doughnut");
-    let series: String = chart
-        .series
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let tx = match (&s.name_ref, &s.name) {
-                (Some(r), name) => format!("<c:tx>{}</c:tx>", str_ref(r, &name.iter().cloned().collect::<Vec<_>>())),
-                (None, Some(n)) => format!("<c:tx><c:v>{}</c:v></c:tx>", escape(n)),
-                (None, None) => String::new(),
-            };
-            let line = kind == "line" || kind == "scatter";
-            let sp = if pie { String::new() } else { fill(&s.color, line) };
-            let extra = match kind {
-                "column" | "bar" => r#"<c:invertIfNegative val="0"/>"#.to_string(),
-                "line" => r#"<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>"#.to_string(),
-                "scatter" => r#"<c:marker><c:symbol val="circle"/><c:size val="6"/></c:marker>"#.to_string(),
-                _ => String::new(),
-            };
-            let data = if kind == "scatter" {
-                let x = s.categories.as_ref().map(|c| {
-                    let xs: Vec<Option<f64>> = s.category_cache.iter().map(|v| v.parse().ok()).collect();
-                    format!("<c:xVal>{}</c:xVal>", num_ref(c, &xs))
-                });
-                format!("{}<c:yVal>{}</c:yVal><c:smooth val=\"0\"/>", x.unwrap_or_default(), num_ref(&s.values, &s.value_cache))
-            } else {
-                let cat = s.categories.as_ref().map(|c| format!("<c:cat>{}</c:cat>", str_ref(c, &s.category_cache))).unwrap_or_default();
-                let smooth = if kind == "line" { r#"<c:smooth val="0"/>"# } else { "" };
-                format!("{cat}<c:val>{}</c:val>{smooth}", num_ref(&s.values, &s.value_cache))
-            };
-            format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/>{tx}{sp}{extra}{data}</c:ser>"#)
-        })
-        .collect();
-
-    let axes_ids = r#"<c:axId val="500000001"/><c:axId val="500000002"/>"#;
-    let plot = match kind {
-        "column" | "bar" => format!(
-            r#"<c:barChart><c:barDir val="{}"/><c:grouping val="clustered"/><c:varyColors val="0"/>{series}<c:gapWidth val="150"/>{axes_ids}</c:barChart>"#,
-            if kind == "bar" { "bar" } else { "col" }
-        ),
-        "line" => format!(r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>{series}<c:marker val="1"/>{axes_ids}</c:lineChart>"#),
-        "area" => format!(r#"<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>{series}{axes_ids}</c:areaChart>"#),
-        "pie" => format!(r#"<c:pieChart><c:varyColors val="1"/>{series}<c:firstSliceAng val="0"/></c:pieChart>"#),
-        "doughnut" => format!(r#"<c:doughnutChart><c:varyColors val="1"/>{series}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>"#),
-        _ => format!(r#"<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{series}{axes_ids}</c:scatterChart>"#),
+    let labels = if chart.labels {
+        r#"<c:dLbls><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>"#
+    } else {
+        ""
     };
-    let axis = |id: &str, cross: &str, pos: &str, value: bool, grid: bool| {
+    // Cada serie se escribe según cómo se dibuja (en la combinada, la última es línea).
+    let ser = |i: usize, s: &RawSeries, as_kind: &str| {
+        let tx = match (&s.name_ref, &s.name) {
+            (Some(r), name) => format!("<c:tx>{}</c:tx>", str_ref(r, &name.iter().cloned().collect::<Vec<_>>())),
+            (None, Some(n)) => format!("<c:tx><c:v>{}</c:v></c:tx>", escape(n)),
+            (None, None) => String::new(),
+        };
+        let line = as_kind == "line" || as_kind == "scatter";
+        let sp = if pie { String::new() } else { fill(&s.color, line) };
+        let extra = match as_kind {
+            "column" | "bar" => r#"<c:invertIfNegative val="0"/>"#.to_string(),
+            "line" => r#"<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>"#.to_string(),
+            "scatter" => r#"<c:marker><c:symbol val="circle"/><c:size val="6"/></c:marker>"#.to_string(),
+            _ => String::new(),
+        };
+        let data = if as_kind == "scatter" {
+            let x = s.categories.as_ref().map(|c| {
+                let xs: Vec<Option<f64>> = s.category_cache.iter().map(|v| v.parse().ok()).collect();
+                format!("<c:xVal>{}</c:xVal>", num_ref(c, &xs))
+            });
+            format!("{}<c:yVal>{}</c:yVal><c:smooth val=\"0\"/>", x.unwrap_or_default(), num_ref(&s.values, &s.value_cache))
+        } else {
+            let cat = s.categories.as_ref().map(|c| format!("<c:cat>{}</c:cat>", str_ref(c, &s.category_cache))).unwrap_or_default();
+            let smooth = if as_kind == "line" { r#"<c:smooth val="0"/>"# } else { "" };
+            format!("{cat}<c:val>{}</c:val>{smooth}", num_ref(&s.values, &s.value_cache))
+        };
+        format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/>{tx}{sp}{extra}{data}</c:ser>"#)
+    };
+    let all = |as_kind: &str, range: std::ops::Range<usize>| -> String {
+        chart.series.iter().enumerate().filter(|(i, _)| range.contains(i)).map(|(i, s)| ser(i, s, as_kind)).collect()
+    };
+    let n = chart.series.len();
+    let grouping = if chart.stacked { "stacked" } else { "clustered" };
+    let standard = if chart.stacked { "stacked" } else { "standard" };
+    let overlap = if chart.stacked { r#"<c:overlap val="100"/>"# } else { "" };
+    let axes_ids = r#"<c:axId val="500000001"/><c:axId val="500000002"/>"#;
+    let bar = |dir: &str, series: String| {
+        format!(r#"<c:barChart><c:barDir val="{dir}"/><c:grouping val="{grouping}"/><c:varyColors val="0"/>{series}{labels}<c:gapWidth val="150"/>{overlap}{axes_ids}</c:barChart>"#)
+    };
+    let line = |series: String| format!(r#"<c:lineChart><c:grouping val="{standard}"/><c:varyColors val="0"/>{series}{labels}<c:marker val="1"/>{axes_ids}</c:lineChart>"#);
+    let plot = match kind {
+        "column" => bar("col", all("column", 0..n)),
+        "bar" => bar("bar", all("bar", 0..n)),
+        // Combinada: columnas para todas menos la última, que va como línea sobre los mismos ejes.
+        "combo" if n > 1 => bar("col", all("column", 0..n - 1)) + &line(all("line", n - 1..n)),
+        "combo" => bar("col", all("column", 0..n)),
+        "line" => line(all("line", 0..n)),
+        "area" => format!(r#"<c:areaChart><c:grouping val="{standard}"/><c:varyColors val="0"/>{}{labels}{axes_ids}</c:areaChart>"#, all("area", 0..n)),
+        "pie" => format!(r#"<c:pieChart><c:varyColors val="1"/>{}{labels}<c:firstSliceAng val="0"/></c:pieChart>"#, all("pie", 0..n)),
+        "doughnut" => format!(
+            r#"<c:doughnutChart><c:varyColors val="1"/>{}{labels}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>"#,
+            all("doughnut", 0..n)
+        ),
+        _ => format!(r#"<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{}{labels}{axes_ids}</c:scatterChart>"#, all("scatter", 0..n)),
+    };
+    let axis_title = |text: &str| {
+        if text.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>"#,
+                escape(text)
+            )
+        }
+    };
+    let axis = |id: &str, cross: &str, pos: &str, value: bool, grid: bool, title: &str| {
         let tag = if value { "valAx" } else { "catAx" };
         let grid = if grid { "<c:majorGridlines/>" } else { "" };
+        let title = axis_title(title);
         let extra = if value { r#"<c:crossBetween val="between"/>"# } else { r#"<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>"# };
         format!(
-            r#"<c:{tag}><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/>{grid}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="{cross}"/><c:crosses val="autoZero"/>{extra}</c:{tag}>"#
+            r#"<c:{tag}><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/>{grid}{title}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="{cross}"/><c:crosses val="autoZero"/>{extra}</c:{tag}>"#
         )
     };
+    let (xt, yt) = (chart.x_title.as_str(), chart.y_title.as_str());
     let axes = match kind {
         "pie" | "doughnut" => String::new(),
-        "scatter" => axis("500000001", "500000002", "b", true, false) + &axis("500000002", "500000001", "l", true, true),
-        "bar" => axis("500000001", "500000002", "l", false, false) + &axis("500000002", "500000001", "b", true, true),
-        _ => axis("500000001", "500000002", "b", false, false) + &axis("500000002", "500000001", "l", true, true),
+        "scatter" => axis("500000001", "500000002", "b", true, false, xt) + &axis("500000002", "500000001", "l", true, true, yt),
+        "bar" => axis("500000001", "500000002", "l", false, false, xt) + &axis("500000002", "500000001", "b", true, true, yt),
+        _ => axis("500000001", "500000002", "b", false, false, xt) + &axis("500000002", "500000001", "l", true, true, yt),
     };
     let title = if chart.title.is_empty() {
         r#"<c:autoTitleDeleted val="1"/>"#.to_string()
@@ -880,7 +1196,7 @@ fn chart_xml(chart: &RawChart) -> String {
 
 /// Agrega nuestras partes al .xlsx que acaba de escribir IronCalc.
 pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), String> {
-    if sheets.iter().all(|(_, e)| e.validations.is_empty() && e.drawings.is_empty() && e.notes.is_empty()) {
+    if sheets.iter().all(|(_, e)| e.validations.is_empty() && e.drawings.is_empty() && e.notes.is_empty() && e.tables.is_empty() && e.page.is_none()) {
         return Ok(());
     }
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
@@ -960,8 +1276,46 @@ pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), 
             let rid = add_relationship(&mut entries, &sheet_path, "vmlDrawing", &format!("../drawings/vmlDrawing{notes_n}.vml"));
             xml = insert_before_first(&xml, &format!(r#"<legacyDrawing xmlns:r="{NS_R}" r:id="{rid}"/>"#), AFTER_LEGACY_DRAWING);
         }
+        if let Some(page) = &extras.page {
+            if !page.header.is_empty() || !page.footer.is_empty() {
+                xml = remove_element(&xml, "headerFooter");
+                let mut hf = String::from("<headerFooter>");
+                if !page.header.is_empty() {
+                    hf.push_str(&format!("<oddHeader>{}</oddHeader>", escape(&page.header)));
+                }
+                if !page.footer.is_empty() {
+                    hf.push_str(&format!("<oddFooter>{}</oddFooter>", escape(&page.footer)));
+                }
+                hf.push_str("</headerFooter>");
+                xml = insert_before_first(&xml, &hf, AFTER_HEADER_FOOTER);
+            }
+        }
+
+        if !extras.tables.is_empty() && !xml.contains("<tableParts") {
+            let mut parts = String::new();
+            for table in &extras.tables {
+                let table_path = format!("xl/tables/table{}.xml", table.id);
+                set_entry(&mut entries, &table_path, table_xml(table).into_bytes());
+                add_content_type(&mut entries, Some(&table_path), None, "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml");
+                let rid = add_relationship(&mut entries, &sheet_path, "table", &format!("../tables/table{}.xml", table.id));
+                parts.push_str(&format!(r#"<tablePart r:id="{rid}"/>"#));
+            }
+            xml = insert_before_first(
+                &xml,
+                &format!(r#"<tableParts xmlns:r="{NS_R}" count="{}">{parts}</tableParts>"#, extras.tables.len()),
+                AFTER_TABLE_PARTS,
+            );
+        }
+
         let index = entries.iter().position(|(n, _)| *n == sheet_path).unwrap_or(index);
         entries[index].1 = xml.into_bytes();
+    }
+    let pages: Vec<&RawPage> = sheets.iter().filter_map(|(_, e)| e.page.as_ref()).collect();
+    if !pages.is_empty() {
+        if let Some(workbook) = entry(&entries, "xl/workbook.xml") {
+            let xml = set_print_names(&String::from_utf8_lossy(workbook), &pages);
+            set_entry(&mut entries, "xl/workbook.xml", xml.into_bytes());
+        }
     }
     write_zip(path, &entries)
 }
@@ -987,9 +1341,10 @@ mod tests {
             <dataValidation type="list" sqref="E2:E5"><formula1>Opciones!$A$1:$A$3</formula1></dataValidation>
         </dataValidations></worksheet>"#;
         let found = parse_validations(xml).unwrap();
-        assert_eq!(found.len(), 2, "solo las de tipo lista");
+        assert_eq!(found.len(), 3);
         assert_eq!(found[0].sqref, "B2:B9 D2");
         assert_eq!(found[0].formula1, "\"Sí,No,Tal vez\"");
-        assert_eq!(found[1].formula1, "Opciones!$A$1:$A$3");
+        assert_eq!((found[1].kind.as_str(), found[1].operator.as_str(), found[1].formula1.as_str()), ("whole", "between", "1"));
+        assert_eq!(found[2].formula1, "Opciones!$A$1:$A$3");
     }
 }

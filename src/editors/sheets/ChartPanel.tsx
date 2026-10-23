@@ -10,6 +10,7 @@ export const CHART_TYPES: { kind: ChartType; label: string; icon: string }[] = [
   { kind: "pie", label: "Pastel", icon: "M12 3a9 9 0 109 9h-9z M13 2v9h9a9 9 0 00-9-9z" },
   { kind: "doughnut", label: "Dona", icon: "M12 3a9 9 0 110 18 9 9 0 010-18zm0 5a4 4 0 100 8 4 4 0 000-8z" },
   { kind: "scatter", label: "Dispersión", icon: "M6 17h.01M9 12h.01M13 15h.01M16 8h.01M19 11h.01M8 7h.01" },
+  { kind: "combo", label: "Combinada", icon: "M5 20v-7M10 20v-5M15 20v-9M20 20v-6M4 10l6-3 5 2 5-5" },
 ];
 
 export function ChartIcon({ path, size = 18 }: { path: string; size?: number }) {
@@ -52,11 +53,17 @@ type Props = {
 export default function ChartPanel({ chart, onChange, onDelete, onClose }: Props) {
   const [title, setTitle] = useState(chart.title);
   const [data, setData] = useState(dataRange(chart));
+  const [xTitle, setXTitle] = useState(chart.x_title);
+  const [yTitle, setYTitle] = useState(chart.y_title);
+  const pie = chart.kind === "pie" || chart.kind === "doughnut";
+  const canStack = ["column", "bar", "area", "line", "combo"].includes(chart.kind);
 
   useEffect(() => {
     setTitle(chart.title);
     setData(dataRange(chart));
-  }, [chart.id, chart.title, chart.series]); // eslint-disable-line react-hooks/exhaustive-deps
+    setXTitle(chart.x_title);
+    setYTitle(chart.y_title);
+  }, [chart.id, chart.title, chart.series, chart.x_title, chart.y_title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <aside className="chart-panel" aria-label="Editar gráfica">
@@ -111,9 +118,47 @@ export default function ChartPanel({ chart, onChange, onDelete, onClose }: Props
         <small className="hint">La primera fila con texto da los nombres; la primera columna con texto, las categorías.</small>
       </label>
 
+      {!pie && (
+        <>
+          <label className="field">
+            <span>{chart.kind === "scatter" ? "Título del eje X" : "Título del eje de categorías"}</span>
+            <input
+              className="input"
+              value={xTitle}
+              placeholder="Sin título"
+              onChange={(e) => setXTitle(e.target.value)}
+              onBlur={() => xTitle !== chart.x_title && onChange({ x_title: xTitle })}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            />
+          </label>
+          <label className="field">
+            <span>{chart.kind === "scatter" ? "Título del eje Y" : "Título del eje de valores"}</span>
+            <input
+              className="input"
+              value={yTitle}
+              placeholder="Sin título"
+              onChange={(e) => setYTitle(e.target.value)}
+              onBlur={() => yTitle !== chart.y_title && onChange({ y_title: yTitle })}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+            />
+          </label>
+        </>
+      )}
+
       <label className="radio">
         <input type="checkbox" checked={chart.legend} onChange={(e) => onChange({ legend: e.target.checked })} /> Mostrar leyenda
       </label>
+      {canStack && (
+        <label className="radio">
+          <input type="checkbox" checked={chart.stacked} onChange={(e) => onChange({ stacked: e.target.checked })} /> Apilar las series
+        </label>
+      )}
+      {!pie && (
+        <label className="radio">
+          <input type="checkbox" checked={chart.labels} onChange={(e) => onChange({ labels: e.target.checked })} /> Mostrar los valores
+        </label>
+      )}
+      {chart.kind === "combo" && <small className="hint">La última serie se dibuja como línea sobre las columnas.</small>}
 
       <div className="chart-series">
         <span>Series</span>

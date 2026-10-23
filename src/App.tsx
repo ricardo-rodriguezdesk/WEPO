@@ -6,6 +6,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Home from "./screens/Home";
 import SheetEditor from "./editors/sheets/SheetEditor";
+import WriteEditor from "./editors/write/WriteEditor";
+import type { WriteDocument } from "./editors/write/docx";
+import { emptyDocument, openWriteDocument } from "./lib/write";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
@@ -26,6 +29,7 @@ type OpenDocument = {
   fileName: string;
   path: string | null;
   sheet?: SheetView;
+  write?: WriteDocument;
   /** Viene de la copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
 };
@@ -35,10 +39,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [recents, setRecents] = useState(loadRecents);
-  // Copia que quedó de un documento sin guardar (si WEPO se cerró de golpe).
-  const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
+  // Copias que quedaron de documentos sin guardar (si WEPO se cerró de golpe).
+  // Solo la primera ventana las ofrece, para no repetirlas en cada ventana nueva.
+  const [recovery, setRecovery] = useState<RecoveryInfo[]>([]);
   useEffect(() => {
-    recoveryApi.info().then(setRecovery);
+    if (getCurrentWindow().label === "main") recoveryApi.list().then(setRecovery);
   }, []);
   const nextId = useRef(1);
   const dirty = useRef(false); // el editor avisa si hay cambios sin guardar
@@ -60,39 +65,57 @@ export default function App() {
   async function recover(info: RecoveryInfo) {
     if (!(await confirmDiscard())) return;
     try {
-      const sheet = await sheetApi.open(info.path);
+      const copy = await recoveryApi.take(info.path);
+      const sheet = await sheetApi.open(copy);
       const base = info.name.replace(/\.[^.]+$/, "") || "Sin título";
       show({ id: nextId.current++, kind: "sheets", fileName: `${base} (recuperado)`, path: null, sheet, recovered: true });
       dirty.current = true;
-      setRecovery(null);
+      setRecovery((list) => list.filter((r) => r.path !== info.path));
     } catch (e) {
       show(null, `No se pudo recuperar el documento: ${e}`);
     }
+  }
+
+  /** Abre algo en otra ventana (cuando esta ya tiene un documento), como en Excel. */
+  function openWindow(target: { path?: string; kind?: DocKind }) {
+    invoke("open_window", { path: target.path ?? null, kind: target.kind ?? null }).catch((e) =>
+      setError(`No se pudo abrir otra ventana: ${e}`),
+    );
   }
 
   function show(next: OpenDocument | null, message: string | null = null) {
     dirty.current = false;
     setError(message);
     setDoc(next);
+    setTitle(next?.fileName ?? null);
+  }
+
+  function setTitle(fileName: string | null) {
+    getCurrentWindow()
+      .setTitle(fileName ? `${fileName} — WEPO` : "WEPO")
+      .catch(() => {});
   }
 
   function rememberRecent(path: string) {
     addRecent(path);
     setRecents(loadRecents());
+    setTitle(fileNameOf(path));
   }
 
-  async function newDocument(kind: DocKind) {
-    if (!(await confirmDiscard())) return;
+  async function newDocument(kind: DocKind, here = false) {
+    // Con un documento abierto, el nuevo va en otra ventana.
+    if (doc && !here) return openWindow({ kind });
     try {
       const sheet = kind === "sheets" ? await sheetApi.create() : undefined;
-      show({ id: nextId.current++, kind, fileName: "Sin título", path: null, sheet });
+      const write = kind === "write" ? emptyDocument() : undefined;
+      show({ id: nextId.current++, kind, fileName: "Sin título", path: null, sheet, write });
     } catch (e) {
       show(null, `No se pudo crear el documento: ${e}`);
     }
   }
 
-  async function openPath(path: string) {
-    if (!(await confirmDiscard())) return;
+  async function openPath(path: string, here = false) {
+    if (doc && !here) return openWindow({ path });
     const name = fileNameOf(path);
     const kind = kindFromPath(path);
     if (!kind) {
@@ -101,8 +124,9 @@ export default function App() {
     }
     try {
       const sheet = kind === "sheets" ? await sheetApi.open(path) : undefined;
-      show({ id: nextId.current++, kind, fileName: name, path, sheet });
-      if (kind === "sheets") rememberRecent(path);
+      const write = kind === "write" ? await openWriteDocument(path) : undefined;
+      show({ id: nextId.current++, kind, fileName: name, path, sheet, write });
+      if (kind !== "present") rememberRecent(path);
     } catch (e) {
       // Un reciente que ya no existe (se movió o se borró) sale de la lista.
       if (/no such file|not found|os error 2/i.test(String(e))) {
@@ -126,9 +150,9 @@ export default function App() {
     if (path) await openPath(path);
   }
 
-  /** Salir de la app (⌘Q), preguntando antes si hay cambios sin guardar. */
+  /** Salir (⌘Q): se cierran todas las ventanas; cada una pregunta si tiene cambios sin guardar. */
   async function quit() {
-    if (await confirmDiscard()) await invoke("quit_app");
+    await invoke("quit_app");
   }
 
   async function goHome() {
@@ -142,6 +166,7 @@ export default function App() {
     const stopCommands = onCommand((command: Command) => {
       const a = actions.current;
       if (command === "new-sheet") a.newDocument("sheets");
+      else if (command === "new-document") a.newDocument("write");
       else if (command === "open") a.openDialog();
       else if (command === "home") a.goHome();
       else if (command === "quit") a.quit();
@@ -150,8 +175,15 @@ export default function App() {
     const stopMenu = listen<string>("menu", (event) => runCommand(event.payload as Command));
     // ⌘O, ⌘N y ⌘Q también desde el teclado (Ctrl en Windows; en macOS además los atiende el menú).
     function onKey(e: KeyboardEvent) {
-      if (!hasModifier(e) || e.shiftKey || e.altKey) return;
+      if (!hasModifier(e) || e.altKey) return;
       const key = e.key.toLowerCase();
+      // ⌘⇧N: documento nuevo de WEPO Write.
+      if (key === "n" && e.shiftKey) {
+        e.preventDefault();
+        runCommand("new-document");
+        return;
+      }
+      if (e.shiftKey) return;
       if (key === "o" || key === "n") {
         e.preventDefault();
         runCommand(key === "o" ? "open" : "new-sheet");
@@ -166,10 +198,16 @@ export default function App() {
     // Se piden a Rust para no abrir dos veces el mismo si llega también el evento.
     async function openFromFinder() {
       const files = await invoke<string[]>("take_opened_files").catch(() => [] as string[]);
-      const last = files[files.length - 1];
-      if (last) await actions.current.openPath(last);
+      // El primero se abre aquí si la ventana está libre; los demás, cada uno en su ventana.
+      for (const file of files) await actions.current.openPath(file);
     }
-    openFromFinder();
+    // Una ventana nueva trae en su dirección qué abrir (?open=… o ?new=…).
+    const params = new URLSearchParams(window.location.search);
+    const toOpen = params.get("open");
+    const toCreate = params.get("new") as DocKind | null;
+    if (toOpen) actions.current.openPath(toOpen, true);
+    else if (toCreate && toCreate in DOC_KINDS) actions.current.newDocument(toCreate, true);
+    else openFromFinder();
     const stopFiles = listen("open-files", openFromFinder);
 
     // Aviso al cerrar la ventana con cambios sin guardar.
@@ -224,9 +262,9 @@ export default function App() {
         recents={recents}
         recovery={recovery}
         onRecover={recover}
-        onDiscardRecovery={() => {
-          recoveryApi.clear();
-          setRecovery(null);
+        onDiscardRecovery={(info) => {
+          recoveryApi.discard(info.path);
+          setRecovery((list) => list.filter((r) => r.path !== info.path));
         }}
         dragging={dragging}
         error={error}
@@ -245,6 +283,18 @@ export default function App() {
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
         recovered={doc.recovered}
+        {...common}
+      />
+    );
+  }
+  if (doc.kind === "write" && doc.write) {
+    return (
+      <WriteEditor
+        key={doc.id}
+        initial={doc.write}
+        path={doc.path}
+        onDirtyChange={(value) => (dirty.current = value)}
+        onSaved={rememberRecent}
         {...common}
       />
     );

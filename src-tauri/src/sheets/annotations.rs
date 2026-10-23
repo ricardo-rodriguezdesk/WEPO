@@ -429,4 +429,23 @@ mod tests {
         assert!(doc.note_views(0).is_empty());
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn quita_duplicados() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        let data = [["Nombre", "Ciudad"], ["Ana", "León"], ["Luis", "Puebla"], ["ana", "León"], ["Ana", "Puebla"], ["Luis", "Puebla"]];
+        for (r, row) in data.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                doc.set_cell(0, r as i32 + 1, c as i32 + 1, v).unwrap();
+            }
+        }
+        doc.set_cell(0, 3, 4, "fuera de la tabla").unwrap();
+        let removed = doc.remove_duplicates(0, rect(1, 1, 6, 2), &[1, 2], true).unwrap();
+        assert_eq!(removed, 2, "«ana, León» (sin importar mayúsculas) y el segundo «Luis, Puebla»");
+        let names: Vec<String> = (2..=6).map(|r| doc.cell_input(0, r, 1).unwrap()).collect();
+        assert_eq!(names, ["Ana", "Luis", "Ana", "", ""]);
+        assert_eq!(doc.cell_input(0, 3, 4).unwrap(), "fuera de la tabla", "lo de fuera no se mueve");
+        doc.undo().unwrap();
+        assert_eq!(doc.cell_input(0, 4, 1).unwrap(), "ana", "se deshace de una vez");
+    }
 }

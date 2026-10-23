@@ -7,11 +7,61 @@ use serde::{Deserialize, Serialize};
 
 use super::{Rect, SheetDocument};
 
-/// Filtro de una columna (desde 1): los valores, tal como se ven, que se quedan.
-#[derive(Deserialize, Clone, Debug)]
+/// Filtro de una columna (desde 1): los valores (tal como se ven) que se
+/// quedan, o una condición como "mayor que 100" o "contiene Norte".
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct ColumnFilter {
     pub col: i32,
-    pub keep: Vec<String>,
+    #[serde(default)]
+    pub keep: Option<Vec<String>>,
+    #[serde(default)]
+    pub condition: Option<FilterCondition>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct FilterCondition {
+    /// equals, not_equals, contains, not_contains, begins, ends,
+    /// greater, greater_or_equal, less, less_or_equal, between
+    pub op: String,
+    pub value: String,
+    #[serde(default)]
+    pub value2: Option<String>,
+}
+
+impl FilterCondition {
+    /// ¿El valor de la celda (número si lo es, y su texto como se ve) cumple la condición?
+    pub fn holds(&self, number: Option<f64>, text: &str) -> bool {
+        let text = text.to_lowercase();
+        let wanted = self.value.trim().to_lowercase();
+        let as_number = |v: &str| v.trim().replace(',', ".").parse::<f64>().ok();
+        let compare = |f: fn(f64, f64) -> bool| match (number, as_number(&self.value)) {
+            (Some(n), Some(v)) => f(n, v),
+            _ => false,
+        };
+        match self.op.as_str() {
+            "equals" => match (number, as_number(&self.value)) {
+                (Some(n), Some(v)) => n == v,
+                _ => text == wanted,
+            },
+            "not_equals" => match (number, as_number(&self.value)) {
+                (Some(n), Some(v)) => n != v,
+                _ => text != wanted,
+            },
+            "contains" => text.contains(&wanted),
+            "not_contains" => !text.contains(&wanted),
+            "begins" => text.starts_with(&wanted),
+            "ends" => text.ends_with(&wanted),
+            "greater" => compare(|n, v| n > v),
+            "greater_or_equal" => compare(|n, v| n >= v),
+            "less" => compare(|n, v| n < v),
+            "less_or_equal" => compare(|n, v| n <= v),
+            "between" => match (number, as_number(&self.value), self.value2.as_deref().and_then(as_number)) {
+                (Some(n), Some(a), Some(b)) => n >= a.min(b) && n <= a.max(b),
+                _ => false,
+            },
+            _ => true,
+        }
+    }
 }
 
 /// Columna por la que se ordena (desde 1) y en qué sentido.
@@ -170,7 +220,18 @@ impl SheetDocument {
             let mut hide = false;
             for f in filters {
                 let text = model.get_formatted_cell_value(sheet, row, f.col)?;
-                if !f.keep.contains(&text) {
+                let passes = match (&f.keep, &f.condition) {
+                    (Some(keep), _) => keep.contains(&text),
+                    (None, Some(condition)) => {
+                        let number = match model.get_cell_value_by_index(sheet, row, f.col)? {
+                            CellValue::Number(n) => Some(n),
+                            _ => None,
+                        };
+                        condition.holds(number, &text)
+                    }
+                    (None, None) => true,
+                };
+                if !passes {
                     hide = true;
                     break;
                 }
@@ -193,6 +254,59 @@ impl SheetDocument {
             }
             Ok(())
         })
+    }
+
+    // ───────────── quitar duplicados ─────────────
+
+    /// Quita las filas de `rect` que repiten los valores de `cols` (desde 1) de una
+    /// fila anterior. Las que quedan suben, como en Excel; lo de fuera de `rect`
+    /// no se mueve. Devuelve cuántas filas se quitaron.
+    pub fn remove_duplicates(&mut self, sheet: u32, rect: Rect, cols: &[i32], has_header: bool) -> Result<usize, String> {
+        let area = rect.area(sheet);
+        let (col1, col2) = (area.column, area.column + area.width - 1);
+        let first = area.row + i32::from(has_header);
+        let last = area.row + area.height - 1;
+        if first > last || cols.is_empty() {
+            return Ok(0);
+        }
+        let model = self.model.get_model();
+        let mut seen = std::collections::HashSet::new();
+        let mut kept = Vec::new();
+        for row in first..=last {
+            let mut key = Vec::new();
+            for col in cols {
+                key.push(model.get_formatted_cell_value(sheet, row, *col)?.to_lowercase());
+            }
+            if seen.insert(key) {
+                kept.push(row);
+            }
+        }
+        let removed = (last - first + 1) as usize - kept.len();
+        if removed == 0 {
+            return Ok(0);
+        }
+        // Como al ordenar: se copia cada fila que se queda y se pega en su nuevo lugar.
+        let mut moves = Vec::new();
+        for (i, source) in kept.iter().enumerate() {
+            let target = first + i as i32;
+            if *source != target {
+                let (_, range, data) = self.capture(sheet, *source, col1, *source, col2)?;
+                moves.push((target, range, data));
+            }
+        }
+        let clear_from = first + kept.len() as i32;
+        self.transaction(|doc, steps| {
+            for (target, range, data) in &moves {
+                doc.select(sheet, *target, col1, *target, col2)?;
+                doc.model.paste_from_clipboard(sheet, *range, data, false)?;
+                *steps += 1;
+            }
+            let rest = Rect { row1: clear_from, col1, row2: last, col2 }.area(sheet);
+            doc.model.range_clear_all(&rest)?;
+            *steps += 1;
+            Ok(())
+        })?;
+        Ok(removed)
     }
 
     /// Vuelve a mostrar todas las filas de datos de `rect`.

@@ -16,8 +16,13 @@
   color: var(--muted);
   font-style: italic;
   font-family: Georgia, serif;
+  font-size: inherit;
+  background: none;
+  border: 0;
   border-right: 1px solid var(--border);
+  cursor: pointer;
 }
+.fx:hover { color: var(--kind-accent); }
 .formula-bar .fi-bar {
   flex: 1;
   height: 100%;
@@ -651,3 +656,23 @@
 .autosave-toggle.on .autosave-track { background: var(--kind-accent); }
 .autosave-toggle.on .autosave-track::after { transform: translateX(11px); }
 .autosave-toggle input:focus-visible + .autosave-track { outline: 2px solid var(--kind-accent); outline-offset: 2px; }
+
+/* Flecha de filtro en los encabezados de una tabla */
+.table-filter {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 14px;
+  color: #333;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  cursor: pointer;
+  z-index: 2;
+}
+.table-filter.active { color: #fff; background: var(--kind-accent); border-color: transparent; }

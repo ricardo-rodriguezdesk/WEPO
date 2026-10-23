@@ -10,7 +10,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
 
 | Editor | Para | Formatos |
 |---|---|---|
-| **WEPO Write** | Documentos de texto | .docx, .odt, .txt, .md |
+| **WEPO Write** | Documentos de texto | .docx, .txt, .md |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx, .odp |
 
@@ -21,6 +21,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
   - [IronCalc](https://github.com/ironcalc/ironcalc): motor de hojas de cálculo con fórmulas, deshacer/rehacer y lectura y escritura de .xlsx.
   - [calamine](https://github.com/tafia/calamine) y [csv](https://github.com/BurntSushi/rust-csv): lectura de .xls, .xlsb, .ods y .csv.
 - **React + TypeScript**: interfaz de cada editor.
+- **[TipTap](https://tiptap.dev/)** y **[JSZip](https://stuk.github.io/jszip/)**: editor de texto de WEPO Write y lectura y escritura de .docx.
 - **[TanStack Virtual](https://tanstack.com/virtual)**: la cuadrícula solo dibuja las celdas visibles, así que los archivos grandes se mantienen fluidos.
 
 ## Estructura del proyecto
@@ -31,6 +32,7 @@ src/                      Interfaz (React + TypeScript)
 ├── screens/Home.tsx      Pantalla de inicio: crear o abrir
 ├── editors/
 │   ├── sheets/           WEPO Sheets
+│   ├── write/            WEPO Write (editor y lector/escritor de .docx)
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
 ├── components/           Piezas compartidas (barra superior, íconos)
 └── lib/                  Tipos de documento, recientes, órdenes del menú y comunicación con Rust
@@ -39,6 +41,8 @@ src-tauri/                Núcleo nativo (Rust)
 ├── src/lib.rs            Comandos que la interfaz puede llamar
 ├── src/mac.rs            Menú de la app, archivos abiertos desde Finder e impresión
 ├── src/recovery.rs       Copia de recuperación de lo que no se ha guardado
+├── src/windows.rs        Una ventana por documento
+├── src/files.rs          Leer y guardar archivos de WEPO Write
 ├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar, deshacer y guardar
 ├── src/sheets/
 │   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
@@ -46,6 +50,7 @@ src-tauri/                Núcleo nativo (Rust)
 │   ├── conditional.rs    Formato condicional (reglas, barras de datos, íconos)
 │   ├── validation.rs     Listas desplegables
 │   ├── annotations.rs    Notas, vínculos, pegado especial y resumen de la selección
+│   ├── tables.rs         Tablas y configuración de página
 │   └── drawings.rs       Gráficas e imágenes
 ├── src/xlsx_extras.rs    Partes del .xlsx que el motor no maneja (se leen y escriben aparte)
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
@@ -147,6 +152,8 @@ WEPO también funciona en Linux (Ubuntu 22.04 o más nuevo, Debian, Fedora y sim
 | Copiar formato | Botón de la brocha (doble clic para aplicarlo varias veces; Esc para terminar) |
 | Insertar o editar una nota | ⇧F2, o clic derecho → Insertar nota |
 | Insertar o editar un vínculo | ⌘K; ⌘ + clic en la celda para abrirlo |
+| Insertar una función (buscar por nombre o categoría) | Botón **fx** de la barra de fórmulas |
+| Nueva ventana / abrir en otra ventana | ⌘N / ⌘O con un documento abierto |
 | Acercar / alejar / 100 % | ⌘+ / ⌘− / ⌘0, pellizcar en el trackpad, o el control de zoom junto a las pestañas |
 | Nueva hoja de cálculo / abrir archivo | ⌘N / ⌘O |
 | Salir de WEPO | ⌘Q (avisa si hay cambios sin guardar) |
@@ -169,7 +176,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: listas desplegables, texto que se desborda, alto automático de filas, autoajuste de columnas
 - [x] WEPO Sheets: gráficas (columnas, barras, líneas, áreas, pastel, dona, dispersión) que se leen y guardan en .xlsx
 - [x] WEPO Sheets: imágenes (PNG, JPEG, GIF)
-- [ ] WEPO Write: abrir, editar y guardar .docx
+- [x] WEPO Write: abrir, editar y guardar .docx (también .md y .txt)
+- [ ] WEPO Write: comentarios, control de cambios, encabezados y pies de página
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg
@@ -178,6 +186,11 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: notas e hipervínculos que se leen y guardan en .xlsx
 - [x] WEPO Sheets: ordenar por varias columnas y filtros combinados en varias columnas
 - [x] WEPO Sheets: autoguardado y recuperación si la app se cierra de golpe
+- [x] Varios documentos abiertos a la vez, cada uno en su ventana
+- [x] WEPO Sheets: tablas con estilo, filtros y fila de totales (se leen y guardan en .xlsx)
+- [x] WEPO Sheets: gráficas apiladas y combinadas, títulos de ejes y valores en las barras
+- [x] WEPO Sheets: encabezado, pie, filas que se repiten y área de impresión
+- [x] WEPO Sheets: ventana «Insertar función», validación de números y fechas, filtros por condición, quitar duplicados
 
 ## Licencia
 

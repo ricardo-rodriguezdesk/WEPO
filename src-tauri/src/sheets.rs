@@ -27,10 +27,12 @@ mod conditional;
 mod data;
 pub mod drawings;
 mod structure;
+mod tables;
 mod validation;
 
 pub use annotations::{LinkView, NoteView, PasteMode, SelectionStats};
 pub use data::{ColumnFilter, FindMatch, SortKey};
+pub use tables::{PageView, TableView};
 pub use validation::{ListSource, ValidationView};
 
 const LOCALE: &str = "en";
@@ -56,6 +58,8 @@ pub struct SheetDocument {
     /// son muchos pasos del motor, pero ⌘Z los deshace de una vez.
     history: Vec<Step>,
     future: Vec<Step>,
+    /// Idioma en que se escriben las fórmulas ("es" o "en").
+    language: &'static str,
 }
 
 /// Una acción en el historial.
@@ -76,6 +80,10 @@ pub struct Extras {
     pub drawings: Vec<drawings::Drawing>,
     /// Notas de las celdas.
     pub notes: Vec<annotations::Note>,
+    /// Tablas ("Dar formato como tabla").
+    pub tables: Vec<tables::Table>,
+    /// Encabezado, pie, filas que se repiten y área de impresión de cada hoja.
+    pub pages: Vec<tables::PageSetup>,
 }
 
 struct InternalClipboard {
@@ -187,6 +195,10 @@ pub struct SheetView {
     pub notes: Vec<NoteView>,
     /// Hipervínculos de las celdas (filas y columnas desde 1).
     pub links: Vec<LinkView>,
+    /// Tablas de la hoja (desde 1).
+    pub tables: Vec<TableView>,
+    /// Configuración de página de la hoja.
+    pub page: PageView,
 }
 
 /// 1 → A, 26 → Z, 27 → AA.
@@ -228,6 +240,7 @@ impl SheetDocument {
             extras: Extras::default(),
             history: Vec::new(),
             future: Vec::new(),
+            language: LANGUAGE,
         }
     }
 
@@ -252,6 +265,8 @@ impl SheetDocument {
                 doc.load_validations(path);
                 doc.load_drawings(path);
                 doc.load_notes();
+                doc.load_tables(path);
+                doc.load_pages(path);
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -458,6 +473,8 @@ impl SheetDocument {
             drawings: self.drawing_views(sheet),
             notes: self.note_views(sheet),
             links: self.link_views(sheet),
+            tables: self.table_views(sheet),
+            page: self.page_view(sheet),
         })
     }
 
@@ -476,6 +493,7 @@ impl SheetDocument {
     /// en inglés, que es lo que entiende cualquier Excel.
     pub fn set_language(&mut self, language: &str) -> Result<(), String> {
         let id: &'static str = if language == "es" { "es" } else { "en" };
+        self.language = id;
         self.model.set_language(id)
     }
 
@@ -490,6 +508,18 @@ impl SheetDocument {
         cursor: usize,
     ) -> Result<CompletionContext, String> {
         self.model.formula_completion(sheet, row, col, formula, cursor)
+    }
+
+    /// Escribe una fórmula que WEPO arma en inglés (=SUBTOTAL…), sin importar
+    /// el idioma en que el usuario escribe las suyas.
+    pub(super) fn set_english_formula(&mut self, sheet: u32, row: i32, col: i32, formula: &str) -> Result<(), String> {
+        if self.language == "en" {
+            return self.model.set_user_input(sheet, row, col, formula);
+        }
+        self.model.set_language("en")?;
+        let result = self.model.set_user_input(sheet, row, col, formula);
+        self.model.set_language(self.language)?;
+        result
     }
 
     /// Lo que el usuario escribió en la celda: la fórmula (=SUMA…) o el valor.
@@ -547,7 +577,16 @@ impl SheetDocument {
             return self.clear_range(sheet, rect);
         }
         self.check_validation(sheet, row, col, input)?;
-        self.step(|m| m.set_user_input(sheet, row, col, input))
+        self.step(|m| m.set_user_input(sheet, row, col, input))?;
+        if !input.starts_with('=') {
+            if let Err(e) = self.check_value(sheet, row, col) {
+                // No cumple la regla de la celda: se deshace sin dejar rastro en el historial.
+                self.undo()?;
+                self.future.pop();
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 
     pub fn clear_range(&mut self, sheet: u32, rect: Rect) -> Result<(), String> {
@@ -841,6 +880,7 @@ fn ods_cell_ref(part: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::data::FilterCondition;
     use super::*;
 
     #[test]
@@ -1124,16 +1164,20 @@ mod tests {
         doc.redo().unwrap();
 
         // Filtrar deja visibles solo Kiwi y Uva (filas 2 y 5).
-        doc.filter(0, rect(1, 1, 5, 3), &[ColumnFilter { col: 1, keep: vec!["Kiwi".into(), "Uva".into()] }]).unwrap();
+        doc.filter(0, rect(1, 1, 5, 3), &[ColumnFilter { col: 1, keep: Some(vec!["Kiwi".into(), "Uva".into()]), condition: None }]).unwrap();
         assert_eq!(doc.view(0).unwrap().hidden_rows, vec![3, 4]);
         // Con un segundo filtro en la columna B, solo queda Uva.
         let uva = text(&doc, 5, 2);
         let both = [
-            ColumnFilter { col: 1, keep: vec!["Kiwi".into(), "Uva".into()] },
-            ColumnFilter { col: 2, keep: vec![uva] },
+            ColumnFilter { col: 1, keep: Some(vec!["Kiwi".into(), "Uva".into()]), condition: None },
+            ColumnFilter { col: 2, keep: Some(vec![uva]), condition: None },
         ];
         doc.filter(0, rect(1, 1, 5, 3), &both).unwrap();
         assert_eq!(doc.view(0).unwrap().hidden_rows, vec![2, 3, 4]);
+        // Por condición: nombres que empiezan con "p" (sin importar mayúsculas).
+        let starts = FilterCondition { op: "begins".into(), value: "P".into(), value2: None };
+        doc.filter(0, rect(1, 1, 5, 3), &[ColumnFilter { col: 1, keep: None, condition: Some(starts) }]).unwrap();
+        assert_eq!(doc.view(0).unwrap().hidden_rows, vec![2, 3, 5]);
         doc.clear_filter(0, rect(1, 1, 5, 3)).unwrap();
         assert!(doc.view(0).unwrap().hidden_rows.is_empty());
 

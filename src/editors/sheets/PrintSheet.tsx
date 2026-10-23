@@ -8,12 +8,14 @@ import type { Decoration, Range, SheetView } from "../../lib/spreadsheet";
 import { columnName } from "../../lib/spreadsheet";
 import ChartSvg from "./ChartSvg";
 import { ICON_GLYPHS, cellCss } from "./cellStyle";
+import { tableAt, withTableStyle } from "./tables";
 import type { Axis } from "./layout";
 import type { MergedCells } from "./regions";
 import "./print.css";
 
 export type PrintOptions = {
-  area: "sheet" | "selection";
+  /** Toda la hoja, la selección o el área de impresión guardada en el archivo. */
+  area: "sheet" | "selection" | "saved";
   gridlines: boolean;
   headings: boolean;
   fit: boolean;
@@ -24,7 +26,24 @@ export type PrintJob = PrintOptions & {
   range: Range;
   /** Imágenes ya cargadas (data URL) por id, para que estén listas al imprimir. */
   images: Record<number, string>;
+  /** Encabezado y pie ya con la fecha, el archivo y la hoja puestos. */
+  header: string;
+  footer: string;
+  /** Filas que se repiten arriba en cada página (desde 0). */
+  repeat: [number, number] | null;
 };
+
+const HEADER_TEXT_HEIGHT = 28;
+
+/** "[Archivo] · [Fecha]" → "Ventas.xlsx · 22/10/2026". El número de página lo pone Excel. */
+export function fillPageFields(text: string, fileName: string, sheetName: string): string {
+  return text
+    .split("[Fecha]").join(new Date().toLocaleDateString("es-MX"))
+    .split("[Archivo]").join(fileName)
+    .split("[Hoja]").join(sheetName)
+    .replace(/\s*\[Páginas?\]\s*/g, " ")
+    .trim();
+}
 
 /** Ancho útil aproximado de una hoja carta o A4 con márgenes de 12 mm, en px CSS. */
 const PAGE_WIDTH = { portrait: 700, landscape: 960 };
@@ -87,8 +106,11 @@ export default function PrintSheet({ job, view, cols, rows, merged, decorations 
   const { range } = job;
   const visibleCols: number[] = [];
   for (let c = range.c1; c <= range.c2; c++) if (cols.size(c) > 0) visibleCols.push(c);
+  // Las filas que se repiten van arriba en cada página (en <thead>), no en el cuerpo.
+  const repeated: number[] = [];
+  if (job.repeat) for (let r = job.repeat[0]; r <= job.repeat[1]; r++) if (rows.size(r) > 0) repeated.push(r);
   const visibleRows: number[] = [];
-  for (let r = range.r1; r <= range.r2; r++) if (rows.size(r) > 0) visibleRows.push(r);
+  for (let r = range.r1; r <= range.r2; r++) if (rows.size(r) > 0 && !repeated.includes(r)) visibleRows.push(r);
 
   const headingW = job.headings ? HEADING_WIDTH : 0;
   const headingH = job.headings ? HEADING_HEIGHT : 0;
@@ -123,7 +145,7 @@ export default function PrintSheet({ job, view, cols, rows, merged, decorations 
       ? visibleRows.filter((k) => k >= r && k <= area.r2).reduce((sum, k) => sum + rows.size(k), 0)
       : rows.size(r);
     const [text, numeric, styleId] = view.rows[source.r]?.[source.c] ?? ["", false, 0];
-    const style = view.styles[styleId] ?? view.styles[0];
+    const style = withTableStyle(view.styles[styleId] ?? view.styles[0], tableAt(view.tables ?? [], source.r, source.c), source.r);
     const deco = decorations.get(`${source.r},${source.c}`);
     const css = cellCss(style, numeric);
     const overflow =
@@ -161,7 +183,9 @@ export default function PrintSheet({ job, view, cols, rows, merged, decorations 
 
   // Gráficas e imágenes: misma posición que en pantalla, relativa al área impresa.
   const originX = cols.start(range.c1) - headingW;
-  const originY = rows.start(range.r1) - headingH;
+  const above = repeated.filter((r) => r < range.r1).reduce((sum, r) => sum + rows.size(r), 0);
+  const originY = rows.start(range.r1) - headingH - (job.header ? HEADER_TEXT_HEIGHT : 0) - above;
+  const span = visibleCols.length + (job.headings ? 1 : 0);
   const areaRight = cols.start(range.c2 + 1);
   const areaBottom = rows.start(range.r2 + 1);
   const drawings = view.drawings.filter(
@@ -179,17 +203,41 @@ export default function PrintSheet({ job, view, cols, rows, merged, decorations 
               <col key={c} style={{ width: cols.size(c) }} />
             ))}
           </colgroup>
-          {job.headings && (
+          {(job.headings || job.header || repeated.length > 0) && (
             <thead>
-              <tr style={{ height: HEADING_HEIGHT }}>
-                <th className="print-heading" />
-                {visibleCols.map((c) => (
-                  <th key={c} className="print-heading">
-                    {columnName(c)}
+              {job.header && (
+                <tr style={{ height: HEADER_TEXT_HEIGHT }}>
+                  <th colSpan={span} className="print-page-text">
+                    {job.header}
                   </th>
-                ))}
-              </tr>
+                </tr>
+              )}
+              {job.headings && (
+                <tr style={{ height: HEADING_HEIGHT }}>
+                  <th className="print-heading" />
+                  {visibleCols.map((c) => (
+                    <th key={c} className="print-heading">
+                      {columnName(c)}
+                    </th>
+                  ))}
+                </tr>
+              )}
+              {repeated.map((r) => (
+                <tr key={`t${r}`} style={{ height: rows.size(r) }}>
+                  {job.headings && <th className="print-heading">{r + 1}</th>}
+                  {visibleCols.map((c) => renderCell(r, c))}
+                </tr>
+              ))}
             </thead>
+          )}
+          {job.footer && (
+            <tfoot>
+              <tr style={{ height: HEADER_TEXT_HEIGHT }}>
+                <td colSpan={span} className="print-page-text">
+                  {job.footer}
+                </td>
+              </tr>
+            </tfoot>
           )}
           <tbody>
             {visibleRows.map((r) => (

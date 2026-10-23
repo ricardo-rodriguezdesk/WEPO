@@ -14,9 +14,9 @@ type Props = {
   onRemoveRecent: (path: string) => void;
   onClearRecents: () => void;
   recents: RecentFile[];
-  recovery: RecoveryInfo | null;
+  recovery: RecoveryInfo[];
   onRecover: (info: RecoveryInfo) => void;
-  onDiscardRecovery: () => void;
+  onDiscardRecovery: (info: RecoveryInfo) => void;
   dragging: boolean;
   error: string | null;
 };
@@ -36,23 +36,23 @@ export default function Home(props: Props) {
         <p className="home-tagline">Write · Edit · Present · Open</p>
       </section>
 
-      {recovery && (
-        <section className="home-recovery" role="alert">
+      {recovery.map((info) => (
+        <section key={info.path} className="home-recovery" role="alert">
           <div>
-            <b>WEPO se cerró sin guardar «{recovery.name}».</b>
+            <b>WEPO se cerró sin guardar «{info.name}».</b>
             <span>
-              Hay una copia de {whenLabel(recovery.time * 1000)}
-              {recovery.original ? ` (el original está en ${folderLabel(recovery.original)})` : ""}.
+              Hay una copia de {whenLabel(info.time * 1000)}
+              {info.original ? ` (el original está en ${folderLabel(info.original)})` : ""}.
             </span>
           </div>
-          <button className="btn" onClick={props.onDiscardRecovery}>
+          <button className="btn" onClick={() => props.onDiscardRecovery(info)}>
             Descartar
           </button>
-          <button className="btn btn-primary" onClick={() => props.onRecover(recovery)}>
+          <button className="btn btn-primary" onClick={() => props.onRecover(info)}>
             Recuperar
           </button>
         </section>
-      )}
+      ))}
 
       <section className="home-section">
         <h2>Crear</h2>

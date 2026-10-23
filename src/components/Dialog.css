@@ -72,3 +72,52 @@
 .sort-level { display: grid; grid-template-columns: 82px 1fr 1fr 30px; gap: 8px; align-items: center; }
 .sort-level-label { font-size: 12px; color: var(--muted); }
 .sort-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 12px; flex-wrap: wrap; }
+
+.table-styles { display: flex; gap: 8px; flex-wrap: wrap; }
+.table-style {
+  display: grid;
+  grid-template-rows: repeat(4, 7px);
+  width: 46px;
+  padding: 4px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.table-style span { display: block; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.table-style.selected { border-color: var(--accent); }
+
+.fn-dialog { display: grid; gap: 10px; }
+.fn-columns { display: grid; grid-template-columns: 190px 1fr; gap: 10px; height: 260px; }
+.fn-categories, .fn-list {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+.fn-categories button, .fn-list button {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+.fn-list button { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+.fn-categories button:hover, .fn-list button:hover { background: var(--border); }
+.fn-categories button.selected, .fn-list button.selected { background: var(--accent); color: #fff; }
+.fn-detail { min-height: 52px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.fn-detail b { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+.fn-detail p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.dup-columns { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
+.print-options.two { grid-template-columns: 1fr 1fr; align-content: start; }
+.print-page { margin: 16px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--border); }
+.print-page legend { padding: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.print-page .field { margin-bottom: 8px; }
+.print-fields { margin: -2px 0 10px; }
+.print-fields .btn { padding: 2px 8px; font-size: 12px; }

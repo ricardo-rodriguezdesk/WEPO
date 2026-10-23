@@ -60,3 +60,15 @@
 .print-drawing { position: absolute; break-inside: avoid; }
 .print-drawing img { width: 100%; height: 100%; object-fit: fill; }
 .print-drawing .chart-svg { display: block; }
+
+/* Encabezado y pie de página: se repiten en cada hoja impresa */
+.print-page-text {
+  padding: 4px 0;
+  font-size: 9pt;
+  font-weight: 400;
+  color: #555;
+  text-align: center;
+  border: 0 !important;
+  background: none !important;
+}
+.print-table tfoot { display: table-footer-group; }

@@ -25,6 +25,8 @@ pub enum ChartType {
     Pie,
     Doughnut,
     Scatter,
+    /// Columnas y, la última serie, como línea.
+    Combo,
 }
 
 /// Una serie: de dónde salen su nombre, sus categorías (eje X) y sus valores.
@@ -45,6 +47,17 @@ pub struct Chart {
     pub title: String,
     pub legend: bool,
     pub series: Vec<Series>,
+    /// Columnas, barras, áreas o líneas apiladas.
+    #[serde(default)]
+    pub stacked: bool,
+    /// Mostrar el valor sobre cada barra o punto.
+    #[serde(default)]
+    pub labels: bool,
+    /// Títulos de los ejes: el de las categorías y el de los valores.
+    #[serde(default)]
+    pub x_title: String,
+    #[serde(default)]
+    pub y_title: String,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +110,10 @@ pub enum DrawingView {
         title: String,
         legend: bool,
         series: Vec<SeriesView>,
+        stacked: bool,
+        labels: bool,
+        x_title: String,
+        y_title: String,
     },
     Image {
         id: u32,
@@ -118,6 +135,10 @@ pub struct DrawingPatch {
     pub kind: Option<ChartType>,
     pub title: Option<String>,
     pub legend: Option<bool>,
+    pub stacked: Option<bool>,
+    pub labels: Option<bool>,
+    pub x_title: Option<String>,
+    pub y_title: Option<String>,
     /// Nuevo rango de datos (A1, en la hoja de la gráfica): se rehacen las series.
     pub data: Option<String>,
 }
@@ -277,6 +298,10 @@ impl SheetDocument {
                     kind: chart.kind,
                     title: chart.title.clone(),
                     legend: chart.legend,
+                    stacked: chart.stacked,
+                    labels: chart.labels,
+                    x_title: chart.x_title.clone(),
+                    y_title: chart.y_title.clone(),
                     series: chart
                         .series
                         .iter()
@@ -393,7 +418,16 @@ impl SheetDocument {
             y: self.row_y(sheet, r.row1),
             w: 480.0,
             h: 300.0,
-            content: Content::Chart(Chart { kind, title: String::new(), legend: series.len() > 1 || matches!(kind, ChartType::Pie | ChartType::Doughnut), series }),
+            content: Content::Chart(Chart {
+                kind,
+                title: String::new(),
+                legend: series.len() > 1 || matches!(kind, ChartType::Pie | ChartType::Doughnut),
+                series,
+                stacked: false,
+                labels: false,
+                x_title: String::new(),
+                y_title: String::new(),
+            }),
         });
         self.record_extras(before);
         Ok(id)
@@ -444,6 +478,10 @@ impl SheetDocument {
             if let Some(kind) = patch.kind { chart.kind = kind }
             if let Some(title) = patch.title { chart.title = title }
             if let Some(legend) = patch.legend { chart.legend = legend }
+            if let Some(v) = patch.stacked { chart.stacked = v }
+            if let Some(v) = patch.labels { chart.labels = v }
+            if let Some(v) = patch.x_title { chart.x_title = v }
+            if let Some(v) = patch.y_title { chart.y_title = v }
             if let Some(series) = new_series { chart.series = series }
         }
         self.record_extras(before);
@@ -516,12 +554,17 @@ impl SheetDocument {
                             "pie" => ChartType::Pie,
                             "doughnut" => ChartType::Doughnut,
                             "scatter" => ChartType::Scatter,
+                            "combo" => ChartType::Combo,
                             _ => ChartType::Column,
                         };
                         Content::Chart(Chart {
                             kind,
                             title: chart.title,
                             legend: chart.legend,
+                            stacked: chart.stacked,
+                            labels: chart.labels,
+                            x_title: chart.x_title,
+                            y_title: chart.y_title,
                             series: chart
                                 .series
                                 .into_iter()
@@ -569,6 +612,10 @@ impl SheetDocument {
                         kind: serde_json::to_value(chart.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(),
                         title: chart.title.clone(),
                         legend: chart.legend,
+                        stacked: chart.stacked,
+                        labels: chart.labels,
+                        x_title: chart.x_title.clone(),
+                        y_title: chart.y_title.clone(),
                         series: chart
                             .series
                             .iter()
@@ -679,6 +726,38 @@ mod tests {
         assert!(doc.drawing_views(0).is_empty());
         doc.undo().unwrap();
         assert_eq!(doc.drawing_views(0).len(), 1);
+    }
+
+    #[test]
+    fn graficas_combinadas_apiladas_y_con_titulos() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        let data = [["Mes", "Norte", "Sur", "Meta"], ["Ene", "10", "20", "25"], ["Feb", "15", "18", "30"]];
+        for (r, row) in data.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                doc.set_cell(0, r as i32 + 1, c as i32 + 1, v).unwrap();
+            }
+        }
+        let combo = doc.add_chart(0, Rect { row1: 1, col1: 1, row2: 3, col2: 4 }, ChartType::Combo).unwrap();
+        let patch = DrawingPatch {
+            labels: Some(true),
+            x_title: Some("Mes".into()),
+            y_title: Some("Ventas (miles)".into()),
+            ..Default::default()
+        };
+        doc.update_drawing(0, combo, patch).unwrap();
+        let stacked = doc.add_chart(0, Rect { row1: 1, col1: 1, row2: 3, col2: 3 }, ChartType::Bar).unwrap();
+        doc.update_drawing(0, stacked, DrawingPatch { stacked: Some(true), ..Default::default() }).unwrap();
+
+        let path = std::env::temp_dir().join(format!("wepo-combo-{}.xlsx", std::process::id()));
+        let path = path.to_str().unwrap();
+        doc.save(path, 0).unwrap();
+        let reopened = SheetDocument::open(path).unwrap();
+        let views = reopened.drawing_views(0);
+        let DrawingView::Chart { kind, labels, x_title, y_title, series, .. } = &views[0] else { panic!() };
+        assert_eq!((*kind, *labels, x_title.as_str(), y_title.as_str(), series.len()), (ChartType::Combo, true, "Mes", "Ventas (miles)", 3));
+        let DrawingView::Chart { kind, stacked, .. } = &views[1] else { panic!() };
+        assert_eq!((*kind, *stacked), (ChartType::Bar, true));
+        std::fs::remove_file(path).unwrap();
     }
 
     /// PNG real de 2x2 píxeles.

@@ -22,6 +22,8 @@ import type {
   Range,
   SelectionStats,
   SheetView,
+  TableStyle,
+  TableView,
 } from "../../lib/spreadsheet";
 import { cellName, columnName, rangeOf, sheetApi } from "../../lib/spreadsheet";
 import FormatBar, { Separator, ToolButton } from "./FormatBar";
@@ -34,13 +36,20 @@ import ConditionalFormatDialog from "./ConditionalFormatDialog";
 import ValidationDialog from "./ValidationDialog";
 import DrawingLayer from "./DrawingLayer";
 import ChartPanel, { CHART_TYPES } from "./ChartPanel";
-import PrintDialog from "./PrintDialog";
+import PrintDialog, { pageForm } from "./PrintDialog";
+import type { PageForm } from "./PrintDialog";
 import LinkDialog from "./LinkDialog";
+import TableDialog from "./TableDialog";
+import FunctionDialog from "./FunctionDialog";
+import DuplicatesDialog from "./DuplicatesDialog";
+import type { ColumnSpec } from "./FilterMenu";
+import { conditionHolds } from "./FilterMenu";
+import { tableAt, tableRegion, withTableStyle } from "./tables";
 import SortDialog from "./SortDialog";
 import type { SortLevel } from "./SortDialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { recoveryApi } from "../../lib/recovery";
-import PrintSheet, { usedRange } from "./PrintSheet";
+import PrintSheet, { fillPageFields, usedRange } from "./PrintSheet";
 import type { PrintJob, PrintOptions } from "./PrintSheet";
 import { invoke } from "@tauri-apps/api/core";
 import { onCommand, runCommand } from "../../lib/commands";
@@ -117,7 +126,14 @@ function isMultiSelectionRange(range: Range) {
 }
 
 /** Filtros activos sobre una tabla: por cada columna filtrada, los valores visibles. */
-type Filter = { region: Range; cols: Record<number, string[]> };
+type Filter = { region: Range; cols: Record<number, ColumnSpec> };
+
+/** ¿El texto de la celda pasa el filtro de su columna? */
+function passes(spec: ColumnSpec, text: string) {
+  if (spec.keep) return spec.keep.includes(text);
+  if (spec.condition) return conditionHolds(spec.condition, text);
+  return true;
+}
 
 /** Nota que se está editando o que se muestra al pasar el mouse. */
 type NoteTarget = { r: number; c: number };
@@ -161,6 +177,9 @@ export default function SheetEditor(props: Props) {
   const [hoverNote, setHoverNote] = useState<NoteTarget | null>(null);
   const [linkDialog, setLinkDialog] = useState<NoteTarget | null>(null);
   const [sortDialog, setSortDialog] = useState<Range | null>(null);
+  const [tableDialog, setTableDialog] = useState<{ range: Range; table: TableView | null } | null>(null);
+  const [fnDialog, setFnDialog] = useState(false);
+  const [dupDialog, setDupDialog] = useState<Range | null>(null);
   const [stats, setStats] = useState<SelectionStats | null>(null);
   const [autosave, setAutosave] = useState(loadAutosave);
   // Cuenta los cambios: sirve para saber si hay algo nuevo que autoguardar o recuperar.
@@ -726,12 +745,12 @@ export default function SheetEditor(props: Props) {
     );
   }
 
-  async function saveValidation(source: ListSource | null) {
+  async function saveValidation(source: ListSource | null, message = "") {
     const range = activeValidation && !isMultiSelection
       ? { r1: activeValidation.row1 - 1, c1: activeValidation.col1 - 1, r2: activeValidation.row2 - 1, c2: activeValidation.col2 - 1 }
       : usedSelection();
-    const ok = await mutate(() => sheetApi.setValidation(sheet, range, source));
-    if (ok) showStatus({ text: source ? "Lista desplegable guardada" : "Lista desplegable quitada" });
+    const ok = await mutate(() => sheetApi.setValidation(sheet, range, source, message));
+    if (ok) showStatus({ text: source ? "Validación guardada" : "Validación quitada" });
     return ok;
   }
 
@@ -884,6 +903,9 @@ export default function SheetEditor(props: Props) {
 
   /** Tabla sobre la que se ordena o filtra: la selección, o la región alrededor de la celda. */
   function dataRegion(col: number): Range {
+    // Dentro de una tabla, la tabla (sin su fila de totales).
+    const table = tableAt(view.tables ?? [], active.r, col);
+    if (table) return tableRegion(table);
     if (isMultiSelection && !wholeCols && !wholeRows) return selection;
     const start = wholeCols ? { r: firstDataRow(col), c: col } : { r: active.r, c: col };
     return currentRegion(rows, start);
@@ -914,8 +936,9 @@ export default function SheetEditor(props: Props) {
     if (ok) showStatus({ text: `Ordenado por ${levels.map((l) => columnName(l.col)).join(", luego ")}` });
   }
 
-  function openFilter(col: number, x: number, y: number) {
-    const region = filter && col >= filter.region.c1 && col <= filter.region.c2 ? filter.region : dataRegion(col);
+  function openFilter(col: number, x: number, y: number, tableRange?: Range) {
+    const region =
+      tableRange ?? (filter && col >= filter.region.c1 && col <= filter.region.c2 ? filter.region : dataRegion(col));
     if (region.r2 <= region.r1) return showStatus({ text: "Pon el cursor dentro de una tabla con encabezados para filtrar" });
     setFilterMenu({ x, y, col, region });
   }
@@ -928,19 +951,19 @@ export default function SheetEditor(props: Props) {
     const others = Object.entries(filter?.cols ?? {}).filter(([c]) => Number(c) !== col);
     const values = new Set<string>();
     for (let r = region.r1 + 1; r <= region.r2; r++) {
-      if (others.some(([c, keep]) => !keep.includes(rows[r]?.[Number(c)]?.[0] ?? ""))) continue;
+      if (others.some(([c, spec]) => !passes(spec, rows[r]?.[Number(c)]?.[0] ?? ""))) continue;
       values.add(rows[r]?.[col]?.[0] ?? "");
     }
     return [...values].sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
   }
 
   /** Cambia el filtro de una columna (`null` lo quita) y aplica todos juntos. */
-  async function applyFilter(region: Range, col: number, keep: string[] | null) {
+  async function applyFilter(region: Range, col: number, spec: ColumnSpec | null) {
     const sameTable = filter && filter.region.r1 === region.r1 && filter.region.c1 === region.c1;
     const cols = { ...(sameTable ? filter.cols : {}) };
-    if (keep) cols[col] = keep;
+    if (spec) cols[col] = spec;
     else delete cols[col];
-    const list = Object.entries(cols).map(([c, keep]) => ({ col: Number(c), keep }));
+    const list = Object.entries(cols).map(([c, spec]) => ({ col: Number(c), ...spec }));
     const ok = await mutate(() => sheetApi.filter(sheet, region, list));
     if (ok) setFilter(list.length ? { region, cols } : null);
   }
@@ -949,6 +972,66 @@ export default function SheetEditor(props: Props) {
     if (!filter) return;
     const region = filter.region;
     mutate(() => sheetApi.filter(sheet, region, [])).then((ok) => ok && setFilter(null));
+  }
+
+  // ───────────── tablas, funciones y duplicados ─────────────
+
+  const tables = view.tables ?? [];
+  const activeTable = tableAt(tables, active.r, active.c);
+
+  /** Dar formato como tabla (o abrir las opciones de la tabla de la celda activa). */
+  function openTableDialog() {
+    if (activeTable) return setTableDialog({ range: tableRegion(activeTable), table: activeTable });
+    const range = isMultiSelection && !wholeCols && !wholeRows ? selection : currentRegion(rows, active);
+    if (range.r2 <= range.r1) return showStatus({ text: "Selecciona los encabezados y los datos de la tabla", error: true });
+    setTableDialog({ range, table: null });
+  }
+
+  async function saveTable(style: TableStyle, banded: boolean, totals: boolean) {
+    if (!tableDialog) return;
+    const { range, table } = tableDialog;
+    const ok = table
+      ? await mutate(() => sheetApi.updateTable(sheet, table.name, style, banded, totals))
+      : await mutate(() => sheetApi.createTable(sheet, range, style, banded, totals));
+    if (ok) showStatus({ text: table ? "Tabla actualizada" : "Tabla creada: usa las flechas de los encabezados para filtrar" });
+  }
+
+  function removeTable() {
+    const table = tableDialog?.table;
+    setTableDialog(null);
+    if (table) mutate(() => sheetApi.updateTable(sheet, table.name, table.style, table.banded, table.totals, true));
+  }
+
+  /** Inserta la función elegida en la fórmula que se escribe, o empieza una en la celda activa. */
+  function insertFunction(fn: FunctionInfo) {
+    setFnDialog(false);
+    const name = `${fn[language]}(`;
+    const current = editingRef.current;
+    if (current) {
+      // En una celda vacía la fórmula empieza con "=".
+      const before = current.value.slice(0, caret) || "=";
+      setEditValue(before + name + current.value.slice(caret), before.length + name.length);
+      requestAnimationFrame(() => activeInput()?.focus());
+      return;
+    }
+    startEditing(`=${name}`, false);
+  }
+
+  function openDuplicates() {
+    const region = dataRegion(active.c);
+    if (region.r2 <= region.r1) return showStatus({ text: "Pon el cursor dentro de una tabla de datos", error: true });
+    setDupDialog(region);
+  }
+
+  async function removeDuplicates(region: Range, cols: number[], header: boolean) {
+    try {
+      const { removed, view: next } = await sheetApi.removeDuplicates(sheet, region, cols, header);
+      setView(next);
+      if (removed) markDirty();
+      showStatus({ text: removed ? `Se quitaron ${removed} ${removed === 1 ? "fila repetida" : "filas repetidas"}` : "No hay filas repetidas" });
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+    }
   }
 
   // ───────────── pegado especial y copiar formato ─────────────
@@ -1312,11 +1395,34 @@ export default function SheetEditor(props: Props) {
 
   // ───────────── imprimir ─────────────
 
-  async function startPrint(options: PrintOptions) {
+  async function startPrint(options: PrintOptions, form: PageForm) {
     setDialog(null);
+    setPrintJob(null);
     await commit();
+    // La configuración de página se guarda en el archivo (si cambió).
+    let page = view.page;
+    const before = pageForm(page);
+    if (JSON.stringify(before) !== JSON.stringify(form)) {
+      try {
+        const next = await sheetApi.pageSetup(sheet, form.header, form.footer, form.repeatRows, form.printArea);
+        setView(next);
+        markDirty();
+        page = next.page;
+      } catch (e) {
+        showStatus({ text: String(e), error: true });
+        return;
+      }
+    }
+    const saved = page.print_area
+      ? { r1: page.print_area[0] - 1, c1: page.print_area[1] - 1, r2: page.print_area[2] - 1, c2: page.print_area[3] - 1 }
+      : null;
     // Una selección de filas o columnas completas se recorta hasta donde hay datos.
-    const range = options.area === "selection" ? clampToData(rows, selection) : usedRange(view, baseCols, baseRows);
+    const range =
+      options.area === "selection"
+        ? clampToData(rows, selection)
+        : options.area === "saved" && saved
+          ? saved
+          : usedRange(view, baseCols, baseRows);
     if (!range) {
       showStatus({ text: "La hoja está vacía: no hay nada que imprimir.", error: true });
       return;
@@ -1333,7 +1439,15 @@ export default function SheetEditor(props: Props) {
             .catch(() => {}),
         ),
     );
-    setPrintJob({ ...options, range, images });
+    const sheetName = view.sheet_names[sheet] ?? "";
+    setPrintJob({
+      ...options,
+      range,
+      images,
+      header: fillPageFields(page.header, fileName, sheetName),
+      footer: fillPageFields(page.footer, fileName, sheetName),
+      repeat: page.repeat_rows ? [page.repeat_rows[0] - 1, page.repeat_rows[1] - 1] : null,
+    });
   }
 
   // Cuando la hoja para imprimir ya está dibujada, se abre el diálogo de macOS.
@@ -1347,8 +1461,12 @@ export default function SheetEditor(props: Props) {
     return () => cancelAnimationFrame(frame);
   }, [printJob]);
 
-  // Si la hoja cambia, la versión para imprimir ya no sirve.
-  useEffect(() => setPrintJob(null), [view]);
+  // Terminada la impresión, la versión para imprimir ya no hace falta.
+  useEffect(() => {
+    const done = () => setPrintJob(null);
+    window.addEventListener("afterprint", done);
+    return () => window.removeEventListener("afterprint", done);
+  }, []);
 
   // Órdenes que llegan del menú de la app o de los atajos (⌘S, ⌘⇧S, ⌘F, ⌘P).
   const commands = useRef({ saveDocument, setFindOpen, setDialog, setZoom, zoom });
@@ -1444,7 +1562,7 @@ export default function SheetEditor(props: Props) {
     }
 
     // Alt + ↓ abre la lista desplegable de la celda, como en Excel.
-    if (e.altKey && e.key === "ArrowDown" && activeValidation) {
+    if (e.altKey && e.key === "ArrowDown" && activeValidation && activeValidation.items.length) {
       e.preventDefault();
       return setListOpen(true);
     }
@@ -1643,6 +1761,8 @@ export default function SheetEditor(props: Props) {
         action: () => openFilter(active.c, menu?.x ?? 200, menu?.y ?? 200),
       },
       ...(filter ? [{ label: "Quitar todos los filtros", action: clearAllFilters }] : []),
+      { label: "Quitar duplicados…", action: openDuplicates },
+      { label: activeTable ? "Opciones de la tabla…" : "Dar formato como tabla…", action: openTableDialog },
     ];
 
     if (kind === "row") {
@@ -1730,9 +1850,12 @@ export default function SheetEditor(props: Props) {
     // se veía una franja de unos píxeles al seleccionar).
     if (cellBox.width <= 0 || cellBox.height <= 0) return null;
     const [text, numeric, styleId] = rows[r]?.[c] ?? ["", false, 0];
+    const table = tableAt(tables, r, c);
+    const tableHeader = table && r + 1 === table.row1;
     const note = notes.get(`${r},${c}`);
     const link = links.get(`${r},${c}`);
-    const cellStyle = view.styles[styleId] ?? view.styles[0];
+    // Dentro de una tabla, sus colores (encabezados, bandas, totales) completan el formato de la celda.
+    const cellStyle = withTableStyle(view.styles[styleId] ?? view.styles[0], table, r);
     const deco = decorations.get(`${r},${c}`);
     let box = cellBox;
     // Texto largo: se desborda sobre las celdas vacías de la derecha, como en Excel.
@@ -1751,7 +1874,7 @@ export default function SheetEditor(props: Props) {
       <div
         key={key}
         className={cellClasses(r, c, numeric, extra)}
-        style={{ ...cellCss(cellStyle, numeric, zoom), ...box }}
+        style={{ ...cellCss(cellStyle, numeric, zoom), ...box, ...(tableHeader ? { paddingRight: 22 } : null) }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           if (selectedDrawing !== null) setSelectedDrawing(null);
@@ -1784,6 +1907,20 @@ export default function SheetEditor(props: Props) {
         title={note ? undefined : link ? `${link.target}\n${keys("⌘")}+clic para abrir` : text}
       >
         {note && <span className="note-mark" aria-label="Tiene nota" />}
+        {tableHeader && (
+          <button
+            type="button"
+            className={`table-filter${filter?.cols[c] && filter.region.r1 === table.row1 - 1 ? " active" : ""}`}
+            aria-label={`Filtrar u ordenar ${text || columnName(c)}`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              openFilter(c, box.left, box.bottom + 4, tableRegion(table));
+            }}
+          >
+            ▾
+          </button>
+        )}
         {deco?.bar && (
           <span
             className="data-bar"
@@ -1958,6 +2095,20 @@ export default function SheetEditor(props: Props) {
         <ToolButton label="Ordenar de Z a A" onClick={() => sortBy(active.c, false)}>
           <span className="fb-text-icon">Z↓A</span>
         </ToolButton>
+        <ToolButton label={activeTable ? "Opciones de la tabla" : "Dar formato como tabla"} pressed={Boolean(activeTable)} onClick={openTableDialog}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="1.5" />
+            <path d="M3 9h18M3 14h18M9 9v11" />
+            <rect x="3" y="4" width="18" height="5" fill="currentColor" stroke="none" opacity="0.35" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Quitar duplicados" onClick={openDuplicates}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <rect x="3" y="4" width="11" height="6" rx="1" />
+            <rect x="3" y="14" width="11" height="6" rx="1" strokeDasharray="2 2" />
+            <path d="M17 14l4 4M21 14l-4 4" />
+          </svg>
+        </ToolButton>
         <ToolButton label="Ordenar por varias columnas" onClick={openSortDialog}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
             <path d="M4 6h10M4 12h7M4 18h4M18 5v14M15 16l3 3 3-3" />
@@ -2048,9 +2199,9 @@ export default function SheetEditor(props: Props) {
 
       <div className="formula-bar">
         <span className="cell-ref">{selectionLabel}</span>
-        <span className="fx" aria-hidden>
+        <button type="button" className="fx" title="Insertar función" aria-label="Insertar función" onClick={() => setFnDialog(true)}>
           fx
-        </span>
+        </button>
         <FormulaInput
           className="fi-bar"
           label="Contenido de la celda"
@@ -2262,7 +2413,7 @@ export default function SheetEditor(props: Props) {
           {fillTo && <div className="fill-preview" style={rangeBox(fillRange(fillTo))} />}
 
           {/* Flecha y opciones de la lista desplegable de la celda activa */}
-          {activeValidation && !editing && (() => {
+          {activeValidation && activeValidation.kind !== "number" && activeValidation.kind !== "date" && !editing && (() => {
             const box = rangeBox({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
             return (
               <>
@@ -2425,7 +2576,7 @@ export default function SheetEditor(props: Props) {
           x={chartMenu.x}
           y={chartMenu.y}
           onClose={() => setChartMenu(null)}
-          items={CHART_TYPES.map((t) => ({ label: `Gráfica de ${t.label.toLowerCase()}`, action: () => insertChart(t.kind) }))}
+          items={CHART_TYPES.map((t) => ({ label: t.kind === "combo" ? "Gráfica combinada (columnas y línea)" : `Gráfica de ${t.label.toLowerCase()}`, action: () => insertChart(t.kind) }))}
         />
       )}
 
@@ -2437,6 +2588,31 @@ export default function SheetEditor(props: Props) {
           onDelete={(index) => mutate(() => sheetApi.deleteConditionalRule(sheet, index))}
           onClose={() => {
             setDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {tableDialog && (
+        <TableDialog
+          rangeLabel={`${cellName({ r: tableDialog.range.r1, c: tableDialog.range.c1 })}:${cellName({ r: tableDialog.range.r2, c: tableDialog.range.c2 })}`}
+          table={tableDialog.table}
+          onSave={saveTable}
+          onRemove={removeTable}
+          onClose={() => {
+            setTableDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {fnDialog && <FunctionDialog language={language} onInsert={insertFunction} onClose={() => setFnDialog(false)} />}
+      {dupDialog && (
+        <DuplicatesDialog
+          region={dupDialog}
+          headers={Array.from({ length: dupDialog.c2 - dupDialog.c1 + 1 }, (_, i) => rows[dupDialog.r1]?.[dupDialog.c1 + i]?.[0] ?? "")}
+          initialHeader={looksLikeHeader(rows, dupDialog)}
+          onApply={(cols, header) => removeDuplicates(dupDialog, cols, header)}
+          onClose={() => {
+            setDupDialog(null);
             focusGrid();
           }}
         />
@@ -2472,6 +2648,7 @@ export default function SheetEditor(props: Props) {
               ? cellName({ r: selection.r1, c: selection.c1 })
               : `${cellName({ r: selection.r1, c: selection.c1 })}:${cellName({ r: selection.r2, c: selection.c2 })}`
           }
+          page={view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null }}
           onPrint={startPrint}
           onClose={() => {
             setDialog(null);
@@ -2507,7 +2684,10 @@ export default function SheetEditor(props: Props) {
           column={columnName(filterMenu.col)}
           values={filterValues(filterMenu.region, filterMenu.col)}
           current={filter?.cols[filterMenu.col] ?? null}
-          onApply={(keep) => applyFilter(filterMenu.region, filterMenu.col, keep)}
+          onApply={(spec) => applyFilter(filterMenu.region, filterMenu.col, spec)}
+          onSort={(ascending) =>
+            sortByLevels(filterMenu.region, [{ col: filterMenu.col, ascending }], true)
+          }
           onClose={() => setFilterMenu(null)}
         />
       )}

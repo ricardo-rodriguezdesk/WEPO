@@ -4,7 +4,7 @@
 use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 
 /// Archivos que macOS pidió abrir antes de que la interfaz estuviera lista.
 #[derive(Default)]
@@ -23,6 +23,7 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
     let file = SubmenuBuilder::new(app, "Archivo")
         .item(&item("new-sheet", "Nueva hoja de cálculo", Some("CmdOrCtrl+N"))?)
+        .item(&item("new-document", "Nuevo documento", Some("CmdOrCtrl+Shift+N"))?)
         .item(&item("open", "Abrir…", Some("CmdOrCtrl+O"))?)
         .separator()
         .item(&item("save", "Guardar", Some("CmdOrCtrl+S"))?)
@@ -91,9 +92,9 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     }
 }
 
-/// Una opción del menú: la interfaz decide qué hacer.
+/// Una opción del menú: la ventana activa decide qué hacer.
 pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    let _ = app.emit("menu", id);
+    crate::windows::emit_to_focused(app, "menu", id.to_string());
 }
 
 /// macOS pidió abrir archivos (doble clic en Finder, "Abrir con…", arrastrar al Dock).
@@ -106,8 +107,8 @@ pub fn on_opened<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
             pending.extend(paths.iter().cloned());
         }
     }
-    // Si la interfaz ya está abierta, se entera de inmediato.
-    let _ = app.emit("open-files", paths);
+    // Si la interfaz ya está abierta, la ventana activa se entera de inmediato.
+    crate::windows::emit_to_focused(app, "open-files", paths);
 }
 
 /// Archivos pendientes de abrir (la interfaz los pide al arrancar).
@@ -120,10 +121,4 @@ pub fn take_opened_files(state: State<OpenedFiles>) -> Vec<String> {
 #[tauri::command]
 pub fn print_window(window: WebviewWindow) -> Result<(), String> {
     window.print().map_err(|e| e.to_string())
-}
-
-/// Cierra WEPO (desde el menú, después de confirmar en la interfaz).
-#[tauri::command]
-pub fn quit_app<R: Runtime>(app: AppHandle<R>) {
-    app.exit(0);
 }
