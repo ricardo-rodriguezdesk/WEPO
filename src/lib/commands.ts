@@ -6,6 +6,7 @@
 
 export type Command =
   | "new-sheet"
+  | "new-document"
   | "open"
   | "save"
   | "save-as"

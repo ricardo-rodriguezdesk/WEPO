@@ -1,0 +1,89 @@
+/* WEPO Write: la página blanca sobre fondo gris, como en un procesador de texto. */
+
+.kind-write { display: flex; flex-direction: column; height: 100vh; }
+.write-canvas {
+  flex: 1;
+  overflow: auto;
+  padding: 28px 24px 48px;
+  background: color-mix(in srgb, var(--chrome) 60%, var(--border));
+}
+.write-page {
+  box-sizing: border-box;
+  margin: 0 auto;
+  color: #1d1d1f;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 8px 28px rgba(0, 0, 0, 0.08);
+  cursor: text;
+}
+.write-notice { display: flex; align-items: center; gap: 8px; }
+
+/* El texto del documento (lo que se guarda en el .docx) */
+.write-content {
+  outline: none;
+  font-family: Calibri, "Carlito", -apple-system, "Segoe UI", Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.35;
+  min-height: 100%;
+  white-space: pre-wrap;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.write-content p { margin: 0 0 8pt; }
+.write-content h1, .write-content h2, .write-content h3, .write-content h4 { margin: 14pt 0 4pt; line-height: 1.2; color: #1f3864; }
+.write-content h1 { font-size: 20pt; }
+.write-content h2 { font-size: 16pt; }
+.write-content h3 { font-size: 14pt; color: #2f5496; }
+.write-content h4, .write-content h5, .write-content h6 { font-size: 12pt; color: #2f5496; }
+.write-content ul, .write-content ol { margin: 0 0 8pt; padding-left: 28px; }
+.write-content li p { margin: 0 0 2pt; }
+.write-content blockquote { margin: 0 24px 8pt; padding: 0; color: #404040; font-style: italic; }
+.write-content a { color: #0563c1; text-decoration: underline; cursor: pointer; }
+.write-content mark { border-radius: 1px; padding: 0 1px; }
+.write-content img { max-width: 100%; height: auto; vertical-align: bottom; }
+.write-content img.ProseMirror-selectednode, .write-content [data-resize-container].ProseMirror-selectednode { outline: 2px solid var(--kind-accent); }
+.write-content table { width: 100%; margin: 0 0 8pt; border-collapse: collapse; table-layout: fixed; }
+.write-content td, .write-content th { padding: 4px 7px; vertical-align: top; border: 1px solid #a6a6a6; }
+.write-content th { font-weight: 700; text-align: left; background: #f2f2f2; }
+.write-content td p, .write-content th p { margin: 0; }
+.write-content .selectedCell { background: color-mix(in srgb, var(--kind-accent) 14%, transparent); }
+.write-content hr { border: 0; border-top: 1px solid #999; margin: 12pt 0; }
+.write-content code { font-family: Menlo, Consolas, monospace; font-size: 0.92em; padding: 0 3px; background: #f1f1f1; border-radius: 3px; }
+.write-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: #a3a3a3;
+  pointer-events: none;
+}
+.write-content ::selection { background: color-mix(in srgb, var(--kind-accent) 28%, transparent); }
+
+.write-style { width: 104px; }
+.write-table-label { font-size: 12px; color: var(--muted); margin: 0 2px 0 4px; }
+.write-table-btn { padding: 2px 8px; font-size: 12px; }
+
+.write-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--chrome);
+  border-top: 1px solid var(--border);
+}
+.write-page-size { display: flex; align-items: center; gap: 4px; }
+.write-page-size select { font: inherit; color: var(--text); background: none; border: 0; cursor: pointer; }
+.write-footer .sheet-status { margin-left: auto; }
+.write-footer .sheet-status + .zoom-control { margin-left: 12px; }
+
+/* Imprimir: solo la página, sin barras; los márgenes los pone @page (ver WriteEditor). */
+@media print {
+  html, body, #root { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .kind-write { display: block; height: auto; }
+  .kind-write > :not(.write-canvas) { display: none !important; }
+  .write-canvas { padding: 0; overflow: visible; background: none; }
+  .write-page { width: auto !important; min-height: 0 !important; padding: 0 !important; box-shadow: none; zoom: 1 !important; }
+  .write-content { white-space: pre-wrap; }
+  .write-content p.is-editor-empty:first-child::before { content: none; }
+}

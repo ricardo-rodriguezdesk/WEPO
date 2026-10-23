@@ -41,6 +41,18 @@
     "fileAssociations": [
       {
         "ext": [
+          "docx"
+        ],
+        "name": "Documento de Word",
+        "description": "Documento de Word",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.openxmlformats.wordprocessingml.document"
+        ]
+      },
+      {
+        "ext": [
           "xlsx",
           "xlsm"
         ],
@@ -87,6 +99,18 @@
         "rank": "Alternate",
         "contentTypes": [
           "public.comma-separated-values-text"
+        ]
+      },
+      {
+        "ext": [
+          "md"
+        ],
+        "name": "Documento Markdown",
+        "description": "Documento Markdown",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "net.daringfireball.markdown"
         ]
       }
     ],

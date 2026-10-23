@@ -9,7 +9,7 @@ export const DOC_KINDS: Record<
   write: {
     name: "WEPO Write",
     newLabel: "Documento",
-    extensions: ["docx", "odt", "txt", "md"],
+    extensions: ["docx", "txt", "md"],
   },
   sheets: {
     name: "WEPO Sheets",

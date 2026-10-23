@@ -16,7 +16,7 @@ type Props = {
   children?: ReactNode;
 };
 
-const FONTS = [
+export const FONTS = [
   "Helvetica Neue",
   "Arial",
   "Calibri",
@@ -31,7 +31,7 @@ const FONTS = [
   "Menlo",
 ];
 
-const SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
+export const SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
 
 export const NUMBER_FORMATS: { label: string; value: string }[] = [
   { label: "General", value: "general" },
@@ -227,7 +227,7 @@ export function ToolButton(props: {
 }
 
 /** Menú desplegable que se cierra al hacer clic fuera o con Esc. */
-function Popover({ button, children }: { button: (toggle: () => void, open: boolean) => ReactNode; children: (close: () => void) => ReactNode }) {
+export function Popover({ button, children }: { button: (toggle: () => void, open: boolean) => ReactNode; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -257,7 +257,7 @@ function Popover({ button, children }: { button: (toggle: () => void, open: bool
   );
 }
 
-function ColorButton(props: {
+export function ColorButton(props: {
   label: string;
   current: string | null;
   emptyLabel: string;
@@ -396,7 +396,7 @@ function BorderIcon({ lines }: { lines: string }) {
   );
 }
 
-function AlignIcon({ lines }: { lines: string[] }) {
+export function AlignIcon({ lines }: { lines: string[] }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
       {lines.map((d) => (
