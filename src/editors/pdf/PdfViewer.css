@@ -161,7 +161,9 @@
 .pdf-scroller.tool-highlight .pdf-page { cursor: crosshair; }
 .pdf-annot-svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .pdf-annot-svg g { pointer-events: visiblePainted; cursor: move; }
-.pdf-annot-svg g.selected { filter: drop-shadow(0 0 2px var(--kind-accent)); }
+/* Elegido: contorno punteado (un brillo alrededor cambiaría el color del resaltado). */
+.pdf-annot-svg g.selected rect { stroke: var(--kind-accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.pdf-annot-svg g.selected polyline { filter: drop-shadow(0 0 2px var(--kind-accent)); }
 .pdf-annot-text {
   position: absolute;
   white-space: pre;

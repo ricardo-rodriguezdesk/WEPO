@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Dialog from "../../components/Dialog";
 import type { Annotation, FormValues, Ink, PageRef } from "./pdfEdit";
-import { pid, rectToPdf, rectToView, shownSize, toPdf, toView } from "./pdfEdit";
+import { mergeLines, pid, rectToPdf, rectToView, shownSize, toPdf, toView } from "./pdfEdit";
 import { selectedTextRects } from "./textSelection";
 
 export type Tool = "select" | "highlight" | "text" | "draw" | "note" | "sign";
@@ -208,7 +208,7 @@ export default function AnnotationLayer(props: Props) {
           if (a.kind === "highlight") {
             return (
               <g key={a.id} data-annot={a.id} className={selected === a.id ? "selected" : ""} onPointerDown={(e) => startDrag(e, a)}>
-                {a.rects.map((r, i) => {
+                {mergeLines(a.rects).map((r, i) => {
                   const v = rectToView(page, s, r);
                   return <rect key={i} x={v.left} y={v.top} width={v.width} height={v.height} fill={a.color} fillOpacity={0.4} style={{ mixBlendMode: "multiply" }} />;
                 })}
@@ -391,17 +391,6 @@ export default function AnnotationLayer(props: Props) {
 }
 
 /** Junta los pedazos de una misma línea (el navegador da un rectángulo por palabra). */
-function mergeLines(rects: [number, number, number, number][]): [number, number, number, number][] {
-  const out: [number, number, number, number][] = [];
-  for (const r of [...rects].sort((a, b) => b[1] - a[1] || a[0] - b[0])) {
-    const last = out[out.length - 1];
-    if (last && Math.abs(last[1] - r[1]) < 2 && Math.abs(last[3] - r[3]) < 3 && r[0] <= last[0] + last[2] + 4) {
-      const right = Math.max(last[0] + last[2], r[0] + r[2]);
-      last[2] = right - last[0];
-    } else out.push([...r]);
-  }
-  return out;
-}
 
 function TextEdit({ style, value, onDone }: { style: React.CSSProperties; value: string; onDone: (text: string) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);

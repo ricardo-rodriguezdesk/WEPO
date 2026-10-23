@@ -125,7 +125,7 @@ async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocume
   if (list.some((a) => a.kind !== "note")) isolateContent(page, out);
   for (const a of list) {
     if (a.kind === "highlight") {
-      for (const [x, y, w, h] of a.rects) {
+      for (const [x, y, w, h] of mergeLines(a.rects)) {
         page.drawRectangle({ x, y, width: w, height: h, color: hexColor(a.color), opacity: 0.4, blendMode: BlendMode.Multiply });
       }
     } else if (a.kind === "text") {
@@ -171,6 +171,47 @@ async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocume
       else page.node.set(PDFName.of("Annots"), out.context.obj([ref]));
     }
   }
+}
+
+type Rect = [number, number, number, number];
+
+/**
+ * Junta los rectángulos de un resaltado en una franja por renglón. El texto viene
+ * en trozos (palabras, espacios) que se enciman un poco: dibujados por separado,
+ * donde se tocan el color sale doble y se ven manchas más oscuras.
+ */
+export function mergeLines(rects: Rect[]): Rect[] {
+  const out: Rect[] = [];
+  for (const r of [...rects].sort((a, b) => b[1] + b[3] - (a[1] + a[3]) || a[0] - b[0])) {
+    const [x, y, w, h] = r;
+    const line = out.find(([lx, ly, lw, lh]) => {
+      const overlap = Math.min(ly + lh, y + h) - Math.max(ly, y);
+      const gap = Math.max(lx, x) - Math.min(lx + lw, x + w);
+      return overlap >= 0.6 * Math.min(lh, h) && gap <= 0.8 * Math.max(lh, h);
+    });
+    if (!line) {
+      out.push([x, y, w, h]);
+      continue;
+    }
+    const left = Math.min(line[0], x);
+    const bottom = Math.min(line[1], y);
+    const right = Math.max(line[0] + line[2], x + w);
+    const top = Math.max(line[1] + line[3], y + h);
+    line[0] = left;
+    line[1] = bottom;
+    line[2] = right - left;
+    line[3] = top - bottom;
+  }
+  // Dos renglones que se enciman apenas (interlineado justo) no se pintan doble.
+  out.sort((a, b) => b[1] - a[1]);
+  for (let i = 1; i < out.length; i++) {
+    const above = out[i - 1];
+    const r = out[i];
+    const overlap = r[1] + r[3] - above[1];
+    const sideBySide = Math.min(above[0] + above[2], r[0] + r[2]) > Math.max(above[0], r[0]);
+    if (overlap > 0 && overlap < 0.6 * Math.min(r[3], above[3]) && sideBySide) r[3] -= overlap;
+  }
+  return out;
 }
 
 /** ¿Las páginas siguen siendo las del original, en su orden? (solo giradas o algunas quitadas) */
