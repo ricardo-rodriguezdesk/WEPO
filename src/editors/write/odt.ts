@@ -344,5 +344,5 @@ export async function readOdt(data: Uint8Array): Promise<WriteDocument> {
       if (headerFooter[kind].text && min) page[key] += Math.round((min + (gap ?? 0)) * 20);
     }
   }
-  return { content: { type: "doc", content: blocks.length ? blocks : [{ type: "paragraph" }] }, page, headerFooter, unsupported: [...reader.unsupported] };
+  return { content: { type: "doc", content: blocks.length ? blocks : [{ type: "paragraph" }] }, page, headerFooter, comments: [], unsupported: [...reader.unsupported] };
 }

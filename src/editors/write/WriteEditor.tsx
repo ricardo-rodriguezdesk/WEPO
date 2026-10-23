@@ -23,7 +23,10 @@ import { ColoredCell, ColoredHeader, WepoStrike, PAGE_GAP, PageBreak, Pagination
 import HeaderFooterDialog from "./HeaderFooterDialog";
 import ParagraphDialog from "./ParagraphDialog";
 import WriteFindBar from "./WriteFindBar";
-import { docxBase64, imageDataUrl, saveWriteDocument } from "../../lib/write";
+import ReviewPanel from "./ReviewPanel";
+import type { Comment } from "./review";
+import { CommentMark, DeletionMark, InsertionMark, Review, initialsOf, newId } from "./review";
+import { docxBase64, imageDataUrl, loadAuthor, saveAuthor, saveWriteDocument } from "../../lib/write";
 import { recoveryApi } from "../../lib/recovery";
 import { extensionOf, fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
@@ -103,6 +106,15 @@ export default function WriteEditor(props: Props) {
   const [paragraphDialog, setParagraphDialog] = useState<ParagraphFormat | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [pages, setPages] = useState(1);
+  // Revisión: comentarios, control de cambios y quién firma.
+  const [comments, setCommentsState] = useState<Comment[]>(initial.comments ?? []);
+  const [author, setAuthorState] = useState("WEPO");
+  const authorRef = useRef("WEPO");
+  authorRef.current = author;
+  const hasChanges = useMemo(() => JSON.stringify(initial.content).includes('"type":"insertion"') || JSON.stringify(initial.content).includes('"type":"deletion"'), [initial]);
+  const [reviewOpen, setReviewOpen] = useState(() => (initial.comments?.length ?? 0) > 0 || hasChanges);
+  const [editingComment, setEditingComment] = useState<string | null>(null);
+  const [tracking, setTrackingState] = useState(false);
   // Un archivo con cosas que WEPO todavía no conserva se guarda como copia.
   // Los .odt se abren pero se guardan como .docx (nuevo archivo).
   const fromOdt = Boolean(props.path && extensionOf(props.path) === "odt");
@@ -146,6 +158,10 @@ export default function WriteEditor(props: Props) {
       ParagraphFormatExtension,
       Search,
       Pagination.configure({ layout: () => layout.current, onPages: setPages }),
+      CommentMark,
+      InsertionMark,
+      DeletionMark,
+      Review.configure({ author: () => authorRef.current }),
       Placeholder.configure({ placeholder: "Escribe aquí…" }),
     ],
     [],
@@ -170,6 +186,40 @@ export default function WriteEditor(props: Props) {
   useEffect(() => {
     editor?.commands.refreshPages();
   }, [editor, page, headerFooter, zoom, fileName]);
+
+  useEffect(() => {
+    loadAuthor().then(setAuthorState);
+  }, []);
+
+  function setComments(next: Comment[]) {
+    setCommentsState(next);
+    markDirty();
+  }
+
+  function setAuthor(name: string) {
+    setAuthorState(name);
+    saveAuthor(name);
+  }
+
+  function setTracking(on: boolean) {
+    setTrackingState(on);
+    editor?.commands.setTracking(on);
+    if (on) setReviewOpen(true);
+    setStatus({ text: on ? "Control de cambios activado: lo que escribas o borres queda marcado" : "Control de cambios desactivado" });
+  }
+
+  function addComment() {
+    if (!editor) return;
+    if (editor.state.selection.empty) {
+      setStatus({ text: "Selecciona el texto que quieres comentar" });
+      return;
+    }
+    const id = newId("k");
+    editor.commands.addComment(id);
+    setComments([...comments, { id, author, initials: initialsOf(author), date: new Date().toISOString().replace(/\.\d+Z$/, "Z"), text: "", done: false, replies: [] }]);
+    setReviewOpen(true);
+    setEditingComment(id);
+  }
 
   function markDirty() {
     setDirty(true);
@@ -207,7 +257,7 @@ export default function WriteEditor(props: Props) {
     if (!editor) return false;
     const savedChanges = changesRef.current;
     try {
-      await saveWriteDocument(target, editor.getJSON(), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""));
+      await saveWriteDocument(target, editor.getJSON(), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""), comments);
       // Si se siguió escribiendo mientras se guardaba, sigue habiendo cambios.
       if (changesRef.current === savedChanges) markSaved(target);
       else (setPath(target), setFileName(fileNameOf(target)), onSaved(target));
@@ -255,15 +305,15 @@ export default function WriteEditor(props: Props) {
   }, [autosave, dirty, changes, path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Copia de recuperación cada 20 segundos mientras haya cambios sin guardar.
-  const recoveryState = useRef({ dirty, fileName, path, page, headerFooter });
-  recoveryState.current = { dirty, fileName, path, page, headerFooter };
+  const recoveryState = useRef({ dirty, fileName, path, page, headerFooter, comments });
+  recoveryState.current = { dirty, fileName, path, page, headerFooter, comments };
   useEffect(() => {
     const timer = setInterval(async () => {
       const r = recoveryState.current;
       if (!r.dirty || !editor || recoveredAt.current === changesRef.current) return;
       recoveredAt.current = changesRef.current;
       try {
-        const data = await docxBase64(editor.getJSON(), r.page, r.headerFooter, r.fileName.replace(/\.[^.]+$/, ""));
+        const data = await docxBase64(editor.getJSON(), r.page, r.headerFooter, r.fileName.replace(/\.[^.]+$/, ""), r.comments);
         await recoveryApi.saveFile(r.fileName, r.path, data);
       } catch {
         // Si no se pudo, se intenta en la siguiente vuelta.
@@ -338,8 +388,8 @@ export default function WriteEditor(props: Props) {
   // ───────────── órdenes del menú y atajos ─────────────
 
   const openFind = () => setFindOpen(true);
-  const commands = useRef({ saveDocument, print, setZoom, zoom, openLinkDialog, openFind });
-  commands.current = { saveDocument, print, setZoom, zoom, openLinkDialog, openFind };
+  const commands = useRef({ saveDocument, print, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking });
+  commands.current = { saveDocument, print, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
@@ -354,6 +404,17 @@ export default function WriteEditor(props: Props) {
     function onKey(e: globalThis.KeyboardEvent) {
       if (!hasModifier(e)) return;
       const key = e.key.toLowerCase();
+      // ⌘⌥M: comentario nuevo; ⌘⇧E: control de cambios (los mismos atajos de Word).
+      if (e.altKey && (e.code === "KeyM" || key === "m")) {
+        e.preventDefault();
+        commands.current.addComment();
+        return;
+      }
+      if (e.shiftKey && key === "e") {
+        e.preventDefault();
+        commands.current.setTracking(!commands.current.tracking);
+        return;
+      }
       const command =
         key === "s" ? (e.shiftKey ? "save-as" : "save")
         : key === "p" ? "print"
@@ -449,6 +510,11 @@ export default function WriteEditor(props: Props) {
           onImage={insertImage}
           onHeaderFooter={() => setHfDialog(true)}
           onParagraph={() => setParagraphDialog(currentParagraphFormat(editor))}
+          onComment={addComment}
+          tracking={tracking}
+          onTracking={() => setTracking(!tracking)}
+          reviewOpen={reviewOpen}
+          onReview={() => setReviewOpen((v) => !v)}
         />
       )}
       {findOpen && editor && <WriteFindBar editor={editor} onClose={() => setFindOpen(false)} />}
@@ -466,6 +532,7 @@ export default function WriteEditor(props: Props) {
         </div>
       )}
 
+      <div className="write-main">
       <div className="write-canvas">
         <div
           className="write-page"
@@ -482,6 +549,21 @@ export default function WriteEditor(props: Props) {
           </div>
           <EditorContent editor={editor} />
         </div>
+      </div>
+      {reviewOpen && editor && (
+        <ReviewPanel
+          editor={editor}
+          comments={comments}
+          onChange={setComments}
+          editingId={editingComment}
+          onEditingDone={() => setEditingComment(null)}
+          author={author}
+          onAuthor={setAuthor}
+          tracking={tracking}
+          onTracking={setTracking}
+          onClose={() => setReviewOpen(false)}
+        />
+      )}
       </div>
 
       <footer className="write-footer">
@@ -564,7 +646,18 @@ const LINE_SPACINGS: { value: number; label: string }[] = [
 /** Media pulgada, como el tabulador de Word. */
 const INDENT_STEP = 36;
 
-function WriteBar(props: { editor: Editor; onLink: () => void; onImage: () => void; onHeaderFooter: () => void; onParagraph: () => void }) {
+function WriteBar(props: {
+  editor: Editor;
+  onLink: () => void;
+  onImage: () => void;
+  onHeaderFooter: () => void;
+  onParagraph: () => void;
+  onComment: () => void;
+  tracking: boolean;
+  onTracking: () => void;
+  reviewOpen: boolean;
+  onReview: () => void;
+}) {
   const { editor, onLink, onImage } = props;
   // Se vuelve a dibujar cuando cambia la selección o el formato.
   const s = useEditorState({
@@ -780,6 +873,27 @@ function WriteBar(props: { editor: Editor; onLink: () => void; onImage: () => vo
             <path d="M3 9h18M3 14h18M9 4v16M15 4v16" />
           </svg>
         </ToolButton>
+        <Separator />
+        <ToolButton label={keys("Nuevo comentario (⌘⌥M)")} onClick={props.onComment}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+            <path d="M4 5h16v11H10l-5 4v-4H4z" />
+            <path d="M12 8v5M9.5 10.5h5" />
+          </svg>
+        </ToolButton>
+        <ToolButton label={keys("Control de cambios (⌘⇧E)")} pressed={props.tracking} onClick={props.onTracking}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 20h4l10-10-4-4L4 16z" />
+            <path d="M13 7l4 4" />
+            <path d="M15 20h5" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Panel de revisión" pressed={props.reviewOpen} onClick={props.onReview}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="1.5" />
+            <path d="M15 4v16M17.5 8h1M17.5 11h1" />
+          </svg>
+        </ToolButton>
+        <Separator />
         <ToolButton label={keys("Salto de página (⌘↩)")} onClick={() => chain().setPageBreak().run()}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
             <path d="M6 3v5h12V3M6 21v-5h12v5" />

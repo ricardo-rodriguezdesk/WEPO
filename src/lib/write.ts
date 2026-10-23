@@ -26,7 +26,7 @@ const decoder = new TextDecoder("utf-8");
 const encoder = new TextEncoder();
 
 export function emptyDocument(): WriteDocument {
-  return { content: { type: "doc", content: [{ type: "paragraph" }] }, page: LETTER, headerFooter: structuredClone(NO_HEADER_FOOTER), unsupported: [] };
+  return { content: { type: "doc", content: [{ type: "paragraph" }] }, page: LETTER, headerFooter: structuredClone(NO_HEADER_FOOTER), comments: [], unsupported: [] };
 }
 
 /** Formatos que WEPO Write sabe guardar tal cual. */
@@ -50,10 +50,11 @@ export async function saveWriteDocument(
   headerFooter: WriteDocument["headerFooter"],
   plain: string,
   title: string,
+  comments: WriteDocument["comments"] = [],
 ) {
   const ext = extensionOf(path);
   let bytes: Uint8Array;
-  if (ext === "docx") bytes = await writeDocx(content, page, title, headerFooter);
+  if (ext === "docx") bytes = await writeDocx(content, page, title, headerFooter, comments);
   else if (ext === "md") bytes = encoder.encode(writeMarkdown(content));
   else if (ext === "txt") bytes = encoder.encode(plain.endsWith("\n") ? plain : `${plain}\n`);
   else throw new Error(`WEPO Write todavía no guarda archivos .${ext}`);
@@ -61,8 +62,33 @@ export async function saveWriteDocument(
 }
 
 /** El documento como .docx en base64 (para la copia de recuperación). */
-export async function docxBase64(content: JSONContent, page: WriteDocument["page"], headerFooter: WriteDocument["headerFooter"], title: string) {
-  return toBase64(await writeDocx(content, page, title, headerFooter));
+export async function docxBase64(
+  content: JSONContent,
+  page: WriteDocument["page"],
+  headerFooter: WriteDocument["headerFooter"],
+  title: string,
+  comments: WriteDocument["comments"] = [],
+) {
+  return toBase64(await writeDocx(content, page, title, headerFooter, comments));
+}
+
+/** Nombre con el que se firman comentarios y cambios (se puede cambiar en el panel de revisión). */
+const AUTHOR_KEY = "wepo.author";
+export async function loadAuthor(): Promise<string> {
+  try {
+    const saved = localStorage.getItem(AUTHOR_KEY);
+    if (saved) return saved;
+  } catch {
+    // sin almacenamiento
+  }
+  return (await invoke<string>("user_name").catch(() => "")) || "WEPO";
+}
+export function saveAuthor(name: string) {
+  try {
+    localStorage.setItem(AUTHOR_KEY, name);
+  } catch {
+    // sin almacenamiento
+  }
 }
 
 /** Lee una imagen del disco como data URL (para insertarla en el documento). */

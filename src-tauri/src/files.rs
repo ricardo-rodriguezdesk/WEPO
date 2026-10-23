@@ -62,6 +62,18 @@ pub fn file_write(path: String, data: String) -> Result<(), String> {
     })
 }
 
+/// Nombre del usuario de la computadora (para firmar comentarios y cambios).
+#[tauri::command]
+pub fn user_name() -> String {
+    // macOS y Linux usan USER; Windows, USERNAME.
+    let raw = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+    let mut chars = raw.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

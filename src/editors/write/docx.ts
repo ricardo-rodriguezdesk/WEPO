@@ -8,13 +8,15 @@
 // fuente, tamaño, color, resaltado, alineación, listas (con niveles),
 // tablas, imágenes, vínculos, saltos de línea y de página, interlineado,
 // espaciado y sangrías, encabezado y pie de página (texto con número de
-// página) y el tamaño y márgenes de la página. Lo demás (notas al pie,
-// comentarios, cuadros de texto…) se reporta en `unsupported` para no
+// página), comentarios (con respuestas y si están resueltos), cambios
+// registrados (insertado y borrado) y el tamaño y márgenes de la página. Lo
+// demás (notas al pie, cuadros de texto…) se reporta en `unsupported` para no
 // sobrescribir el original.
 
 import JSZip from "jszip";
 import type { JSONContent } from "@tiptap/react";
 import type { HeaderFooter } from "./extensions";
+import type { Comment } from "./review";
 
 /** Tamaño y márgenes de la página, en twips (1/1440 de pulgada), como en Word. */
 export type PageSize = { width: number; height: number; top: number; right: number; bottom: number; left: number };
@@ -31,12 +33,16 @@ export type WriteDocument = {
   content: JSONContent;
   page: PageSize;
   headerFooter: HeaderFooterSet;
+  /** Comentarios del documento (el texto comentado lleva la marca `comment` con su id). */
+  comments: Comment[];
   /** Cosas del archivo que WEPO Write todavía no conserva. */
   unsupported: string[];
 };
 
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+const W15 = "http://schemas.microsoft.com/office/word/2012/wordml";
 const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const EMU_PER_PX = 9525;
 
@@ -66,6 +72,22 @@ function flag(el: Element | undefined): boolean {
   if (!el) return false;
   const v = attr(el, "val");
   return v === null || !["0", "false", "none", "off"].includes(v);
+}
+
+/** Identificador del párrafo de un comentario (8 cifras hexadecimales, como los de Word). */
+function paraIdOf(n: number): string {
+  return (0x10000000 + n).toString(16).toUpperCase();
+}
+
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]!.toUpperCase())
+      .join("") || "W"
+  );
 }
 
 /** "#c00000", "rgb(192, 0, 0)" → "C00000" (como lo escribe Word). */
@@ -178,9 +200,79 @@ class Reader {
   styles = new Map<string, StyleInfo>();
   /** numId → formato de cada nivel ("bullet", "decimal"…). */
   numbering = new Map<string, string[]>();
-  rels = new Map<string, { target: string; external: boolean }>();
+  rels = new Map<string, { target: string; external: boolean; type: string }>();
   unsupported = new Set<string>();
+  comments: Comment[] = [];
+  /** id del comentario en Word → id del comentario principal en WEPO (las respuestas apuntan al suyo). */
+  commentIds = new Map<string, string>();
+  /** Comentarios abiertos (entre commentRangeStart y commentRangeEnd) mientras se lee. */
+  openComments = new Set<string>();
   constructor(private zip: JSZip) {}
+
+  private async part(type: string): Promise<Element | null> {
+    const rel = [...this.rels.values()].find((r) => r.type.endsWith(`/${type}`));
+    if (!rel) return null;
+    const xml = await this.zip.file(rel.target.startsWith("/") ? rel.target.slice(1) : `word/${rel.target}`)?.async("string");
+    return xml ? parse(xml).documentElement : null;
+  }
+
+  /** Comentarios (comments.xml) y si están resueltos o son respuestas (commentsExtended.xml). */
+  async loadComments() {
+    const root = await this.part("comments");
+    if (!root) return;
+    const extended = new Map<string, { done: boolean; parent: string | null }>();
+    for (const ex of kids(await this.part("commentsExtended"))) {
+      const paraId = ex.getAttributeNS(W15, "paraId") ?? ex.getAttribute("w15:paraId");
+      if (paraId) extended.set(paraId, { done: (ex.getAttributeNS(W15, "done") ?? ex.getAttribute("w15:done")) === "1", parent: ex.getAttributeNS(W15, "paraIdParent") ?? ex.getAttribute("w15:paraIdParent") });
+    }
+    const byPara = new Map<string, Comment>();
+    const all: { docxId: string; comment: Comment; paraId: string | null }[] = [];
+    for (const c of kids(root, "comment")) {
+      const paragraphs = kids(c, "p");
+      const text = paragraphs.map((p) => Array.from(p.getElementsByTagNameNS(W, "t")).map((t) => t.textContent ?? "").join("")).join("\n").trim();
+      const last = paragraphs[paragraphs.length - 1];
+      const paraId = last ? (last.getAttributeNS(W14, "paraId") ?? last.getAttribute("w14:paraId")) : null;
+      const docxId = attr(c, "id") ?? "";
+      const comment: Comment = {
+        id: `k${docxId}`,
+        author: attr(c, "author") ?? "",
+        initials: attr(c, "initials") ?? "",
+        date: attr(c, "date") ?? "",
+        text,
+        done: paraId ? (extended.get(paraId)?.done ?? false) : false,
+        replies: [],
+      };
+      all.push({ docxId, comment, paraId });
+      if (paraId) byPara.set(paraId, comment);
+    }
+    for (const { docxId, comment, paraId } of all) {
+      const parentPara = paraId ? extended.get(paraId)?.parent : null;
+      const parent = parentPara ? byPara.get(parentPara) : undefined;
+      if (parent && parent !== comment) {
+        parent.replies.push(comment);
+        this.commentIds.set(docxId, parent.id);
+      } else {
+        this.comments.push(comment);
+        this.commentIds.set(docxId, comment.id);
+      }
+    }
+  }
+
+  /** Marcas de los comentarios abiertos en este punto del texto. */
+  commentMarks(): Mark[] {
+    return [...this.openComments].map((id) => ({ type: "comment", attrs: { id } }));
+  }
+
+  /** Inicio o fin del texto comentado (pueden venir dentro o fuera de un párrafo). */
+  commentRange(el: Element): boolean {
+    if (el.localName !== "commentRangeStart" && el.localName !== "commentRangeEnd") return false;
+    const id = this.commentIds.get(attr(el, "id") ?? "");
+    if (id) {
+      if (el.localName === "commentRangeStart") this.openComments.add(id);
+      else this.openComments.delete(id);
+    }
+    return true;
+  }
 
   async load() {
     const styles = await this.zip.file("word/styles.xml")?.async("string");
@@ -217,6 +309,7 @@ class Reader {
         this.rels.set(r.getAttribute("Id") ?? "", {
           target: r.getAttribute("Target") ?? "",
           external: r.getAttribute("TargetMode") === "External",
+          type: r.getAttribute("Type") ?? "",
         });
       }
     }
@@ -292,9 +385,10 @@ class Reader {
           const styled = this.marks(rPr);
           const charStyle = attr(child(rPr, "rStyle"), "val");
           const fromStyle = charStyle ? this.marks(this.styles.get(charStyle)?.rPr) : [];
-          const all = [...marks, ...fromStyle.filter((m) => !styled.some((s) => s.type === m.type)), ...styled];
+          if (child(rPr, "rPrChange")) this.unsupported.add("cambios de formato registrados");
+          const all = [...marks, ...fromStyle.filter((m) => !styled.some((s) => s.type === m.type)), ...styled, ...this.commentMarks()];
           for (const part of kids(node)) {
-            if (part.localName === "t") {
+            if (part.localName === "t" || part.localName === "delText") {
               const text = part.textContent ?? "";
               if (text) out.push({ type: "text", text, ...(all.length ? { marks: all } : {}) });
             } else if (part.localName === "tab") {
@@ -310,8 +404,8 @@ class Reader {
               if (image) out.push(image);
             } else if (part.localName === "footnoteReference" || part.localName === "endnoteReference") {
               this.unsupported.add("notas al pie");
-            } else if (part.localName === "commentReference") {
-              this.unsupported.add("comentarios");
+            } else if (part.localName === "commentReference" || part.localName === "annotationRef") {
+              // La marca del comentario ya va sobre el texto.
             } else if (part.localName === "pict" || part.localName === "object") {
               this.unsupported.add("formas u objetos incrustados");
             } else if (part.localName === "AlternateContent") {
@@ -328,17 +422,26 @@ class Reader {
           await this.inline(node, href ? [...marks, { type: "link", attrs: { href } }] : marks, out);
           break;
         }
-        // Cambios con control de cambios: lo insertado se queda, lo borrado no.
+        // Control de cambios: lo insertado y lo borrado quedan marcados para aceptarlos o rechazarlos.
         case "ins":
+        case "moveTo":
+        case "del":
+        case "moveFrom": {
+          const kind = node.localName === "ins" || node.localName === "moveTo" ? "insertion" : "deletion";
+          const change = { type: kind, attrs: { id: `w${attr(node, "id") ?? ""}`, author: attr(node, "author") ?? "", date: attr(node, "date") ?? "" } };
+          await this.inline(node, [...marks, change], out);
+          break;
+        }
+        case "commentRangeStart":
+        case "commentRangeEnd":
+          this.commentRange(node);
+          break;
         case "smartTag":
         case "fldSimple":
           await this.inline(node, marks, out);
           break;
         case "sdt":
           await this.inline(child(node, "sdtContent") ?? node, marks, out);
-          break;
-        case "del":
-          this.unsupported.add("control de cambios");
           break;
       }
     }
@@ -349,6 +452,7 @@ class Reader {
     const jc = attr(child(pPr, "jc"), "val");
     const textAlign = jc === "center" ? "center" : jc === "right" || jc === "end" ? "right" : jc === "both" || jc === "distribute" ? "justify" : null;
     const styleId = attr(child(pPr, "pStyle"), "val");
+    if (child(pPr, "pPrChange")) this.unsupported.add("cambios de formato registrados");
     const level = this.headingLevel(styleId);
     const content: JSONContent[] = [];
     // El formato de letra del estilo del párrafo (p. ej. "Cita" en cursiva) se aplica a su texto.
@@ -469,7 +573,7 @@ class Reader {
         out.push(...(await this.blocks(child(el, "sdtContent") ?? el)));
       } else if (el.localName === "AlternateContent") {
         this.unsupported.add("cuadros de texto o formas");
-      }
+      } else this.commentRange(el);
     }
     return out;
   }
@@ -593,6 +697,7 @@ export async function readDocx(data: Uint8Array): Promise<WriteDocument> {
   if (!xml) throw new Error("El archivo no parece un documento de Word (no tiene word/document.xml)");
   const reader = new Reader(zip);
   await reader.load();
+  await reader.loadComments();
   const body = child(parse(xml).documentElement, "body");
   if (!body) throw new Error("El documento está vacío o dañado");
   const content = await reader.blocks(body);
@@ -603,6 +708,7 @@ export async function readDocx(data: Uint8Array): Promise<WriteDocument> {
     content: { type: "doc", content: content.length ? content : [{ type: "paragraph" }] },
     page: pageFrom(sectPr),
     headerFooter,
+    comments: reader.comments,
     unsupported: [...reader.unsupported],
   };
 }
@@ -617,7 +723,75 @@ class Writer {
   /** Una numeración por cada lista de primer nivel (para que cada lista numerada empiece en 1). */
   lists: ListLevels[] = [];
   private relId = 10;
-  constructor(private page: PageSize) {}
+  private changeId = 1000;
+  /** Dónde empieza y termina cada comentario (el primer y el último pedazo de texto comentado). */
+  private starts = new Map<JSONContent, string[]>();
+  private ends = new Map<JSONContent, string[]>();
+  /** id de WEPO → número de comentario en Word (las respuestas tienen el suyo). */
+  commentNumbers = new Map<string, number>();
+  /** Comentarios que sí tienen texto comentado en el documento. */
+  liveComments: Comment[] = [];
+
+  constructor(
+    private page: PageSize,
+    comments: Comment[] = [],
+    content?: JSONContent,
+  ) {
+    if (!content || !comments.length) return;
+    const first = new Map<string, JSONContent>();
+    const last = new Map<string, JSONContent>();
+    const walk = (node: JSONContent) => {
+      if (node.type === "text" || node.type === "image" || node.type === "hardBreak") {
+        for (const m of (node.marks ?? []) as Mark[]) {
+          if (m.type !== "comment") continue;
+          const id = String(m.attrs?.id);
+          if (!first.has(id)) first.set(id, node);
+          last.set(id, node);
+        }
+        return;
+      }
+      node.content?.forEach(walk);
+    };
+    walk(content);
+    let n = 0;
+    for (const c of comments) {
+      if (!first.has(c.id)) continue;
+      this.liveComments.push(c);
+      this.commentNumbers.set(c.id, n++);
+      for (const r of c.replies) this.commentNumbers.set(r.id, n++);
+      const add = (map: Map<JSONContent, string[]>, node: JSONContent) => map.set(node, [...(map.get(node) ?? []), c.id]);
+      add(this.starts, first.get(c.id)!);
+      add(this.ends, last.get(c.id)!);
+    }
+  }
+
+  /** Números de Word del comentario y sus respuestas (todos marcan el mismo texto). */
+  private numbers(id: string): number[] {
+    const c = this.liveComments.find((x) => x.id === id);
+    return c ? [c, ...c.replies].map((x) => this.commentNumbers.get(x.id)!) : [];
+  }
+
+  private commentMarkers(node: JSONContent): { before: string; after: string } {
+    const before = (this.starts.get(node) ?? []).flatMap((id) => this.numbers(id)).map((n) => `<w:commentRangeStart w:id="${n}"/>`).join("");
+    const after = (this.ends.get(node) ?? [])
+      .flatMap((id) => this.numbers(id))
+      .map((n) => `<w:commentRangeEnd w:id="${n}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${n}"/></w:r>`)
+      .join("");
+    return { before, after };
+  }
+
+  /** <w:ins> o <w:del> alrededor de un pedazo de texto registrado con el control de cambios. */
+  private tracked(xml: string, marks: Mark[] = []): string {
+    for (const kind of ["insertion", "deletion"] as const) {
+      const m = marks.find((x) => x.type === kind);
+      if (!m) continue;
+      const a = (m.attrs ?? {}) as { author?: string; date?: string };
+      const tag = kind === "insertion" ? "w:ins" : "w:del";
+      const date = a.date ? ` w:date="${escapeXml(a.date)}"` : "";
+      return `<${tag} w:id="${this.changeId++}" w:author="${escapeXml(a.author || "WEPO")}"${date}>${xml}</${tag}>`;
+    }
+    return xml;
+  }
 
   rel(type: string, target: string, external = false): string {
     const id = `rId${this.relId++}`;
@@ -654,10 +828,12 @@ class Writer {
     const props = this.runProps(node.marks as Mark[]);
     // Los tabuladores son su propio elemento en Word.
     const parts = (node.text ?? "").split("\t");
+    // Lo borrado con el control de cambios va en <w:delText>.
+    const textTag = (node.marks as Mark[] | undefined)?.some((m) => m.type === "deletion") ? "w:delText" : "w:t";
     const runs = parts
-      .map((part, i) => (i ? "<w:tab/>" : "") + (part ? `<w:t xml:space="preserve">${escapeXml(part)}</w:t>` : ""))
+      .map((part, i) => (i ? "<w:tab/>" : "") + (part ? `<${textTag} xml:space="preserve">${escapeXml(part)}</${textTag}>` : ""))
       .join("");
-    const run = `<w:r>${props}${runs}</w:r>`;
+    const run = this.tracked(`<w:r>${props}${runs}</w:r>`, node.marks as Mark[]);
     const link = (node.marks as Mark[] | undefined)?.find((m) => m.type === "link")?.attrs as { href?: string } | undefined;
     if (!link?.href) return run;
     if (link.href.startsWith("#")) return `<w:hyperlink w:anchor="${escapeXml(link.href.slice(1))}">${run}</w:hyperlink>`;
@@ -691,8 +867,45 @@ class Writer {
 
   inline(nodes: JSONContent[] = []): string {
     return nodes
-      .map((n) => (n.type === "text" ? this.text(n) : n.type === "hardBreak" ? "<w:r><w:br/></w:r>" : n.type === "image" ? this.image(n) : ""))
+      .map((n) => {
+        const body =
+          n.type === "text" ? this.text(n) : n.type === "hardBreak" ? "<w:r><w:br/></w:r>" : n.type === "image" ? this.tracked(this.image(n), n.marks as Mark[]) : "";
+        const { before, after } = this.commentMarkers(n);
+        return before + body + after;
+      })
       .join("");
+  }
+
+  /** word/comments.xml: cada comentario y cada respuesta es un <w:comment>. */
+  commentsXml(): string {
+    const one = (c: Comment) => {
+      const n = this.commentNumbers.get(c.id)!;
+      const lines = c.text.split("\n");
+      const paragraphs = lines
+        .map((line, i) => {
+          const paraId = i === lines.length - 1 ? ` w14:paraId="${paraIdOf(n)}"` : "";
+          const ref = i === 0 ? '<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:annotationRef/></w:r>' : "";
+          return `<w:p${paraId}><w:pPr><w:pStyle w:val="CommentText"/></w:pPr>${ref}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`;
+        })
+        .join("");
+      const date = c.date ? ` w:date="${escapeXml(c.date)}"` : "";
+      return `<w:comment w:id="${n}" w:author="${escapeXml(c.author || "WEPO")}"${date} w:initials="${escapeXml(c.initials || initialsOf(c.author))}">${paragraphs}</w:comment>`;
+    };
+    const body = this.liveComments.flatMap((c) => [c, ...c.replies]).map(one).join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="${W}" xmlns:w14="${W14}">${body}</w:comments>`;
+  }
+
+  /** word/commentsExtended.xml: qué comentarios están resueltos y cuáles son respuestas. */
+  commentsExtendedXml(): string {
+    const rows = this.liveComments
+      .flatMap((c) => [
+        `<w15:commentEx w15:paraId="${paraIdOf(this.commentNumbers.get(c.id)!)}" w15:done="${c.done ? 1 : 0}"/>`,
+        ...c.replies.map(
+          (r) => `<w15:commentEx w15:paraId="${paraIdOf(this.commentNumbers.get(r.id)!)}" w15:paraIdParent="${paraIdOf(this.commentNumbers.get(c.id)!)}" w15:done="${c.done ? 1 : 0}"/>`,
+        ),
+      ])
+      .join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="${W15}">${rows}</w15:commentsEx>`;
   }
 
   paragraph(node: JSONContent, extra = ""): string {
@@ -885,12 +1098,20 @@ ${[1, 2, 3, 4, 5, 6]
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Header"><w:name w:val="header"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:color w:val="595959"/><w:sz w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="CommentText"><w:name w:val="annotation text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="CommentReference"><w:name w:val="annotation reference"/><w:rPr><w:sz w:val="16"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
 </w:styles>`;
 
-export async function writeDocx(content: JSONContent, page: PageSize, title = "", hf: HeaderFooterSet = NO_HEADER_FOOTER): Promise<Uint8Array> {
-  const writer = new Writer(page);
+export async function writeDocx(
+  content: JSONContent,
+  page: PageSize,
+  title = "",
+  hf: HeaderFooterSet = NO_HEADER_FOOTER,
+  comments: Comment[] = [],
+): Promise<Uint8Array> {
+  const writer = new Writer(page, comments, content);
   let body = (content.content ?? []).map((b) => writer.block(b)).join("");
   // Encabezado y pie: header1/footer1 para todas las páginas; header2/footer2 vacíos para la portada.
   const parts: { name: string; kind: "hdr" | "ftr"; xml: string }[] = [];
@@ -908,6 +1129,12 @@ export async function writeDocx(content: JSONContent, page: PageSize, title = ""
     if (hf.skipFirst) add("ftr", "first", null);
   }
   body += `<w:sectPr>${refs}<w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>${hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
+  // Comentarios: comments.xml y commentsExtended.xml (resueltos y respuestas).
+  const hasComments = writer.liveComments.length > 0;
+  if (hasComments) {
+    writer.rel("comments", "comments.xml");
+    writer.rels.push(`<Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/>`);
+  }
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}" xmlns:r="${R}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}</w:body></w:document>`;
 
   const zip = new JSZip();
@@ -917,7 +1144,7 @@ export async function writeDocx(content: JSONContent, page: PageSize, title = ""
     .join("");
   put(
     "[Content_Types].xml",
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${parts.map((p) => `<Override PartName="/word/${p.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${p.kind === "hdr" ? "header" : "footer"}+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${hasComments ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}${parts.map((p) => `<Override PartName="/word/${p.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${p.kind === "hdr" ? "header" : "footer"}+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
   );
   put(
     "_rels/.rels",
@@ -932,6 +1159,10 @@ export async function writeDocx(content: JSONContent, page: PageSize, title = ""
   );
   for (const m of writer.media) put(`word/media/${m.name}`, m.data);
   for (const p of parts) put(`word/${p.name}`, p.xml);
+  if (hasComments) {
+    put("word/comments.xml", writer.commentsXml());
+    put("word/commentsExtended.xml", writer.commentsExtendedXml());
+  }
   const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   put(
     "docProps/core.xml",

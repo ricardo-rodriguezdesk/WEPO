@@ -10,5 +10,5 @@ export function hasModifier(e: { metaKey: boolean; ctrlKey: boolean }): boolean 
 
 /** Escribe un atajo como se ve en cada sistema: "⌘S" en Mac, "Ctrl+S" en Windows. */
 export function keys(text: string): string {
-  return isMac ? text : text.replace(/⌘⇧/g, "Ctrl+Mayús+").replace(/⌘/g, "Ctrl+");
+  return isMac ? text : text.replace(/⌘⇧/g, "Ctrl+Mayús+").replace(/⌘⌥/g, "Ctrl+Alt+").replace(/⌘/g, "Ctrl+");
 }
