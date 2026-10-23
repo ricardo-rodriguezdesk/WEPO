@@ -2,9 +2,21 @@
 
 **Write · Edit · Present · Open**
 
-WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abre y edita documentos, hojas de cálculo y presentaciones en los formatos más comunes, en una sola aplicación.
+WEPO es una suite de oficina ligera y de código abierto para macOS, Windows y Linux. Abre y edita documentos, hojas de cálculo y presentaciones de Microsoft Office (y de LibreOffice), y muestra PDF, en una sola aplicación.
 
-> 🚧 Proyecto en desarrollo activo. Consulta la [hoja de ruta](#hoja-de-ruta) para ver qué funciona hoy.
+![WEPO Sheets: tabla con fórmulas y gráfica](docs/capturas/sheets.png)
+
+| WEPO Write | WEPO Present |
+|---|---|
+| ![WEPO Write con comentarios y control de cambios](docs/capturas/write.png) | ![WEPO Present editando una diapositiva](docs/capturas/present.png) |
+| **WEPO PDF** | **Inicio** |
+| ![WEPO PDF con miniaturas](docs/capturas/pdf.png) | ![Pantalla de inicio de WEPO](docs/capturas/inicio.png) |
+
+## Descargar
+
+La versión más reciente está en [**Releases**](../../releases): hay instaladores para Mac (chip Apple e Intel), Windows y Linux. Los cambios de cada versión están en el [CHANGELOG](CHANGELOG.md).
+
+> WEPO está en desarrollo activo. La [hoja de ruta](#hoja-de-ruta) dice qué funciona hoy.
 
 ## Editores
 
@@ -61,7 +73,8 @@ src-tauri/                Núcleo nativo (Rust)
 
 src/editors/sheets/functions.ts  Catálogo de funciones en español e inglés (generado del motor)
 src/editors/sheets/PrintSheet.tsx Versión de la hoja para imprimir o guardar como PDF
-.github/workflows/        Revisión automática y creación del instalador .dmg
+.github/workflows/        Revisión automática y creación de los instaladores
+docs/capturas/            Capturas de pantalla del README
 ```
 
 ## Ejecutar en desarrollo
@@ -90,11 +103,11 @@ npm run tauri build
 
 Al terminar quedan en `src-tauri/target/release/bundle/macos/WEPO.app` y `src-tauri/target/release/bundle/dmg/`. Abre el .dmg y arrastra WEPO a la carpeta Aplicaciones.
 
-También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.1.0 && git push origin v0.1.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
+También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.2.0 && git push origin v0.2.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
 
 **Primera vez que la abres:** WEPO todavía no está firmado por Apple, así que macOS no la deja abrir con doble clic. Haz clic derecho sobre WEPO en Aplicaciones → **Abrir** → **Abrir**. Solo hace falta una vez.
 
-**Abrir archivos con WEPO desde Finder:** WEPO se registra para .xlsx, .xlsm, .xls, .ods y .csv. Haz clic derecho en un archivo → **Abrir con** → WEPO. Para que siempre se abran con WEPO: clic derecho → **Obtener información** → **Abrir con:** WEPO → **Cambiar todo…**
+**Abrir archivos con WEPO desde Finder:** WEPO se registra para .xlsx, .xlsm, .xls, .ods, .csv, .docx, .odt, .md, .pptx y .pdf. Haz clic derecho en un archivo → **Abrir con** → WEPO. Para que siempre se abran con WEPO: clic derecho → **Obtener información** → **Abrir con:** WEPO → **Cambiar todo…**
 
 ## Windows
 

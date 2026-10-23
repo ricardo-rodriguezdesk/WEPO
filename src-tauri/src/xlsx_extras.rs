@@ -308,6 +308,56 @@ fn sheet_paths(entries: &Entries) -> Result<Vec<(String, String)>, String> {
 
 // ───────────── leer ─────────────
 
+/// "B8" → (8, 2).
+fn cell_ref(text: &str) -> Option<(i32, i32)> {
+    let letters: String = text.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let row: i32 = text[letters.len()..].parse().ok()?;
+    let col = letters.bytes().fold(0i32, |n, b| n * 26 + (b.to_ascii_uppercase() - b'A' + 1) as i32);
+    (col > 0).then_some((row, col))
+}
+
+/// Celdas que el archivo declara pero sin valor (`<c r="B8" t="n"></c>`, como las escribe openpyxl).
+/// IronCalc las lee como 0; en Excel se ven vacías, así que al abrir se dejan vacías.
+pub fn read_valueless_cells(path: &str) -> Result<Vec<(String, Vec<(i32, i32)>)>, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let entries = read_zip(&bytes)?;
+    let mut result = Vec::new();
+    for (name, sheet_path) in sheet_paths(&entries)? {
+        let Some(xml) = entry(&entries, &sheet_path) else { continue };
+        let mut reader = Reader::from_reader(xml);
+        let mut buf = Vec::new();
+        let mut cells = Vec::new();
+        // Celda abierta y si ya se vio algo dentro (valor, fórmula o texto).
+        let mut open: Option<(String, bool)> = None;
+        loop {
+            match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+                Event::Start(e) if e.local_name().as_ref() == "c" => {
+                    open = attributes(&e).get("r").map(|r| (r.clone(), false));
+                }
+                Event::Start(e) | Event::Empty(e) if matches!(e.local_name().as_ref(), "v" | "f" | "is") => {
+                    if let Some(cell) = open.as_mut() {
+                        cell.1 = true;
+                    }
+                }
+                Event::End(e) if e.local_name().as_ref() == "c" => {
+                    if let Some((r, false)) = open.take() {
+                        if let Some(pos) = cell_ref(&r) {
+                            cells.push(pos);
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        if !cells.is_empty() {
+            result.push((name, cells));
+        }
+    }
+    Ok(result)
+}
+
 /// Listas desplegables de cada hoja de un .xlsx: (nombre de la hoja, validaciones).
 pub fn read_validations(path: &str) -> Result<Vec<(String, Vec<RawValidation>)>, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;

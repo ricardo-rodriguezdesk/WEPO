@@ -258,6 +258,15 @@ impl SheetDocument {
             "xlsx" | "xlsm" => {
                 let mut model = load_from_xlsx(path, LOCALE, TIMEZONE, LANGUAGE)
                     .map_err(|e| format!("{e:?}"))?;
+                // Celdas sin valor que IronCalc lee como 0 (archivos hechos con openpyxl, por ejemplo).
+                for (name, cells) in crate::xlsx_extras::read_valueless_cells(path).unwrap_or_default() {
+                    let Some(index) = model.workbook.worksheets.iter().position(|w| w.name == name) else { continue };
+                    if let Ok(sheet) = model.workbook.worksheet_mut(index as u32) {
+                        for (row, col) in cells {
+                            let _ = sheet.cell_clear_contents(row, col);
+                        }
+                    }
+                }
                 // Recalcula por si el archivo no guardó los resultados de sus fórmulas.
                 model.evaluate();
                 let mut doc = Self::wrap(UserModel::from_model(model));
@@ -382,7 +391,9 @@ impl SheetDocument {
             let mut cells: Vec<CellView> =
                 (0..last_col).map(|_| CellView(String::new(), false, 0)).collect();
             for col in cols {
-                let text = model.get_formatted_cell_value(sheet, row, col)?;
+                // Una celda vacía con formato (por ejemplo, de moneda) no muestra "$0" como valor.
+                let empty = matches!(worksheet.cell(row, col).as_deref(), Some(ironcalc::base::types::Cell::EmptyCell { .. }));
+                let text = if empty { String::new() } else { model.get_formatted_cell_value(sheet, row, col)? };
                 let numeric = !text.is_empty()
                     && matches!(model.get_cell_type(sheet, row, col)?, CellType::Number);
 
@@ -899,6 +910,53 @@ mod tests {
         let view = doc.view(0).unwrap();
         let id = view.rows[row - 1][col - 1].2;
         view.styles[id as usize].clone()
+    }
+
+    #[test]
+    fn celdas_sin_valor_de_openpyxl_quedan_vacias() {
+        // Un .xlsx con <c r="B1" s="1" t="n"></c>, como los que escribe openpyxl.
+        let dir = std::env::temp_dir().join(format!("wepo-vacias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vacias.xlsx");
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_cell(0, 1, 1, "7").unwrap();
+        doc.set_style(0, rect(1, 1, 1, 2), "num_fmt", "$#,##0").unwrap();
+        doc.save(path.to_str().unwrap(), 0).unwrap();
+        // Se reescribe B1 como una celda numérica sin valor.
+        let bytes = std::fs::read(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut f = zip.by_index(i).unwrap();
+            let name = f.name().unwrap().to_string();
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut f, &mut data).unwrap();
+            if name == "xl/worksheets/sheet1.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                let start = xml.find("<c r=\"B1\"").expect("B1");
+                let end = start + xml[start..].find("/>").map(|e| e + 2).unwrap();
+                let style = xml[start..end].split("s=\"").nth(1).map(|s| s.split('"').next().unwrap().to_string()).unwrap_or("0".into());
+                data = format!("{}<c r=\"B1\" s=\"{style}\" t=\"n\"></c>{}", &xml[..start], &xml[end..]).into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut out, &data).unwrap();
+        }
+        std::fs::write(&path, out.finish().unwrap().into_inner()).unwrap();
+        let doc = SheetDocument::open(path.to_str().unwrap()).unwrap();
+        let view = doc.view(0).unwrap();
+        assert_eq!(view.rows[0][0].0, "$7");
+        assert!(view.rows[0].get(1).map_or(true, |c| c.0.is_empty()), "B1 debe verse vacía: {:?}", view.rows[0].get(1).map(|c| &c.0));
+    }
+
+    #[test]
+    fn celda_vacia_con_formato_no_muestra_cero() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_cell(0, 1, 1, "5").unwrap();
+        doc.set_style(0, rect(1, 1, 2, 2), "num_fmt", "$#,##0").unwrap();
+        let view = doc.view(0).unwrap();
+        assert_eq!(view.rows[0][0].0, "$5");
+        // B1, A2 y B2 tienen formato de moneda pero nada escrito: se ven vacías.
+        assert!(view.rows.iter().flatten().skip(1).all(|c| c.0.is_empty()));
     }
 
     #[test]
