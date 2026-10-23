@@ -1,6 +1,6 @@
 // Tipos de documento que maneja WEPO y cómo reconocerlos por su extensión.
 
-export type DocKind = "write" | "sheets" | "present";
+export type DocKind = "write" | "sheets" | "present" | "pdf";
 
 export const DOC_KINDS: Record<
   DocKind,
@@ -20,6 +20,12 @@ export const DOC_KINDS: Record<
     name: "WEPO Present",
     newLabel: "Presentación",
     extensions: ["pptx", "odp"],
+  },
+  // Los PDF no se crean desde cero: la tarjeta del inicio abre uno.
+  pdf: {
+    name: "WEPO PDF",
+    newLabel: "Abrir un PDF",
+    extensions: ["pdf"],
   },
 };
 

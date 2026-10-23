@@ -9,6 +9,8 @@ import SheetEditor from "./editors/sheets/SheetEditor";
 import WriteEditor from "./editors/write/WriteEditor";
 import type { WriteDocument } from "./editors/write/docx";
 import { emptyDocument, openWriteDocument } from "./lib/write";
+import { readPdf } from "./lib/pdf";
+import PdfViewer from "./editors/pdf/PdfViewer";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
@@ -30,6 +32,7 @@ type OpenDocument = {
   path: string | null;
   sheet?: SheetView;
   write?: WriteDocument;
+  pdf?: Uint8Array;
   /** Viene de la copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
 };
@@ -109,6 +112,8 @@ export default function App() {
 
   async function newDocument(kind: DocKind, here = false) {
     // Con un documento abierto, el nuevo va en otra ventana.
+    // Un PDF no se crea: se elige uno para verlo.
+    if (kind === "pdf") return openDialog("pdf");
     if (doc && !here) return openWindow({ kind });
     try {
       const sheet = kind === "sheets" ? await sheetApi.create() : undefined;
@@ -130,7 +135,8 @@ export default function App() {
     try {
       const sheet = kind === "sheets" ? await sheetApi.open(path) : undefined;
       const write = kind === "write" ? await openWriteDocument(path) : undefined;
-      show({ id: nextId.current++, kind, fileName: name, path, sheet, write });
+      const pdf = kind === "pdf" ? await readPdf(path) : undefined;
+      show({ id: nextId.current++, kind, fileName: name, path, sheet, write, pdf });
       if (kind !== "present") rememberRecent(path);
     } catch (e) {
       // Un reciente que ya no existe (se movió o se borró) sale de la lista.
@@ -144,13 +150,15 @@ export default function App() {
     }
   }
 
-  async function openDialog() {
+  async function openDialog(only?: DocKind) {
     const path = await open({
       multiple: false,
-      filters: [
-        { name: "Todos los documentos", extensions: ALL_EXTENSIONS },
-        ...Object.values(DOC_KINDS).map((k) => ({ name: k.name, extensions: k.extensions })),
-      ],
+      filters: only
+        ? [{ name: DOC_KINDS[only].name, extensions: DOC_KINDS[only].extensions }]
+        : [
+            { name: "Todos los documentos", extensions: ALL_EXTENSIONS },
+            ...Object.values(DOC_KINDS).map((k) => ({ name: k.name, extensions: k.extensions })),
+          ],
     });
     if (path) await openPath(path);
   }
@@ -254,7 +262,7 @@ export default function App() {
     return (
       <Home
         onNew={newDocument}
-        onOpen={openDialog}
+        onOpen={() => openDialog()}
         onOpenRecent={openPath}
         onRemoveRecent={(path) => {
           removeRecent(path);
@@ -277,7 +285,7 @@ export default function App() {
     );
   }
 
-  const common = { fileName: doc.fileName, onHome: goHome, onOpen: openDialog };
+  const common = { fileName: doc.fileName, onHome: goHome, onOpen: () => openDialog() };
 
   if (doc.kind === "sheets" && doc.sheet) {
     return (
@@ -304,6 +312,9 @@ export default function App() {
         {...common}
       />
     );
+  }
+  if (doc.kind === "pdf" && doc.pdf) {
+    return <PdfViewer key={doc.id} data={doc.pdf} path={doc.path} {...common} />;
   }
   return <ComingSoon key={doc.id} kind={doc.kind} {...common} />;
 }

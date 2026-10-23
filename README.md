@@ -13,6 +13,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
 | **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx, .odp |
+| **WEPO PDF** | Ver PDF (la edición llega después) | .pdf |
 
 ## Tecnología
 
@@ -21,6 +22,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
   - [IronCalc](https://github.com/ironcalc/ironcalc): motor de hojas de cálculo con fórmulas, deshacer/rehacer y lectura y escritura de .xlsx.
   - [calamine](https://github.com/tafia/calamine) y [csv](https://github.com/BurntSushi/rust-csv): lectura de .xls, .xlsb, .ods y .csv.
 - **React + TypeScript**: interfaz de cada editor.
+- **[pdf.js](https://mozilla.github.io/pdf.js/)**: dibuja los PDF en WEPO PDF.
 - **[TipTap](https://tiptap.dev/)** y **[JSZip](https://stuk.github.io/jszip/)**: editor de texto de WEPO Write y lectura y escritura de .docx.
 - **[TanStack Virtual](https://tanstack.com/virtual)**: la cuadrícula solo dibuja las celdas visibles, así que los archivos grandes se mantienen fluidos.
 
@@ -32,6 +34,7 @@ src/                      Interfaz (React + TypeScript)
 ├── screens/Home.tsx      Pantalla de inicio: crear o abrir
 ├── editors/
 │   ├── sheets/           WEPO Sheets
+│   ├── pdf/              WEPO PDF (visor)
 │   ├── write/            WEPO Write: editor, páginas (extensions.ts) y lector/escritor de .docx
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
 ├── components/           Piezas compartidas (barra superior, íconos)
@@ -198,6 +201,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: abrir documentos de LibreOffice (.odt)
 - [x] WEPO Write: tablas con celdas combinadas, color de celda y ancho de columnas
 - [ ] WEPO Write: comentarios y control de cambios
+- [x] WEPO PDF: ver PDF con miniaturas, zoom, ir a una página, copiar texto y PDF con contraseña
+- [ ] WEPO PDF: editar (resaltar, agregar texto, firmar, formularios, ordenar páginas, combinar)
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg

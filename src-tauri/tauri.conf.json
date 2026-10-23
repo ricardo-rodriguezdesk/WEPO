@@ -124,6 +124,18 @@
         "contentTypes": [
           "net.daringfireball.markdown"
         ]
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "Documento PDF",
+        "description": "Documento PDF",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": [
+          "com.adobe.pdf"
+        ]
       }
     ],
     "macOS": {

@@ -21,7 +21,7 @@ type Props = {
   error: string | null;
 };
 
-const ORDER: DocKind[] = ["write", "sheets", "present"];
+const ORDER: DocKind[] = ["write", "sheets", "present", "pdf"];
 
 /** Pantalla de inicio: crear un documento nuevo o abrir uno existente. */
 export default function Home(props: Props) {

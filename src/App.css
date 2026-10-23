@@ -19,6 +19,8 @@
   --sheets-soft: #e3f4ea;
   --present: #d9572b;
   --present-soft: #fcebe4;
+  --pdf: #c42b45;
+  --pdf-soft: #fbe8eb;
 
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
   font-size: 13px;
@@ -46,6 +48,8 @@
     --sheets-soft: #1f3a2c;
     --present: #f08a62;
     --present-soft: #3d2620;
+    --pdf: #f0707f;
+    --pdf-soft: #3d2026;
   }
 }
 
@@ -57,6 +61,7 @@ body { background: var(--bg); }
 .kind-write { --kind-accent: var(--write); --kind-soft: var(--write-soft); }
 .kind-sheets { --kind-accent: var(--sheets); --kind-soft: var(--sheets-soft); }
 .kind-present { --kind-accent: var(--present); --kind-soft: var(--present-soft); }
+.kind-pdf { --kind-accent: var(--pdf); --kind-soft: var(--pdf-soft); }
 
 /* Botones */
 .btn {

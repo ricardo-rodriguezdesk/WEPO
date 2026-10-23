@@ -12,9 +12,10 @@ function load(): Record<string, number> {
   }
 }
 
-export function loadZoom(path: string | null): number {
+/** Zoom guardado del archivo, o `fallback` si no tiene uno. */
+export function loadZoom(path: string | null, fallback = 1): number {
   const value = path ? load()[path] : undefined;
-  return typeof value === "number" && value >= 0.25 && value <= 4 ? value : 1;
+  return typeof value === "number" && value >= 0.25 && value <= 4 ? value : fallback;
 }
 
 export function saveZoom(path: string | null, zoom: number) {

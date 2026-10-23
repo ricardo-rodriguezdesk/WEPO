@@ -31,6 +31,15 @@ export default function KindIcon({ kind, size = 28 }: { kind: DocKind; size?: nu
       </svg>
     );
   }
+  if (kind === "pdf") {
+    return (
+      <svg {...common}>
+        <path d="M6 3h8l4 4v14H6z" />
+        <path d="M14 3v4h4" />
+        <path d="M8.5 17.5c1.5-.5 3.5-3.5 4-6.5.3-1.6-1.3-1.6-1.1 0 .4 3 2.6 5.6 4.1 6 1 .3 1-.9 0-1-2-.2-5.4.6-7 1.5z" />
+      </svg>
+    );
+  }
   return (
     <svg {...common}>
       <rect x="3" y="4.5" width="18" height="12" rx="1.5" />
