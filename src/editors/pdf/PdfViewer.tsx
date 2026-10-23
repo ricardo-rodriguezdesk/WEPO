@@ -16,7 +16,6 @@ import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import type { Annotation, FormValues, Highlight, PageRef, Source } from "./pdfEdit";
 import { mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
-import { bindTextLayer } from "./textSelection";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
 import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
@@ -868,7 +867,6 @@ function PageView({
     if (!visible) return;
     let task: RenderTask | null = null;
     let layer: TextLayer | null = null;
-    let unbind: (() => void) | null = null;
     let cancelled = false;
     (async () => {
       const p: PDFPageProxy = await source.doc.getPage(page.index + 1);
@@ -896,13 +894,11 @@ function PageView({
       const flat = p.getViewport({ scale, rotation: 0 });
       text.current.style.width = `${flat.width}px`;
       text.current.style.height = `${flat.height}px`;
-      unbind = bindTextLayer(text.current);
     })();
     return () => {
       cancelled = true;
       task?.cancel();
       layer?.cancel();
-      unbind?.();
     };
   }, [visible, source, page.index, scale, rotation, forms]);
 
