@@ -18,7 +18,14 @@ import { LAYOUTS, THEMES, cloneElement, cloneSlide, isEmptyText, layoutElements,
 import { SHAPES, isLine, shapePath } from "./geometry";
 import SlideView, { textDefaults } from "./SlideView";
 import { SlideParagraph, allRuns, fromEditor, mapParas, mapRuns, toEditor } from "./slideText";
-import { savePresentation } from "../../lib/present";
+import { presentationBase64, savePresentation } from "../../lib/present";
+import { recoveryApi } from "../../lib/recovery";
+import { invoke } from "@tauri-apps/api/core";
+import Dialog from "../../components/Dialog";
+import Presenter from "./Presenter";
+import PrintSlides from "./PrintSlides";
+import type { SlidePrintJob } from "./PrintSlides";
+import { isMac, isWindows } from "../../lib/platform";
 import { imageDataUrl } from "../../lib/write";
 import { extensionOf, fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
@@ -36,6 +43,15 @@ type Props = {
   onSaved: (path: string) => void;
   recovered?: boolean;
 };
+
+const AUTOSAVE_KEY = "wepo.autosave";
+function loadAutosave(): boolean {
+  try {
+    return localStorage.getItem(AUTOSAVE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 const SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 96];
 const HISTORY_LIMIT = 100;
@@ -101,6 +117,15 @@ export default function PresentEditor(props: Props) {
   const [dragSlide, setDragSlide] = useState<number | null>(null);
   const [protectedPath] = useState(initial.unsupported.length ? props.path : null);
   const [notice, setNotice] = useState(initial.unsupported.length > 0);
+  const [presenting, setPresenting] = useState<number | null>(null);
+  const [printDialog, setPrintDialog] = useState(false);
+  const [printJob, setPrintJob] = useState<SlidePrintJob | null>(null);
+  const [autosave, setAutosave] = useState(loadAutosave);
+  /** Cuenta los cambios: así se sabe si la copia de recuperación o el archivo ya están al día. */
+  const [changes, setChanges] = useState(0);
+  const changesRef = useRef(0);
+  changesRef.current = changes;
+  const recoveredAt = useRef(-1);
   const drag = useRef<Drag | null>(null);
   const clipboard = useRef<SlideElement[]>([]);
   const stage = useRef<HTMLDivElement>(null);
@@ -114,6 +139,7 @@ export default function PresentEditor(props: Props) {
 
   function markDirty() {
     setDirty(true);
+    setChanges((n) => n + 1);
     onDirtyChange(true);
   }
 
@@ -125,6 +151,7 @@ export default function PresentEditor(props: Props) {
     deckRef.current = next;
     setDeckState(next);
     setDirty(true);
+    setChanges((n) => n + 1);
     onDirtyChange(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -743,16 +770,21 @@ export default function PresentEditor(props: Props) {
     return Boolean(target && target !== protectedPath && extensionOf(target) === "pptx");
   }
 
-  async function saveTo(target: string) {
+  async function saveTo(target: string, quiet = false) {
     try {
-      setEditing(null);
+      const savedChanges = changesRef.current;
       await savePresentation(target, deckRef.current, fileNameOf(target).replace(/\.[^.]+$/, ""));
       setPath(target);
       setFileName(fileNameOf(target));
-      setDirty(false);
-      onDirtyChange(false);
+      // Si se siguió editando mientras se guardaba, sigue habiendo cambios.
+      if (changesRef.current === savedChanges) {
+        setDirty(false);
+        onDirtyChange(false);
+        recoveryApi.clear();
+        recoveredAt.current = -1;
+      }
       onSaved(target);
-      setStatus({ text: "Guardado" });
+      if (!quiet) setStatus({ text: "Guardado" });
       return true;
     } catch (e) {
       setStatus({ text: `No se pudo guardar: ${e}`, error: true });
@@ -772,6 +804,67 @@ export default function PresentEditor(props: Props) {
     }
     return saveTo(finalPath);
   }
+
+  // Autoguardado: con el interruptor encendido, se guarda solo un par de segundos después de cada cambio.
+  useEffect(() => {
+    if (!autosave || !dirty || !canOverwrite(path) || editing || editingCell) return;
+    const timer = setTimeout(() => {
+      saveTo(path, true).then((ok) => ok || setAutosave(false));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [autosave, dirty, changes, path, editing, editingCell]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Copia de recuperación cada 20 segundos mientras haya cambios sin guardar.
+  const recoveryState = useRef({ dirty, fileName, path });
+  recoveryState.current = { dirty, fileName, path };
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      const r = recoveryState.current;
+      if (!r.dirty || recoveredAt.current === changesRef.current) return;
+      recoveredAt.current = changesRef.current;
+      try {
+        await recoveryApi.saveFile(r.fileName, r.path, await presentationBase64(deckRef.current, r.fileName.replace(/\.[^.]+$/, "")), "pptx");
+      } catch {
+        recoveredAt.current = -1;
+      }
+    }, 20000);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function toggleAutosave() {
+    const next = !autosave;
+    if (next && !canOverwrite(path)) {
+      setStatus({ text: "Elige dónde guardar la presentación para activar el autoguardado" });
+      if (!(await saveDocument(true))) return;
+    }
+    setAutosave(next);
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, next ? "1" : "0");
+    } catch {
+      // Sin almacenamiento la preferencia no se recuerda.
+    }
+    setStatus({ text: next ? "Autoguardado activado: cada cambio se guarda solo" : "Autoguardado desactivado" });
+  }
+
+  // ───────────── presentar e imprimir ─────────────
+
+  function present(fromStart: boolean) {
+    setEditing(null);
+    setEditingCell(null);
+    setPresenting(fromStart ? deckRef.current.slides.findIndex((x) => !x.hidden) : current);
+  }
+
+  useEffect(() => {
+    if (!printJob) return;
+    const done = () => setPrintJob(null);
+    window.addEventListener("afterprint", done);
+    // Se da un momento para que se dibujen las diapositivas antes de abrir el diálogo.
+    const timer = setTimeout(() => invoke("print_window").catch(() => window.print()), 150);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("afterprint", done);
+    };
+  }, [printJob]);
 
   useEffect(() => {
     if (!status || status.error) return;
@@ -797,14 +890,25 @@ export default function PresentEditor(props: Props) {
       else if (command === "zoom-in") setZoom(clampZoom(stepZoom(a.scale, 1)));
       else if (command === "zoom-out") setZoom(clampZoom(stepZoom(a.scale, -1)));
       else if (command === "zoom-reset") setZoom(null);
+      else if (command === "print") setPrintDialog(true);
     });
     function onKey(e: KeyboardEvent) {
       const a = actions.current;
       const target = e.target as HTMLElement;
       const typing = Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
       const key = e.key.toLowerCase();
+      if (e.key === "F5") {
+        e.preventDefault();
+        presentRef.current(!e.shiftKey);
+        return;
+      }
+      if (hasModifier(e) && e.altKey && (e.code === "KeyP" || key === "p")) {
+        e.preventDefault();
+        presentRef.current(true);
+        return;
+      }
       if (hasModifier(e)) {
-        const command = key === "s" ? (e.shiftKey ? "save-as" : "save") : key === "=" || key === "+" ? "zoom-in" : key === "-" ? "zoom-out" : key === "0" ? "zoom-reset" : null;
+        const command = key === "s" ? (e.shiftKey ? "save-as" : "save") : key === "p" ? "print" : key === "=" || key === "+" ? "zoom-in" : key === "-" ? "zoom-out" : key === "0" ? "zoom-reset" : null;
         if (command) {
           e.preventDefault();
           runCommand(command);
@@ -855,6 +959,8 @@ export default function PresentEditor(props: Props) {
       window.removeEventListener("keydown", onKey);
     };
   }, []);
+  const presentRef = useRef(present);
+  presentRef.current = present;
   const slideRef = useRef(slide);
   slideRef.current = slide;
 
@@ -868,6 +974,8 @@ export default function PresentEditor(props: Props) {
       x: e.clientX,
       y: e.clientY,
       items: [
+        { label: "Presentar desde aquí", shortcut: "⇧F5", action: () => setPresenting(index) },
+        "separator",
         { label: "Nueva diapositiva", shortcut: keys("⌘M"), action: () => addSlide() },
         { label: "Duplicar diapositiva", action: () => duplicateSlide(index) },
         { label: s.hidden ? "Mostrar diapositiva" : "Ocultar diapositiva", action: () => toggleHidden(index) },
@@ -895,8 +1003,25 @@ export default function PresentEditor(props: Props) {
             <button className="btn btn-icon" onClick={redo} title={keys("Rehacer (⌘⇧Z)")} aria-label="Rehacer">
               ↷
             </button>
+            <button className="btn btn-icon" onClick={() => setPrintDialog(true)} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
+                <rect x="7" y="14" width="10" height="7" rx="1" />
+              </svg>
+            </button>
+            <label
+              className={`autosave-toggle${autosave ? " on" : ""}`}
+              title={autosave ? "Cada cambio se guarda solo en el archivo" : "Guardar solo cada cambio en el archivo (también hay una copia de recuperación por si la app se cierra)"}
+            >
+              <input type="checkbox" role="switch" checked={autosave} onChange={toggleAutosave} />
+              <span className="autosave-track" aria-hidden />
+              Autoguardado
+            </label>
             <button className="btn" onClick={() => saveDocument()} title={keys("Guardar (⌘S)")}>
               Guardar
+            </button>
+            <button className="btn btn-primary present-play" onClick={() => present(true)} title="Presentar desde el inicio (F5) · desde esta diapositiva (⇧F5)">
+              ▶ Presentar
             </button>
           </div>
         }
@@ -1047,6 +1172,27 @@ export default function PresentEditor(props: Props) {
       </footer>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {presenting !== null && (
+        <Presenter
+          deck={deck}
+          start={Math.max(0, presenting)}
+          onExit={(last) => {
+            setPresenting(null);
+            setCurrent(last);
+          }}
+        />
+      )}
+      {printDialog && (
+        <PrintSlidesDialog
+          hasHidden={deck.slides.some((x) => x.hidden)}
+          onPrint={(job) => {
+            setPrintDialog(false);
+            setPrintJob(job);
+          }}
+          onClose={() => setPrintDialog(false)}
+        />
+      )}
+      {printJob && <PrintSlides deck={deck} job={printJob} />}
     </div>
   );
 }
@@ -1662,3 +1808,45 @@ function LayoutPreview({ id }: { id: LayoutId }) {
   );
 }
 
+
+/** Opciones antes de imprimir: solo diapositivas, o con sus notas. */
+function PrintSlidesDialog({ hasHidden, onPrint, onClose }: { hasHidden: boolean; onPrint: (job: SlidePrintJob) => void; onClose: () => void }) {
+  const [notes, setNotes] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  return (
+    <Dialog
+      title="Imprimir o exportar a PDF"
+      onClose={onClose}
+      width={420}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="btn btn-primary" autoFocus onClick={() => onPrint({ notes, hidden })}>
+            Imprimir…
+          </button>
+        </>
+      }
+    >
+      <label className="radio">
+        <input type="radio" checked={!notes} onChange={() => setNotes(false)} /> Diapositivas (una por hoja)
+      </label>
+      <label className="radio">
+        <input type="radio" checked={notes} onChange={() => setNotes(true)} /> Diapositivas con sus notas (hoja carta)
+      </label>
+      {hasHidden && (
+        <label className="radio">
+          <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} /> Incluir las diapositivas ocultas
+        </label>
+      )}
+      <p className="hint">
+        {isMac
+          ? "Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión."
+          : isWindows
+            ? "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."
+            : "Para crear un PDF, elige «Imprimir a un archivo» (formato PDF) en el diálogo de impresión."}
+      </p>
+    </Dialog>
+  );
+}

@@ -74,7 +74,10 @@ export default function App() {
     try {
       const copy = await recoveryApi.take(info.path);
       const base = info.name.replace(/\.[^.]+$/, "") || "Sin título";
-      if (extensionOf(copy) === "docx") {
+      if (extensionOf(copy) === "pptx") {
+        const present = await openPresentation(copy);
+        show({ id: nextId.current++, kind: "present", fileName: `${base} (recuperado)`, path: null, present, recovered: true });
+      } else if (extensionOf(copy) === "docx") {
         const write = await openWriteDocument(copy);
         show({ id: nextId.current++, kind: "write", fileName: `${base} (recuperado)`, path: null, write, recovered: true });
       } else {

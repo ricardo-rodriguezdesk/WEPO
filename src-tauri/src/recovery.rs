@@ -37,7 +37,7 @@ fn slot(label: &str) -> String {
 }
 
 /// Formatos de las copias.
-const KINDS: [&str; 2] = ["xlsx", "docx"];
+const KINDS: [&str; 3] = ["xlsx", "docx", "pptx"];
 
 fn remove_copy(copy: &Path) {
     let _ = fs::remove_file(copy);
@@ -70,7 +70,8 @@ pub fn recovery_save<R: Runtime>(
     write_info(&copy, name, original)
 }
 
-/// Guarda la copia de recuperación de un documento de WEPO Write (el .docx en base64).
+/// Guarda la copia de recuperación de un documento de WEPO Write (.docx) o una
+/// presentación de WEPO Present (.pptx), que llegan ya armados en base64.
 #[tauri::command]
 pub fn recovery_save_file<R: Runtime>(
     app: AppHandle<R>,
@@ -78,10 +79,15 @@ pub fn recovery_save_file<R: Runtime>(
     name: String,
     original: Option<String>,
     data: String,
+    ext: Option<String>,
 ) -> Result<(), String> {
-    let copy = folder(&app)?.join(format!("{}.docx", slot(window.label())));
+    let ext = ext.unwrap_or_else(|| "docx".into());
+    if ext == "xlsx" || !KINDS.contains(&ext.as_str()) {
+        return Err("Tipo de copia no válido".into());
+    }
+    let copy = folder(&app)?.join(format!("{}.{ext}", slot(window.label())));
     let bytes = crate::files::decode(&data)?;
-    let tmp = copy.with_extension("docx.tmp");
+    let tmp = copy.with_extension(format!("{ext}.tmp"));
     fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &copy).map_err(|e| e.to_string())?;
     write_info(&copy, name, original)

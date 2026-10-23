@@ -139,6 +139,25 @@ En Windows y Linux, ⌘ es Ctrl.
 | ⌘P | Imprimir o exportar a PDF |
 | Doble clic en el encabezado o el pie | Editarlos |
 
+## Atajos de WEPO Present
+
+En Windows y Linux, ⌘ es Ctrl.
+
+| Atajo | Qué hace |
+|---|---|
+| F5 / ⇧F5 | Presentar desde el inicio / desde la diapositiva actual |
+| → o espacio / ← | Siguiente / anterior (al presentar) |
+| Número + ↩ | Ir a esa diapositiva (al presentar) |
+| V | Vista del presentador (notas, siguiente y tiempo) |
+| B / W | Pantalla negra / blanca (al presentar) |
+| ⌘M | Nueva diapositiva |
+| Doble clic o ↩ | Escribir en el cuadro seleccionado |
+| Tab / ⇧Tab | Subir o bajar el nivel de la viñeta |
+| ⇧ + clic, ⌘A | Seleccionar varios elementos |
+| Flechas (⇧ para más) | Mover lo seleccionado |
+| ⌘D, ⌘C, ⌘V | Duplicar, copiar y pegar elementos |
+| ⌘P | Imprimir o exportar a PDF |
+
 ## Atajos de WEPO Sheets
 
 | Acción | Atajo |
@@ -208,7 +227,7 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [ ] WEPO PDF: editar (resaltar, agregar texto, firmar, formularios, ordenar páginas, combinar)
 - [x] WEPO Present: abrir, editar y guardar .pptx (texto, formas, imágenes, tablas, notas del orador y temas)
 - [x] WEPO Present: tablas, seleccionar varios elementos, alinear y repartir, girar, cambiar el diseño, imagen de fondo y tamaño 16:9 o 4:3
-- [ ] WEPO Present: modo presentación
+- [x] WEPO Present: modo presentación con vista del presentador (notas, siguiente diapositiva y tiempo), imprimir y exportar a PDF, autoguardado y recuperación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg
 - [x] WEPO Sheets: zoom de la hoja de 25 % a 400 %

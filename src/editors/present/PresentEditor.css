@@ -222,3 +222,76 @@
 .present-table-grid { display: grid; grid-template-columns: repeat(8, 18px); gap: 3px; }
 .present-table-grid button { width: 18px; height: 18px; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; }
 .present-table-grid button.on { background: color-mix(in srgb, var(--kind-accent) 35%, transparent); border-color: var(--kind-accent); }
+
+/* ───────────── Paso 24: presentar e imprimir ───────────── */
+.present-play { font-weight: 600; }
+
+.presenter {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: #fff;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.presenter.hide-cursor { cursor: none; }
+.presenter-slide { animation: presenter-fade 0.35s ease; }
+@keyframes presenter-fade { from { opacity: 0; } to { opacity: 1; } }
+.presenter .slide-frame { box-shadow: none; }
+.presenter-blank { position: absolute; inset: 0; }
+.presenter-blank.black { background: #000; }
+.presenter-blank.white { background: #fff; }
+.presenter-end { font-size: 18px; color: #bbb; }
+.presenter-bar {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: rgba(30, 30, 34, 0.85);
+  border-radius: 10px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.presenter-bar.show { opacity: 1; }
+.presenter-bar button {
+  padding: 4px 10px;
+  font: inherit;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.presenter-bar button:hover { background: rgba(255, 255, 255, 0.22); }
+.presenter-bar span { min-width: 54px; text-align: center; font-variant-numeric: tabular-nums; color: #ddd; }
+
+.presenter-view { grid-template-columns: 62% 38%; place-items: stretch; background: #1b1b1f; }
+.presenter-main { display: grid; place-items: center; padding: 24px; }
+.presenter-side { display: flex; flex-direction: column; gap: 8px; padding: 24px 24px 80px 0; min-height: 0; }
+.presenter-times { display: flex; align-items: center; gap: 12px; font-size: 28px; font-variant-numeric: tabular-nums; }
+.presenter-times button { padding: 2px 8px; font: inherit; font-size: 12px; color: #ccc; background: rgba(255, 255, 255, 0.1); border: 0; border-radius: 6px; cursor: pointer; }
+.presenter-times span:last-child { margin-left: auto; font-size: 18px; color: #aaa; }
+.presenter-label { margin: 8px 0 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #8e8e93; }
+.presenter-next-end { padding: 24px; color: #888; border: 1px dashed #444; border-radius: 6px; }
+.presenter-notes { flex: 1; overflow-y: auto; font-size: 20px; line-height: 1.45; white-space: pre-wrap; color: #f2f2f2; }
+
+/* Impresión: cada diapositiva en su hoja (ver PrintSlides.tsx). */
+@media print {
+  .present-print { color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .present-print .slide-frame { box-shadow: none; }
+  .present-print-page { break-after: page; page-break-after: always; }
+  .present-print-page:last-child { break-after: auto; page-break-after: auto; }
+  .present-print-notes { font-family: -apple-system, "Segoe UI", sans-serif; }
+  .present-print-notes .slide-frame { border: 1px solid #999; }
+  .present-print-number { margin: 10px 0 4px; font-size: 10pt; color: #666; }
+  .present-print-text { font-size: 12pt; line-height: 1.45; white-space: pre-wrap; }
+  .present-print-break { break-after: page; page-break-after: always; }
+}
