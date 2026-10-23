@@ -72,12 +72,6 @@ export default function AnnotationLayer(props: Props) {
       e.preventDefault();
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       setDrawing([[vx, vy]]);
-    } else if (tool === "highlight") {
-      // Sin texto seleccionable (un escaneo), se resalta un recuadro arrastrando.
-      if (!target.closest(".textLayer span")) {
-        e.preventDefault();
-        setBox({ x: vx, y: vy, w: 0, h: 0 });
-      }
     } else if (tool === "text") {
       e.preventDefault();
       const [x, y] = toPdf(page, s, vx, vy - props.style.textSize * s * 0.6);
@@ -187,6 +181,88 @@ export default function AnnotationLayer(props: Props) {
     }
     document.addEventListener("pointerup", onUp);
     return () => document.removeEventListener("pointerup", onUp);
+  }, [tool, page, s, props.style.highlight]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Empezar a elegir fuera del texto (margen, espacio en blanco): el navegador
+  // elegiría la hoja entera. WEPO arma la selección desde el texto más cercano
+  // hasta donde está el mouse. En una página sin texto (un escaneo) se dibuja un recuadro.
+  useEffect(() => {
+    if (tool !== "highlight" || !layer.current) return;
+    const pageEl = layer.current.parentElement!;
+    const rotation = (page.baseRotation + page.rotation) % 360;
+    function onDown(e: PointerEvent) {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-annot], .pdf-field, .pdf-note-popup, .pdf-text-edit, .pdf-file-note")) return;
+      if (target.closest(".textLayer span") && !target.closest(".endOfContent")) return; // sobre el texto: selección normal
+      const textEl = pageEl.querySelector<HTMLElement>(".textLayer");
+      const spans = textEl ? textSpans(textEl) : [];
+      e.preventDefault();
+      if (!spans.length) {
+        const [vx, vy] = local(e);
+        let current = { x: vx, y: vy, w: 0, h: 0 };
+        setBox(current);
+        const move = (ev: PointerEvent) => {
+          const [mx, my] = local(ev);
+          current = { ...current, w: mx - current.x, h: my - current.y };
+          setBox(current);
+        };
+        const up = () => {
+          document.removeEventListener("pointermove", move);
+          document.removeEventListener("pointerup", up);
+          setBox(null);
+          if (Math.abs(current.w) > 4 && Math.abs(current.h) > 4) {
+            const x = Math.min(current.x, current.x + current.w);
+            const y = Math.min(current.y, current.y + current.h);
+            props.onAdd({ id: pid("a"), page: page.id, kind: "highlight", rects: [rectToPdf(page, s, x, y, Math.abs(current.w), Math.abs(current.h))], color: props.style.highlight });
+          }
+        };
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", up);
+        return;
+      }
+      const start = caretAt(spans, textEl!, e.clientX, e.clientY, rotation);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      const move = (ev: PointerEvent) => {
+        const end = caretAt(spans, textEl!, ev.clientX, ev.clientY, rotation);
+        if (!sel || !start || !end) return;
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(start.node, start.offset);
+        const forward = range.comparePoint(end.node, end.offset) >= 0;
+        if (forward) range.setEnd(end.node, end.offset);
+        else range.setStart(end.node, end.offset);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      };
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up, true);
+      };
+      document.addEventListener("pointermove", move);
+      // Antes que el resaltado (que se hace al soltar), para que la selección ya esté completa.
+      document.addEventListener("pointerup", up, true);
+    }
+    // Triple clic: el navegador elegiría todo el texto de la página; se elige solo ese renglón.
+    // (El número de clics solo viene en el evento del mouse, no en el del puntero.)
+    function onMouseDown(e: MouseEvent) {
+      if (e.detail < 3) return;
+      const span = (e.target as HTMLElement).closest<HTMLElement>(".textLayer span");
+      if (!span || span.closest(".endOfContent") || !span.firstChild) return;
+      e.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    pageEl.addEventListener("pointerdown", onDown);
+    pageEl.addEventListener("mousedown", onMouseDown);
+    return () => {
+      pageEl.removeEventListener("pointerdown", onDown);
+      pageEl.removeEventListener("mousedown", onMouseDown);
+    };
   }, [tool, page, s, props.style.highlight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Del tamaño de la página (no del que tenía la capa antes de girarla).
@@ -573,4 +649,48 @@ export function SignatureDialog({ onDone, onClose }: { onDone: (sig: { src: stri
       )}
     </Dialog>
   );
+}
+
+/** Los trozos de texto de una página (sin el recuadro auxiliar ni imágenes). */
+function textSpans(textEl: HTMLElement): HTMLElement[] {
+  return Array.from(textEl.querySelectorAll<HTMLElement>("span")).filter(
+    (s) => !s.closest(".endOfContent") && s.childNodes.length === 1 && s.firstChild!.nodeType === Node.TEXT_NODE && (s.textContent ?? "").trim() !== "",
+  );
+}
+
+type Caret = { node: Node; offset: number };
+
+/**
+ * La posición en el texto que corresponde a un punto de la pantalla: la letra
+ * exacta si el punto está sobre texto, y si no, el principio o el final del
+ * trozo de texto más cercano (según de qué lado quede, en el sentido de la lectura).
+ */
+function caretAt(spans: HTMLElement[], textEl: HTMLElement, x: number, y: number, rotation: number): Caret | null {
+  const doc = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null };
+  const hit = doc.caretRangeFromPoint?.(x, y);
+  if (hit && hit.startContainer.nodeType === Node.TEXT_NODE && textEl.contains(hit.startContainer)) {
+    const parent = hit.startContainer.parentElement;
+    if (parent && !parent.closest(".endOfContent")) return { node: hit.startContainer, offset: hit.startOffset };
+  }
+  let best: HTMLElement | null = null;
+  let bestDistance = Infinity;
+  for (const span of spans) {
+    const r = span.getBoundingClientRect();
+    const dx = Math.max(r.left - x, 0, x - r.right);
+    const dy = Math.max(r.top - y, 0, y - r.bottom);
+    // Primero el renglón donde está el mouse; solo si no hay texto en ese renglón, el más cercano.
+    const across = rotation % 180 === 0 ? dy : dx;
+    const along = rotation % 180 === 0 ? dx : dy;
+    const distance = across * 10000 + along;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = span;
+    }
+  }
+  if (!best) return null;
+  const node = best.firstChild!;
+  const r = best.getBoundingClientRect();
+  const [dirX, dirY] = rotation === 90 ? [0, 1] : rotation === 180 ? [-1, 0] : rotation === 270 ? [0, -1] : [1, 0];
+  const ahead = (x - (r.left + r.width / 2)) * dirX + (y - (r.top + r.height / 2)) * dirY;
+  return { node, offset: ahead < 0 ? 0 : (node.textContent ?? "").length };
 }

@@ -17,6 +17,7 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Al girar una página, los resaltados y dibujos se quedan sobre el texto.
 - Con la página girada, lo que eliges con el mouse coincide con el texto que ves (antes el resaltado caía en otro lugar).
 - Cada renglón resaltado es una franja pareja: ya no salen manchas más oscuras entre palabras, y el resaltado elegido conserva su color.
+- Resaltar dos veces lo mismo con el mismo color ya no lo oscurece. El triple clic resalta solo ese renglón, y empezar a elegir desde el margen o un espacio en blanco toma el texto desde el renglón más cercano (antes se coloreaba toda la hoja).
 - Las notas adhesivas se leen bien en modo oscuro, se ven en cualquier lector de PDF y, al volver a abrir el archivo en WEPO, se pueden leer.
 - Los resaltados quedan exactos también en PDFs hechos por programas que dejan el dibujo desplazado.
 

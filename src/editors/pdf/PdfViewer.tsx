@@ -14,8 +14,8 @@ import { fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
-import type { Annotation, FormValues, PageRef, Source } from "./pdfEdit";
-import { pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import type { Annotation, FormValues, Highlight, PageRef, Source } from "./pdfEdit";
+import { mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
 import { bindTextLayer } from "./textSelection";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
 import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
@@ -237,6 +237,21 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   const dragStart = useRef<Snapshot | null>(null);
 
   function addAnnotation(a: Annotation) {
+    if (a.kind === "highlight") {
+      // Resaltar otra vez lo mismo (o un pedazo que se encima) con el mismo color
+      // junta los dos en uno: el color no se oscurece con cada clic.
+      const touching = annotationsRef.current.filter(
+        (x): x is Highlight => x.kind === "highlight" && x.page === a.page && x.color === a.color && overlaps(x.rects, a.rects),
+      );
+      if (touching.length) {
+        const keep = touching[0];
+        const merged: Highlight = { ...keep, rects: mergeLines([...touching.flatMap((x) => x.rects), ...a.rects]) };
+        const drop = new Set(touching.map((x) => x.id));
+        change({ annotations: annotationsRef.current.filter((x) => x.id === keep.id || !drop.has(x.id)).map((x) => (x.id === keep.id ? merged : x)) });
+        setSelectedAnnot(keep.id);
+        return;
+      }
+    }
     change({ annotations: [...annotationsRef.current, a] });
     setSelectedAnnot(a.id);
   }
@@ -769,6 +784,13 @@ function widgetField(a: Record<string, unknown>): FormField | null {
     return { ...base, type: "choice", value, options };
   }
   return null;
+}
+
+/** ¿Algún rectángulo de un grupo se encima con alguno del otro? (en puntos del PDF) */
+function overlaps(a: [number, number, number, number][], b: [number, number, number, number][]): boolean {
+  return a.some(([ax, ay, aw, ah]) =>
+    b.some(([bx, by, bw, bh]) => Math.min(ax + aw, bx + bw) - Math.max(ax, bx) > 0.5 && Math.min(ay + ah, by + bh) - Math.max(ay, by) > 0.5),
+  );
 }
 
 /** Las notas adhesivas que ya trae un PDF, por página. */
