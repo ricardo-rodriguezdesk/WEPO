@@ -15,8 +15,12 @@ import type {
   DrawingPatch,
   FindMatch,
   FindOptions,
+  LinkView,
   ListSource,
+  NoteView,
+  PasteMode,
   Range,
+  SelectionStats,
   SheetView,
 } from "../../lib/spreadsheet";
 import { cellName, columnName, rangeOf, sheetApi } from "../../lib/spreadsheet";
@@ -31,6 +35,11 @@ import ValidationDialog from "./ValidationDialog";
 import DrawingLayer from "./DrawingLayer";
 import ChartPanel, { CHART_TYPES } from "./ChartPanel";
 import PrintDialog from "./PrintDialog";
+import LinkDialog from "./LinkDialog";
+import SortDialog from "./SortDialog";
+import type { SortLevel } from "./SortDialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { recoveryApi } from "../../lib/recovery";
 import PrintSheet, { usedRange } from "./PrintSheet";
 import type { PrintJob, PrintOptions } from "./PrintSheet";
 import { invoke } from "@tauri-apps/api/core";
@@ -62,6 +71,8 @@ type Props = {
   onDirtyChange: (dirty: boolean) => void;
   /** Se guardó en esta ruta (para la lista de recientes). */
   onSaved: (path: string) => void;
+  /** El documento viene de una copia de recuperación: empieza con cambios sin guardar. */
+  recovered?: boolean;
 };
 
 /**
@@ -101,7 +112,26 @@ type Assist = {
 type Pointing = { start: number; end: number; anchor: Cell; focus: Cell };
 
 /** Filtro activo: la tabla filtrada, la columna y los valores visibles. */
-type Filter = { region: Range; col: number; keep: string[] };
+function isMultiSelectionRange(range: Range) {
+  return range.r1 !== range.r2 || range.c1 !== range.c2;
+}
+
+/** Filtros activos sobre una tabla: por cada columna filtrada, los valores visibles. */
+type Filter = { region: Range; cols: Record<number, string[]> };
+
+/** Nota que se está editando o que se muestra al pasar el mouse. */
+type NoteTarget = { r: number; c: number };
+
+const AUTOSAVE_KEY = "wepo.autosave";
+function loadAutosave(): boolean {
+  try {
+    return localStorage.getItem(AUTOSAVE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const statsFormat = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 4 });
 
 /** WEPO Sheets: hoja de cálculo editable con fórmulas, formato y herramientas de datos. */
 export default function SheetEditor(props: Props) {
@@ -110,7 +140,7 @@ export default function SheetEditor(props: Props) {
   const [view, setView] = useState(initialView);
   const [path, setPath] = useState(props.path);
   const [fileName, setFileName] = useState(props.fileName);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(Boolean(props.recovered));
   const [status, setStatus] = useState<Status | null>(null);
 
   // `active` es la celda donde se escribe; `end` es el otro extremo de la selección.
@@ -125,6 +155,16 @@ export default function SheetEditor(props: Props) {
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
   const [dialog, setDialog] = useState<"conditional" | "validation" | "print" | null>(null);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  // Copiar formato (brocha): el rango de origen; `sticky` si se usa varias veces (doble clic).
+  const [painter, setPainter] = useState<{ source: Range; sticky: boolean } | null>(null);
+  const [noteEdit, setNoteEdit] = useState<(NoteTarget & { text: string }) | null>(null);
+  const [hoverNote, setHoverNote] = useState<NoteTarget | null>(null);
+  const [linkDialog, setLinkDialog] = useState<NoteTarget | null>(null);
+  const [sortDialog, setSortDialog] = useState<Range | null>(null);
+  const [stats, setStats] = useState<SelectionStats | null>(null);
+  const [autosave, setAutosave] = useState(loadAutosave);
+  // Cuenta los cambios: sirve para saber si hay algo nuevo que autoguardar o recuperar.
+  const [changes, setChanges] = useState(0);
   // Zoom de la hoja (1 = 100 %). Solo cambia cómo se ve, no el archivo.
   const [zoom, setZoomState] = useState(() => loadZoom(props.path));
   const [listOpen, setListOpen] = useState(false);
@@ -208,6 +248,17 @@ export default function SheetEditor(props: Props) {
     for (const d of view.decorations) map.set(`${d.row - 1},${d.col - 1}`, d);
     return map;
   }, [view.decorations]);
+  // Notas y vínculos, por celda ("fila,columna" desde 0).
+  const notes = useMemo(() => {
+    const map = new Map<string, NoteView>();
+    for (const n of view.notes ?? []) map.set(`${n.row - 1},${n.col - 1}`, n);
+    return map;
+  }, [view.notes]);
+  const links = useMemo(() => {
+    const map = new Map<string, LinkView>();
+    for (const l of view.links ?? []) map.set(`${l.row - 1},${l.col - 1}`, l);
+    return map;
+  }, [view.links]);
   const frozenHeight = rowAxis.start(frozenRows);
   const frozenWidth = colAxis.start(frozenCols);
 
@@ -263,6 +314,7 @@ export default function SheetEditor(props: Props) {
   function markDirty() {
     setDirty(true);
     onDirtyChange(true);
+    setChanges((n) => n + 1);
   }
 
   function showStatus(next: Status) {
@@ -465,8 +517,14 @@ export default function SheetEditor(props: Props) {
   }
 
   // Terminar la selección con el mouse aunque se suelte fuera de la cuadrícula.
+  // Con la brocha activa, al soltar se aplica el formato a lo seleccionado.
+  const finishSelection = useRef<() => void>(() => {});
+  finishSelection.current = () => {
+    if (painter && mouseSelecting.current === "cells") applyPainter();
+  };
   useEffect(() => {
     const stop = () => {
+      finishSelection.current();
       mouseSelecting.current = null;
     };
     window.addEventListener("mouseup", stop);
@@ -844,22 +902,180 @@ export default function SheetEditor(props: Props) {
     if (ok) showStatus({ text: `Ordenado por la columna ${columnName(col)} ${ascending ? "(A → Z)" : "(Z → A)"}` });
   }
 
+  /** Ordenar por varias columnas: abre el diálogo sobre la tabla de la celda activa. */
+  function openSortDialog() {
+    const region = dataRegion(active.c);
+    if (region.r2 <= region.r1) return showStatus({ text: "No hay datos para ordenar aquí" });
+    setSortDialog(region);
+  }
+
+  async function sortByLevels(region: Range, levels: SortLevel[], header: boolean) {
+    const ok = await mutate(() => sheetApi.sort(sheet, region, levels, header));
+    if (ok) showStatus({ text: `Ordenado por ${levels.map((l) => columnName(l.col)).join(", luego ")}` });
+  }
+
   function openFilter(col: number, x: number, y: number) {
     const region = filter && col >= filter.region.c1 && col <= filter.region.c2 ? filter.region : dataRegion(col);
     if (region.r2 <= region.r1) return showStatus({ text: "Pon el cursor dentro de una tabla con encabezados para filtrar" });
     setFilterMenu({ x, y, col, region });
   }
 
+  /**
+   * Valores que se pueden elegir en el filtro de `col`: los de las filas que pasan
+   * los filtros de las demás columnas (como en Excel, los filtros se combinan).
+   */
   function filterValues(region: Range, col: number): string[] {
+    const others = Object.entries(filter?.cols ?? {}).filter(([c]) => Number(c) !== col);
     const values = new Set<string>();
-    for (let r = region.r1 + 1; r <= region.r2; r++) values.add(rows[r]?.[col]?.[0] ?? "");
+    for (let r = region.r1 + 1; r <= region.r2; r++) {
+      if (others.some(([c, keep]) => !keep.includes(rows[r]?.[Number(c)]?.[0] ?? ""))) continue;
+      values.add(rows[r]?.[col]?.[0] ?? "");
+    }
     return [...values].sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
   }
 
+  /** Cambia el filtro de una columna (`null` lo quita) y aplica todos juntos. */
   async function applyFilter(region: Range, col: number, keep: string[] | null) {
-    const ok = await mutate(() => sheetApi.filter(sheet, region, col, keep));
-    if (ok) setFilter(keep ? { region, col, keep } : null);
+    const sameTable = filter && filter.region.r1 === region.r1 && filter.region.c1 === region.c1;
+    const cols = { ...(sameTable ? filter.cols : {}) };
+    if (keep) cols[col] = keep;
+    else delete cols[col];
+    const list = Object.entries(cols).map(([c, keep]) => ({ col: Number(c), keep }));
+    const ok = await mutate(() => sheetApi.filter(sheet, region, list));
+    if (ok) setFilter(list.length ? { region, cols } : null);
   }
+
+  function clearAllFilters() {
+    if (!filter) return;
+    const region = filter.region;
+    mutate(() => sheetApi.filter(sheet, region, [])).then((ok) => ok && setFilter(null));
+  }
+
+  // ───────────── pegado especial y copiar formato ─────────────
+
+  async function pasteSpecial(mode: PasteMode) {
+    if (!copied) {
+      // Lo copiado viene de otra app: el texto ya son solo valores.
+      if (mode === "values") return pasteFromSystem();
+      return showStatus({ text: "Primero copia algo dentro de WEPO", error: true });
+    }
+    const target = active;
+    const ok = await mutate(() => sheetApi.pasteSpecial(sheet, target.r, target.c, mode));
+    if (!ok) return;
+    const h = copied.range.r2 - copied.range.r1;
+    const w = copied.range.c2 - copied.range.c1;
+    setEnd(mode === "transpose" ? { r: target.r + w, c: target.c + h } : { r: target.r + h, c: target.c + w });
+    showStatus({ text: { values: "Pegados solo los valores", formats: "Pegado solo el formato", transpose: "Pegado transpuesto" }[mode] });
+  }
+
+  /** Brocha: un clic la usa una vez; doble clic la deja activa hasta Esc. */
+  function startPainter(sticky: boolean) {
+    if (painter && !sticky) {
+      setPainter(null);
+      return;
+    }
+    setPainter({ source: usedSelection(), sticky });
+    showStatus({ text: sticky ? "Copiar formato: selecciona las celdas (Esc para terminar)" : "Copiar formato: selecciona dónde aplicarlo" });
+    focusGrid();
+  }
+
+  function applyPainter() {
+    if (!painter) return;
+    const target = selection;
+    mutate(() => sheetApi.pasteFormat(sheet, painter.source, target));
+    if (!painter.sticky) setPainter(null);
+  }
+
+  // ───────────── notas y vínculos ─────────────
+
+  function anchorOf(cell: Cell): Cell {
+    const m = merged.at(cell.r, cell.c);
+    return m ? { r: m.r1, c: m.c1 } : cell;
+  }
+
+  // La nota aparece al dejar el mouse un momento sobre la celda, como en Excel.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function showNoteSoon(cell: NoteTarget | null) {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (!cell) {
+      hoverTimer.current = setTimeout(() => setHoverNote(null), 150);
+      return;
+    }
+    if (mouseSelecting.current) return;
+    hoverTimer.current = setTimeout(() => setHoverNote(cell), 350);
+  }
+
+  function editNote(cell: Cell = active) {
+    const at = anchorOf(cell);
+    setHoverNote(null);
+    setNoteEdit({ ...at, text: notes.get(`${at.r},${at.c}`)?.text ?? "" });
+  }
+
+  async function saveNote(text: string) {
+    if (!noteEdit) return;
+    const { r, c } = noteEdit;
+    const before = notes.get(`${r},${c}`)?.text ?? "";
+    setNoteEdit(null);
+    focusGrid();
+    if (text.trim() === before.trim()) return;
+    await mutate(() => sheetApi.setNote(sheet, r, c, text));
+  }
+
+  function deleteNote(cell: Cell = active) {
+    const at = anchorOf(cell);
+    mutate(() => sheetApi.setNote(sheet, at.r, at.c, ""));
+  }
+
+  /** Abre un vínculo: una página o correo en el navegador, o una celda de este libro. */
+  async function openLink(link: LinkView) {
+    if (!link.internal) {
+      try {
+        await openUrl(link.target);
+      } catch (e) {
+        showStatus({ text: `No se pudo abrir el vínculo: ${e}`, error: true });
+      }
+      return;
+    }
+    const match = /^(?:'?([^'!]+)'?!)?\$?([A-Za-z]{1,3})\$?(\d+)/.exec(link.target.replace(/^#/, ""));
+    if (!match) return showStatus({ text: `No se encontró «${link.target}» en el libro`, error: true });
+    const [, sheetName, letters, digits] = match;
+    const col = [...letters.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+    const cell = { r: Number(digits) - 1, c: col };
+    const index = sheetName ? view.sheet_names.indexOf(sheetName) : sheet;
+    if (index === -1) return showStatus({ text: `No existe la hoja «${sheetName}»`, error: true });
+    await goToMatch({ sheet: index, row: cell.r, col: cell.c });
+  }
+
+  async function saveLink(target: string, text: string) {
+    if (!linkDialog) return false;
+    const { r, c } = linkDialog;
+    const current = rows[r]?.[c]?.[0] ?? "";
+    // El texto solo se cambia si se escribió otro; una celda vacía muestra la dirección.
+    const label = text.trim() && text !== current ? text : current ? undefined : target;
+    return mutate(() => sheetApi.setLink(sheet, r, c, target, label));
+  }
+
+  function removeLink(cell: Cell = active) {
+    const at = anchorOf(cell);
+    setLinkDialog(null);
+    mutate(() => sheetApi.setLink(sheet, at.r, at.c, null));
+  }
+
+  // ───────────── barra de estado ─────────────
+
+  // Suma, promedio y recuento de la selección (como en Excel), sin frenar al seleccionar.
+  const statsRange = isMultiSelectionRange(selection) && !editing ? usedSelection() : null;
+  const statsKey = statsRange ? `${sheet}:${statsRange.r1},${statsRange.c1},${statsRange.r2},${statsRange.c2}` : "";
+  useEffect(() => {
+    if (!statsRange) {
+      setStats(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      sheetApi.stats(sheet, statsRange).then(setStats, () => setStats(null));
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [statsKey, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ───────────── buscar y reemplazar ─────────────
 
@@ -908,30 +1124,40 @@ export default function SheetEditor(props: Props) {
 
   // ───────────── guardar ─────────────
 
-  async function saveTo(target: string) {
+  async function saveTo(target: string, quiet = false) {
+    const saving = changes;
     await sheetApi.save(target, sheet);
     setPath(target);
     setFileName(fileNameOf(target));
-    setDirty(false);
-    onDirtyChange(false);
+    savedAt.current = saving;
+    // Si hubo cambios mientras se guardaba, siguen pendientes.
+    if (changesRef.current === saving) {
+      setDirty(false);
+      onDirtyChange(false);
+      recoveryApi.clear();
+    }
     onSaved(target);
     const csvNote =
       extensionOf(target) === "csv" && view.sheet_names.length > 1
         ? " (el CSV solo contiene la hoja actual)"
         : "";
-    showStatus({ text: `Guardado${csvNote}` });
+    if (!quiet || csvNote) showStatus({ text: `Guardado${csvNote}` });
   }
 
-  async function saveDocument(saveAs = false) {
+  /** ¿Se puede escribir directamente sobre el archivo abierto? (.xls u .ods se guardan como copia) */
+  function canOverwrite(target: string | null): target is string {
+    const ext = target ? extensionOf(target) : "";
+    return Boolean(target) && target !== protectedPath && (ext === "xlsx" || ext === "csv");
+  }
+
+  /** Guarda; devuelve la ruta donde quedó (o null si se canceló o falló). */
+  async function saveDocument(saveAs = false): Promise<string | null> {
     await commit();
-    const ext = path ? extensionOf(path) : "";
     // Solo se sobrescribe directamente lo que sabemos escribir; .xls u .ods
     // se guardan como un archivo nuevo para no dañar el original. Lo mismo un
     // archivo con gráficas o imágenes, que se perderían al guardarlo.
-    const canOverwrite = path !== protectedPath && (ext === "xlsx" || ext === "csv");
-    if (!saveAs && path && canOverwrite) {
-      await run(() => saveTo(path));
-      return;
+    if (!saveAs && canOverwrite(path)) {
+      return (await run(() => saveTo(path))) ? path : null;
     }
     const base =
       (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
@@ -942,13 +1168,63 @@ export default function SheetEditor(props: Props) {
         { name: "CSV (.csv)", extensions: ["csv"] },
       ],
     });
-    if (!target) return;
+    if (!target) return null;
     const finalPath = /\.(xlsx|csv)$/i.test(target) ? target : `${target}.xlsx`;
     if (finalPath === protectedPath) {
       showStatus({ text: "Elige otro nombre: así no se pierden las gráficas del original.", error: true });
-      return;
+      return null;
     }
-    await run(() => saveTo(finalPath));
+    return (await run(() => saveTo(finalPath))) ? finalPath : null;
+  }
+
+  // ───────────── autoguardado y recuperación ─────────────
+
+  useEffect(() => {
+    if (props.recovered) showStatus({ text: "Documento recuperado: guárdalo para conservar los cambios" });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const changesRef = useRef(changes);
+  changesRef.current = changes;
+  /** Hasta qué cambio está guardado en el archivo, y hasta cuál en la copia de recuperación. */
+  const savedAt = useRef(0);
+  const recoveredAt = useRef(-1);
+
+  // Autoguardado: con el interruptor encendido, se guarda solo un par de segundos después de cada cambio.
+  useEffect(() => {
+    if (!autosave || !dirty || !canOverwrite(path) || editing) return;
+    const timer = setTimeout(() => {
+      run(() => saveTo(path, true)).then((ok) => ok || setAutosave(false));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [autosave, dirty, changes, path, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Copia de recuperación cada 20 segundos mientras haya cambios sin guardar.
+  const recoveryState = useRef({ dirty, fileName, path });
+  recoveryState.current = { dirty, fileName, path };
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const { dirty, fileName, path } = recoveryState.current;
+      if (!dirty || recoveredAt.current === changesRef.current) return;
+      recoveredAt.current = changesRef.current;
+      recoveryApi.save(fileName, path);
+    }, 20000);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function toggleAutosave() {
+    const next = !autosave;
+    if (next && !canOverwrite(path)) {
+      // Como en Excel: para autoguardar, primero el archivo necesita un lugar.
+      showStatus({ text: "Elige dónde guardar el archivo para activar el autoguardado" });
+      if (!(await saveDocument(true))) return;
+    }
+    setAutosave(next);
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, next ? "1" : "0");
+    } catch {
+      // Sin almacenamiento la preferencia no se recuerda.
+    }
+    showStatus({ text: next ? "Autoguardado activado: cada cambio se guarda solo" : "Autoguardado desactivado" });
   }
 
   // ───────────── zoom ─────────────
@@ -984,6 +1260,19 @@ export default function SheetEditor(props: Props) {
     el.scrollLeft = Math.max(0, anchor.x * zoom - anchor.px);
     el.scrollTop = Math.max(0, anchor.y * zoom - anchor.py);
   }, [zoom]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Al arrastrar sobre las celdas no se selecciona su texto (solo las celdas).
+  // El CSS ya lo pide, pero WebKit a veces lo ignora al arrastrar desde fuera de una celda.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onSelectStart = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest?.("input, textarea")) e.preventDefault();
+    };
+    el.addEventListener("selectstart", onSelectStart);
+    return () => el.removeEventListener("selectstart", onSelectStart);
+  }, []);
 
   // Pellizcar en el trackpad, o ⌃ + rueda del mouse.
   const zoomRef = useRef(zoom);
@@ -1133,7 +1422,9 @@ export default function SheetEditor(props: Props) {
         y: redo,
         c: () => copySelection(false),
         x: () => copySelection(true),
-        v: pasteFromSystem,
+        // ⌘⇧V: pegar solo los valores, como en Google Sheets.
+        v: () => (e.shiftKey ? pasteSpecial("values") : pasteFromSystem()),
+        k: () => setLinkDialog(anchorOf(active)),
         b: () => applyStyle("font.b", String(!activeStyle.b)),
         i: () => applyStyle("font.i", String(!activeStyle.i)),
         u: () => applyStyle("font.u", String(!activeStyle.u)),
@@ -1183,8 +1474,14 @@ export default function SheetEditor(props: Props) {
         return clearSelection();
       case "F2":
         e.preventDefault();
+        // ⇧F2: nota de la celda, como en Excel.
+        if (e.shiftKey) return editNote();
         return startEditing(input, false);
       case "Escape":
+        if (painter) {
+          setPainter(null);
+          return showStatus({ text: "Copiar formato cancelado" });
+        }
         setCopied(null);
         return setEnd(active);
     }
@@ -1293,7 +1590,26 @@ export default function SheetEditor(props: Props) {
       { label: "Cortar", shortcut: keys("⌘X"), action: () => copySelection(true) },
       { label: "Copiar", shortcut: keys("⌘C"), action: () => copySelection(false) },
       { label: "Pegar", shortcut: keys("⌘V"), action: pasteFromSystem },
+      { label: "Pegar solo valores", shortcut: keys("⌘⇧V"), action: () => pasteSpecial("values") },
+      { label: "Pegar solo formato", disabled: !copied, action: () => pasteSpecial("formats") },
+      { label: "Pegar transpuesto", disabled: !copied, action: () => pasteSpecial("transpose") },
     ];
+    const anchor = anchorOf(active);
+    const activeNote = notes.get(`${anchor.r},${anchor.c}`);
+    const activeLink = links.get(`${anchor.r},${anchor.c}`);
+    const noteItems: MenuItem[] = activeNote
+      ? [
+          { label: "Editar nota", shortcut: "⇧F2", action: () => editNote() },
+          { label: "Eliminar nota", action: () => deleteNote() },
+        ]
+      : [{ label: "Insertar nota", shortcut: "⇧F2", action: () => editNote() }];
+    const linkItems: MenuItem[] = activeLink
+      ? [
+          { label: "Abrir vínculo", action: () => openLink(activeLink) },
+          { label: "Editar vínculo…", shortcut: keys("⌘K"), disabled: activeLink.dynamic, action: () => setLinkDialog(anchor) },
+          { label: "Quitar vínculo", disabled: activeLink.dynamic, action: () => removeLink() },
+        ]
+      : [{ label: "Insertar vínculo…", shortcut: keys("⌘K"), action: () => setLinkDialog(anchor) }];
     const rowsCount = wholeRows ? rowSpan : 1;
     const colsCount = wholeCols ? colSpan : 1;
     const rowItems: MenuItem[] = [
@@ -1321,10 +1637,12 @@ export default function SheetEditor(props: Props) {
     const sortItems: MenuItem[] = [
       { label: "Ordenar de A a Z", action: () => sortBy(active.c, true) },
       { label: "Ordenar de Z a A", action: () => sortBy(active.c, false) },
+      { label: "Ordenar por varias columnas…", action: openSortDialog },
       {
         label: "Filtrar…",
         action: () => openFilter(active.c, menu?.x ?? 200, menu?.y ?? 200),
       },
+      ...(filter ? [{ label: "Quitar todos los filtros", action: clearAllFilters }] : []),
     ];
 
     if (kind === "row") {
@@ -1368,6 +1686,9 @@ export default function SheetEditor(props: Props) {
       },
       ...sortItems,
       "separator",
+      ...noteItems,
+      ...linkItems,
+      "separator",
       freezeItem,
       { label: "Borrar contenido", shortcut: "⌫", action: clearSelection },
     ];
@@ -1405,7 +1726,12 @@ export default function SheetEditor(props: Props) {
 
   /** Dibuja una celda (o un bloque combinado) en la posición indicada. */
   function renderCell(r: number, c: number, cellBox: { top: number; left: number; width: number; height: number }, key: string, extra = "") {
+    // Filas o columnas ocultas: no se dibujan (con el relleno interno de la celda
+    // se veía una franja de unos píxeles al seleccionar).
+    if (cellBox.width <= 0 || cellBox.height <= 0) return null;
     const [text, numeric, styleId] = rows[r]?.[c] ?? ["", false, 0];
+    const note = notes.get(`${r},${c}`);
+    const link = links.get(`${r},${c}`);
     const cellStyle = view.styles[styleId] ?? view.styles[0];
     const deco = decorations.get(`${r},${c}`);
     let box = cellBox;
@@ -1429,6 +1755,12 @@ export default function SheetEditor(props: Props) {
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           if (selectedDrawing !== null) setSelectedDrawing(null);
+          // ⌘ + clic (Ctrl en Windows) abre el vínculo de la celda.
+          if (link && hasModifier(e) && !editing) {
+            e.preventDefault();
+            openLink(link);
+            return;
+          }
           // Escribiendo una fórmula: el clic inserta la referencia de la celda.
           if (wantsReference()) {
             e.preventDefault();
@@ -1444,11 +1776,14 @@ export default function SheetEditor(props: Props) {
           if (fillTo) setFillTo({ r, c });
           else if (mouseSelecting.current === "ref" && pointing) pointTo(pointing.anchor, { r, c });
           else if (mouseSelecting.current === "cells") setEnd({ r, c });
+          showNoteSoon(note ? { r, c } : null);
         }}
+        onMouseLeave={() => note && showNoteSoon(null)}
         onDoubleClick={() => startEditing(input, false)}
         onContextMenu={(e) => openMenu(e, "cell", { r, c })}
-        title={text}
+        title={note ? undefined : link ? `${link.target}\n${keys("⌘")}+clic para abrir` : text}
       >
+        {note && <span className="note-mark" aria-label="Tiene nota" />}
         {deco?.bar && (
           <span
             className="data-bar"
@@ -1479,7 +1814,7 @@ export default function SheetEditor(props: Props) {
   }
 
   function renderColHeader(index: number, left: number, width: number, frozen: boolean) {
-    const filtered = filter && filter.col === index;
+    const filtered = Boolean(filter?.cols[index]) && index >= filter!.region.c1 && index <= filter!.region.c2;
     return (
       <div
         key={`ch-${index}`}
@@ -1564,6 +1899,18 @@ export default function SheetEditor(props: Props) {
           <rect x="7" y="14" width="10" height="7" rx="1" />
         </svg>
       </button>
+      <label
+        className={`autosave-toggle${autosave ? " on" : ""}`}
+        title={
+          autosave
+            ? "Cada cambio se guarda solo en el archivo"
+            : "Guardar solo cada cambio en el archivo (también hay una copia de recuperación por si la app se cierra)"
+        }
+      >
+        <input type="checkbox" role="switch" checked={autosave} onChange={toggleAutosave} />
+        <span className="autosave-track" aria-hidden />
+        Autoguardado
+      </label>
       <button className="btn" onClick={() => saveDocument()} title={keys("Guardar (⌘S)")}>
         Guardar
       </button>
@@ -1584,6 +1931,18 @@ export default function SheetEditor(props: Props) {
       <FormatBar style={activeStyle} onStyle={applyStyle} onBorder={applyBorder} onDone={focusGrid}>
         <Separator />
         <ToolButton
+          label="Copiar formato (doble clic para aplicarlo varias veces)"
+          pressed={Boolean(painter)}
+          onClick={() => startPainter(false)}
+          onDoubleClick={() => startPainter(true)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+            <rect x="4" y="3" width="14" height="6" rx="1.5" />
+            <path d="M18 6h2v5h-8v3" />
+            <rect x="10.5" y="14" width="3" height="7" rx="1" />
+          </svg>
+        </ToolButton>
+        <ToolButton
           label={activeMerged ? "Separar celdas" : "Combinar celdas"}
           pressed={Boolean(activeMerged)}
           onClick={toggleMerge}
@@ -1599,9 +1958,14 @@ export default function SheetEditor(props: Props) {
         <ToolButton label="Ordenar de Z a A" onClick={() => sortBy(active.c, false)}>
           <span className="fb-text-icon">Z↓A</span>
         </ToolButton>
+        <ToolButton label="Ordenar por varias columnas" onClick={openSortDialog}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 6h10M4 12h7M4 18h4M18 5v14M15 16l3 3 3-3" />
+          </svg>
+        </ToolButton>
         <ToolButton
           label="Filtrar esta columna"
-          pressed={Boolean(filter)}
+          pressed={Boolean(filter && filter.cols[active.c])}
           onClick={() => {
             const box = scrollRef.current?.getBoundingClientRect();
             openFilter(active.c, (box?.left ?? 0) + HEADER_WIDTH + colAxis.start(active.c) - scrollX, (box?.top ?? 0) + HEADER_HEIGHT);
@@ -1720,7 +2084,7 @@ export default function SheetEditor(props: Props) {
       </div>
 
       <div
-        className={`grid-scroll${fillTo ? " filling" : ""}`}
+        className={`grid-scroll${fillTo ? " filling" : ""}${painter ? " painting" : ""}`}
         ref={scrollRef}
         tabIndex={0}
         onKeyDown={onGridKeyDown}
@@ -1811,6 +2175,66 @@ export default function SheetEditor(props: Props) {
             onEdit={(id) => setChartPanel(id)}
             zoom={zoom}
           />
+
+          {/* Nota: al pasar el mouse, o abierta para escribir */}
+          {(() => {
+            const target = noteEdit ?? (hoverNote && !editing ? hoverNote : null);
+            if (!target) return null;
+            const area = merged.at(target.r, target.c) ?? { r1: target.r, c1: target.c, r2: target.r, c2: target.c };
+            const box = rangeBox(area);
+            const style = { left: box.left + box.width + 8, top: box.top };
+            if (noteEdit) {
+              return (
+                <NoteEditor
+                  key={`ne-${noteEdit.r}-${noteEdit.c}`}
+                  style={style}
+                  initial={noteEdit.text}
+                  onSave={saveNote}
+                  onCancel={() => {
+                    setNoteEdit(null);
+                    focusGrid();
+                  }}
+                />
+              );
+            }
+            const note = notes.get(`${target.r},${target.c}`);
+            if (!note) return null;
+            return (
+              <div className="note-bubble" style={style} role="note" onMouseEnter={() => showNoteSoon(target)} onMouseLeave={() => showNoteSoon(null)}>
+                {note.author && <b>{note.author}:</b>} {note.text}
+              </div>
+            );
+          })()}
+
+          {/* Vínculo de la celda activa: a dónde lleva, y botones para abrirlo o cambiarlo */}
+          {(() => {
+            if (editing || noteEdit || isMultiSelection || mouseSelecting.current) return null;
+            const at = anchorOf(active);
+            const link = links.get(`${at.r},${at.c}`);
+            if (!link) return null;
+            const area = merged.at(at.r, at.c) ?? { r1: at.r, c1: at.c, r2: at.r, c2: at.c };
+            const box = rangeBox(area);
+            return (
+              <div className="link-card" style={{ left: box.left, top: box.top + box.height + 4 }} onMouseDown={(e) => e.stopPropagation()}>
+                <span className="link-card-target" title={link.target}>
+                  {link.target.replace(/^mailto:/, "")}
+                </span>
+                <button type="button" className="link-card-button" onClick={() => openLink(link)}>
+                  Abrir
+                </button>
+                {!link.dynamic && (
+                  <>
+                    <button type="button" className="link-card-button" onClick={() => setLinkDialog(at)}>
+                      Editar
+                    </button>
+                    <button type="button" className="link-card-button" onClick={() => removeLink(at)}>
+                      Quitar
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Números de fila fijos a la izquierda (los de filas inmovilizadas, aparte) */}
           {virtualRows.map((row) => (row.index < frozenRows ? null : renderRowHeader(row.index, row.start, row.size, false)))}
@@ -1956,6 +2380,16 @@ export default function SheetEditor(props: Props) {
             {status.text}
           </span>
         )}
+        {stats && stats.count > 0 && (
+          <span
+            className="sheet-stats"
+            title={stats.numbers ? `Mínimo: ${statsFormat.format(stats.min ?? 0)} · Máximo: ${statsFormat.format(stats.max ?? 0)}` : undefined}
+          >
+            {stats.numbers > 0 && <span>Promedio: {statsFormat.format(stats.sum / stats.numbers)}</span>}
+            <span>Recuento: {statsFormat.format(stats.count)}</span>
+            {stats.numbers > 0 && <span>Suma: {statsFormat.format(stats.sum)}</span>}
+          </span>
+        )}
         <ZoomControl zoom={zoom} onChange={(z) => setZoom(z)} />
       </SheetTabs>
 
@@ -2007,6 +2441,30 @@ export default function SheetEditor(props: Props) {
           }}
         />
       )}
+      {sortDialog && (
+        <SortDialog
+          region={sortDialog}
+          headers={Array.from({ length: sortDialog.c2 - sortDialog.c1 + 1 }, (_, i) => rows[sortDialog.r1]?.[sortDialog.c1 + i]?.[0] ?? "")}
+          initialHeader={looksLikeHeader(rows, sortDialog)}
+          onSort={(levels, header) => sortByLevels(sortDialog, levels, header)}
+          onClose={() => {
+            setSortDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {linkDialog && (
+        <LinkDialog
+          text={rows[linkDialog.r]?.[linkDialog.c]?.[0] ?? ""}
+          target={links.get(`${linkDialog.r},${linkDialog.c}`)?.target ?? null}
+          onSave={saveLink}
+          onRemove={() => removeLink(linkDialog)}
+          onClose={() => {
+            setLinkDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
       {dialog === "print" && (
         <PrintDialog
           selectionLabel={
@@ -2048,11 +2506,42 @@ export default function SheetEditor(props: Props) {
           y={filterMenu.y}
           column={columnName(filterMenu.col)}
           values={filterValues(filterMenu.region, filterMenu.col)}
-          current={filter && filter.col === filterMenu.col ? filter.keep : null}
+          current={filter?.cols[filterMenu.col] ?? null}
           onApply={(keep) => applyFilter(filterMenu.region, filterMenu.col, keep)}
           onClose={() => setFilterMenu(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Cuadro amarillo para escribir una nota. ⌘↩ (o salir del cuadro) guarda; Esc cancela. */
+function NoteEditor(props: { style: { left: number; top: number }; initial: string; onSave: (text: string) => void; onCancel: () => void }) {
+  const [text, setText] = useState(props.initial);
+  const done = useRef(false);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    if (save) props.onSave(text);
+    else props.onCancel();
+  };
+  return (
+    <div className="note-bubble editing" style={props.style} onMouseDown={(e) => e.stopPropagation()}>
+      <textarea
+        className="note-input"
+        aria-label="Nota de la celda"
+        placeholder="Escribe una nota…"
+        value={text}
+        autoFocus
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => finish(true)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") finish(false);
+          else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) finish(true);
+        }}
+      />
+      <small className="note-hint">{keys("⌘")}↩ para guardar · Esc para cancelar</small>
     </div>
   );
 }

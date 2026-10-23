@@ -69,7 +69,7 @@
   pointer-events: none;
 }
 
-.grid-scroll { flex: 1; overflow: auto; position: relative; outline: none; user-select: none; }
+.grid-scroll { flex: 1; overflow: auto; position: relative; outline: none; -webkit-user-select: none; user-select: none; }
 .grid-canvas { position: relative; }
 
 .col-headers {
@@ -97,7 +97,7 @@
   background: var(--chrome);
   color: var(--muted);
   font-size: 12px;
-  user-select: none;
+  -webkit-user-select: none; user-select: none;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
@@ -421,7 +421,7 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   cursor: move;
   touch-action: none;
-  user-select: none;
+  -webkit-user-select: none; user-select: none;
 }
 .drawing.selected { outline: 2px solid var(--kind-accent); outline-offset: 1px; }
 .drawing img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
@@ -515,3 +515,139 @@
 .zoom-percent:hover { background: var(--border); color: var(--text); }
 .zoom-step:disabled { opacity: 0.35; cursor: default; }
 .zoom-slider { width: 110px; accent-color: var(--kind-accent); cursor: pointer; }
+
+/* Safari y la app en Mac (WebKit) solo respetan la versión con prefijo; sin ella,
+   arrastrar para seleccionar celdas también resaltaba el texto de toda la hoja. */
+.grid-scroll input,
+.grid-scroll textarea { -webkit-user-select: text; user-select: text; }
+
+/* Notas: triángulo rojo en la esquina y cuadro amarillo al pasar el mouse */
+.note-mark {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 7px solid #d93025;
+  border-left: 7px solid transparent;
+  pointer-events: none;
+  z-index: 1;
+}
+.note-bubble {
+  position: absolute;
+  z-index: 8;
+  max-width: 260px;
+  min-width: 140px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #2b2b1f;
+  background: #fff8c5;
+  border: 1px solid #e5d679;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+.note-bubble.editing { padding: 6px; width: 240px; }
+.note-input {
+  display: block;
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.note-hint { display: block; margin-top: 4px; font-size: 10.5px; color: #7a7246; }
+
+/* Vínculo de la celda activa */
+.link-card {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 420px;
+  padding: 4px 4px 4px 10px;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+.link-card-target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  margin-right: 6px;
+  min-width: 0;
+}
+.link-card-button {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.link-card-button:hover { background: var(--border); }
+
+/* Copiar formato: el cursor indica que el próximo clic aplica el formato */
+.grid-scroll.painting .cell { cursor: copy; }
+
+/* Suma, promedio y recuento de la selección */
+.sheet-stats {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sheet-status + .sheet-stats { margin-left: 12px; }
+.sheet-stats + .zoom-control { margin-left: 14px; }
+
+/* Interruptor de autoguardado */
+.autosave-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.autosave-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.autosave-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 99px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+.autosave-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s;
+}
+.autosave-toggle.on { color: var(--text); }
+.autosave-toggle.on .autosave-track { background: var(--kind-accent); }
+.autosave-toggle.on .autosave-track::after { transform: translateX(11px); }
+.autosave-toggle input:focus-visible + .autosave-track { outline: 2px solid var(--kind-accent); outline-offset: 2px; }
