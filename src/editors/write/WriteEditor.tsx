@@ -284,7 +284,7 @@ export default function WriteEditor(props: Props) {
   );
 
   return (
-    <div className="editor kind-write">
+    <div className="editor kind-write write-editor">
       <style>{`@media print { ${pageCss} }`}</style>
       <EditorToolbar kind="write" fileName={fileName} dirty={dirty} onHome={onHome} onOpen={onOpen} actions={toolbarActions} />
       {editor && <WriteBar editor={editor} onLink={openLinkDialog} onImage={insertImage} />}

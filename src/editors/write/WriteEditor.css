@@ -1,6 +1,6 @@
 /* WEPO Write: la página blanca sobre fondo gris, como en un procesador de texto. */
 
-.kind-write { display: flex; flex-direction: column; height: 100vh; }
+.write-editor { display: flex; flex-direction: column; height: 100vh; }
 .write-canvas {
   flex: 1;
   overflow: auto;
@@ -80,8 +80,8 @@
 /* Imprimir: solo la página, sin barras; los márgenes los pone @page (ver WriteEditor). */
 @media print {
   html, body, #root { height: auto !important; overflow: visible !important; background: #fff !important; }
-  .kind-write { display: block; height: auto; }
-  .kind-write > :not(.write-canvas) { display: none !important; }
+  .write-editor { display: block; height: auto; }
+  .write-editor > :not(.write-canvas) { display: none !important; }
   .write-canvas { padding: 0; overflow: visible; background: none; }
   .write-page { width: auto !important; min-height: 0 !important; padding: 0 !important; box-shadow: none; zoom: 1 !important; }
   .write-content { white-space: pre-wrap; }
