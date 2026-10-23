@@ -11,6 +11,9 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Rellenar formularios PDF (texto, casillas y listas).
 - Todo se puede deshacer y se guarda en el PDF: se ve igual en Vista Previa, Acrobat o el navegador.
 
+### Seguridad
+- pdf.js actualizado a la 6.4.299: corrige una falla que permitía ejecutar código al abrir un PDF malicioso (CVE-2026-16633).
+
 ## 0.2.0
 
 La suite completa: ya están los cuatro editores.

@@ -124,7 +124,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   // Los PDF abiertos se cierran al salir del editor (no al agregar otro).
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
-  useEffect(() => () => sourcesRef.current.forEach((s) => void s.doc.destroy()), []);
+  useEffect(() => () => sourcesRef.current.forEach((s) => void s.doc.loadingTask.destroy()), []);
 
   // Sin zoom guardado, la página cabe a lo ancho (hasta 125 %).
   useEffect(() => {
