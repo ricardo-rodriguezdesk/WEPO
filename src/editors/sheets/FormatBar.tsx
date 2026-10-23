@@ -11,6 +11,8 @@ type Props = {
   onBorder: (kind: BorderKind, style: string, color: string) => void;
   /** Devuelve el foco a la cuadrícula después de usar un control. */
   onDone: () => void;
+  /** Controles propios del editor que se agregan al final (combinar, ordenar…). */
+  children?: ReactNode;
 };
 
 const FONTS = [
@@ -68,7 +70,7 @@ const BORDER_STYLES = [
 ];
 
 /** Barra de formato de WEPO Sheets: fuente, colores, alineación, bordes y número. */
-export default function FormatBar({ style, onStyle, onBorder, onDone }: Props) {
+export default function FormatBar({ style, onStyle, onBorder, onDone, children }: Props) {
   const fonts = FONTS.includes(style.font) || !style.font ? FONTS : [style.font, ...FONTS];
   const sizes = SIZES.includes(style.size) ? SIZES : [...SIZES, style.size].sort((a, b) => a - b);
   const numberFormat = NUMBER_FORMATS.some((f) => f.value === style.num_fmt) ? style.num_fmt : "custom";
@@ -187,18 +189,20 @@ export default function FormatBar({ style, onStyle, onBorder, onDone }: Props) {
           </option>
         ))}
       </select>
+
+      {children}
     </div>
   );
 }
 
 // ───────────── piezas ─────────────
 
-function Separator() {
+export function Separator() {
   return <span className="fb-separator" aria-hidden />;
 }
 
 /** Los botones no se quedan con el foco: así se puede seguir escribiendo en la hoja. */
-function ToolButton(props: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
+export function ToolButton(props: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"

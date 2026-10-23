@@ -4,18 +4,22 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { save } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import EditorToolbar from "../../components/EditorToolbar";
+import ContextMenu from "../../components/ContextMenu";
+import type { MenuItem } from "../../components/ContextMenu";
 import { extensionOf, fileNameOf } from "../../lib/documents";
-import type { BorderKind, Cell, Range, SheetView } from "../../lib/spreadsheet";
+import type { BorderKind, Cell, FindMatch, FindOptions, Range, SheetView } from "../../lib/spreadsheet";
 import { cellName, columnName, rangeOf, sheetApi } from "../../lib/spreadsheet";
-import FormatBar from "./FormatBar";
+import FormatBar, { Separator, ToolButton } from "./FormatBar";
+import FindBar from "./FindBar";
+import FilterMenu from "./FilterMenu";
+import SheetTabs from "./SheetTabs";
 import { cellCss } from "./cellStyle";
 import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH } from "./layout";
+import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
 const MIN_ROWS = 100;
 const MIN_COLS = 26;
-const MAX_ROW = 1_048_575; // límites de Excel (base 0)
-const MAX_COL = 16_383;
 
 type Props = {
   initialView: SheetView;
@@ -48,7 +52,12 @@ type Status = { text: string; error?: boolean };
 /** Ajuste de tamaño en curso al arrastrar el borde de un encabezado. */
 type Resize = { axis: "col" | "row"; index: number; startPos: number; startSize: number; size: number };
 
-/** WEPO Sheets: hoja de cálculo editable con fórmulas, deshacer y guardado. */
+type Menu = { x: number; y: number; kind: "cell" | "row" | "col" };
+
+/** Filtro activo: la tabla filtrada, la columna y los valores visibles. */
+type Filter = { region: Range; col: number; keep: string[] };
+
+/** WEPO Sheets: hoja de cálculo editable con fórmulas, formato y herramientas de datos. */
 export default function SheetEditor(props: Props) {
   const { initialView, onHome, onOpen, onDirtyChange } = props;
 
@@ -65,6 +74,12 @@ export default function SheetEditor(props: Props) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [copied, setCopied] = useState<{ range: Range; cut: boolean } | null>(null);
   const [resize, setResize] = useState<Resize | null>(null);
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter | null>(null);
+  const [filterMenu, setFilterMenu] = useState<{ x: number; y: number; col: number; region: Range } | null>(null);
+  // Autollenado: hasta qué celda se arrastró la esquina de la selección.
+  const [fillTo, setFillTo] = useState<Cell | null>(null);
   // Ruta del archivo original que tiene gráficas o imágenes: no se sobrescribe.
   const [protectedPath] = useState(initialView.has_drawings ? props.path : null);
   const [showDrawingsNotice, setShowDrawingsNotice] = useState(initialView.has_drawings);
@@ -73,18 +88,35 @@ export default function SheetEditor(props: Props) {
   const cellEditorRef = useRef<HTMLInputElement>(null);
   const editingRef = useRef<Editing | null>(null);
   editingRef.current = editing;
-  const mouseSelecting = useRef(false);
+  const mouseSelecting = useRef<"cells" | "rows" | "cols" | null>(null);
 
   const sheet = view.sheet;
   const rows = view.rows;
-  const selection = rangeOf(active, end);
+  const merged = useMemo(() => new MergedCells(view.merged), [view.merged]);
+  const rawSelection = rangeOf(active, end);
+  const wholeCols = rawSelection.r1 === 0 && rawSelection.r2 >= MAX_ROW;
+  const wholeRows = rawSelection.c1 === 0 && rawSelection.c2 >= MAX_COL;
+  // Un rango de celdas se amplía para no cortar celdas combinadas; filas o columnas completas, no.
+  const selection = wholeCols || wholeRows ? rawSelection : merged.expand(rawSelection);
+  const frozenRows = view.frozen_rows;
+  const frozenCols = view.frozen_cols;
+
   const widestRow = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const rowCount = Math.max(MIN_ROWS, rows.length + 50, end.r + 20);
-  const colCount = Math.max(MIN_COLS, widestRow + 5, end.c + 5);
+  const rowCount = Math.max(MIN_ROWS, rows.length + 50, (wholeCols ? active.r : end.r) + 20, active.r + 20);
+  const colCount = Math.max(MIN_COLS, widestRow + 5, (wholeRows ? active.c : end.c) + 5, active.c + 5);
 
   // Anchos y altos: casi todos son los normales; Rust manda solo las excepciones.
-  const colAxis = useMemo(() => new Axis(DEFAULT_COL_WIDTH, view.col_widths), [view.col_widths]);
-  const rowAxis = useMemo(() => new Axis(DEFAULT_ROW_HEIGHT, view.row_heights), [view.row_heights]);
+  // Las filas y columnas ocultas miden 0.
+  const colAxis = useMemo(
+    () => new Axis(DEFAULT_COL_WIDTH, [...view.col_widths, ...view.hidden_cols.map((c) => [c, 0] as [number, number])]),
+    [view.col_widths, view.hidden_cols],
+  );
+  const rowAxis = useMemo(
+    () => new Axis(DEFAULT_ROW_HEIGHT, [...view.row_heights, ...view.hidden_rows.map((r) => [r, 0] as [number, number])]),
+    [view.row_heights, view.hidden_rows],
+  );
+  const frozenHeight = rowAxis.start(frozenRows);
+  const frozenWidth = colAxis.start(frozenCols);
 
   // Solo se dibujan las filas y columnas visibles. `paddingStart` deja sitio
   // para los encabezados fijos (fila de letras y columna de números).
@@ -93,7 +125,7 @@ export default function SheetEditor(props: Props) {
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => rowAxis.size(i),
     paddingStart: HEADER_HEIGHT,
-    scrollPaddingStart: HEADER_HEIGHT,
+    scrollPaddingStart: HEADER_HEIGHT + frozenHeight,
     overscan: 10,
   });
   const colVirtualizer = useVirtualizer({
@@ -102,10 +134,11 @@ export default function SheetEditor(props: Props) {
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => colAxis.size(i),
     paddingStart: HEADER_WIDTH,
-    scrollPaddingStart: HEADER_WIDTH,
+    scrollPaddingStart: HEADER_WIDTH + frozenWidth,
     overscan: 4,
   });
   const scrollX = colVirtualizer.scrollOffset ?? 0;
+  const scrollY = rowVirtualizer.scrollOffset ?? 0;
 
   // Cuando cambia algún ancho o alto, el virtualizador debe volver a medir.
   const colSignature = colAxis.signature();
@@ -120,8 +153,8 @@ export default function SheetEditor(props: Props) {
     return {
       left,
       top,
-      width: HEADER_WIDTH + colAxis.start(range.c2 + 1) - left,
-      height: HEADER_HEIGHT + rowAxis.start(range.r2 + 1) - top,
+      width: HEADER_WIDTH + colAxis.start(Math.min(range.c2, colCount) + 1) - left,
+      height: HEADER_HEIGHT + rowAxis.start(Math.min(range.r2, rowCount) + 1) - top,
     };
   }
 
@@ -143,8 +176,10 @@ export default function SheetEditor(props: Props) {
     try {
       const result = await task();
       if (result) setView(result);
+      return true;
     } catch (e) {
       showStatus({ text: String(e), error: true });
+      return false;
     }
   }
 
@@ -189,13 +224,6 @@ export default function SheetEditor(props: Props) {
     }
   }, [editing?.source]);
 
-  // Terminar la selección con el mouse aunque se suelte fuera de la cuadrícula.
-  useEffect(() => {
-    const stop = () => (mouseSelecting.current = false);
-    window.addEventListener("mouseup", stop);
-    return () => window.removeEventListener("mouseup", stop);
-  });
-
   // ───────────── selección ─────────────
 
   function clamp(cell: Cell): Cell {
@@ -210,17 +238,50 @@ export default function SheetEditor(props: Props) {
     if (extend) {
       setEnd(target);
     } else {
-      setActive(target);
-      setEnd(target);
+      // Una celda combinada se selecciona completa.
+      const block = merged.at(target.r, target.c);
+      setActive(block ? { r: block.r1, c: block.c1 } : target);
+      setEnd(block ? { r: block.r2, c: block.c2 } : target);
     }
-    rowVirtualizer.scrollToIndex(target.r);
-    colVirtualizer.scrollToIndex(target.c);
+    if (target.r < MAX_ROW) rowVirtualizer.scrollToIndex(target.r);
+    if (target.c < MAX_COL) colVirtualizer.scrollToIndex(target.c);
   }
 
   function move(dr: number, dc: number, extend = false) {
-    const from = extend ? end : active;
-    select({ r: from.r + dr, c: from.c + dc }, extend);
+    let from = extend ? end : active;
+    // Al salir de una celda combinada se parte de su borde.
+    const block = !extend && merged.at(active.r, active.c);
+    if (block) from = { r: dr > 0 ? block.r2 : block.r1, c: dc > 0 ? block.c2 : block.c1 };
+    // Saltar filas y columnas ocultas.
+    let next = { r: from.r + dr, c: from.c + dc };
+    for (let i = 0; i < 1000 && rowAxis.size(next.r) === 0 && dr !== 0; i++) next = { ...next, r: next.r + dr };
+    for (let i = 0; i < 1000 && colAxis.size(next.c) === 0 && dc !== 0; i++) next = { ...next, c: next.c + dc };
+    select(next, extend);
   }
+
+  function selectColumns(c1: number, c2: number) {
+    setActive({ r: 0, c: c1 });
+    setEnd({ r: MAX_ROW, c: c2 });
+  }
+
+  function selectRows(r1: number, r2: number) {
+    setActive({ r: r1, c: 0 });
+    setEnd({ r: r2, c: MAX_COL });
+  }
+
+  /** La selección, recortada a la zona con datos (para copiar o borrar columnas enteras). */
+  function usedSelection(): Range {
+    return wholeCols || wholeRows ? clampToData(rows, selection) : selection;
+  }
+
+  // Terminar la selección con el mouse aunque se suelte fuera de la cuadrícula.
+  useEffect(() => {
+    const stop = () => {
+      mouseSelecting.current = null;
+    };
+    window.addEventListener("mouseup", stop);
+    return () => window.removeEventListener("mouseup", stop);
+  }, []);
 
   // ───────────── edición ─────────────
 
@@ -240,11 +301,7 @@ export default function SheetEditor(props: Props) {
     if (dr || dc) move(dr, dc);
     focusGrid();
     if (current.value !== current.original) {
-      await run(async () => {
-        const result = await sheetApi.setCell(sheet, target.r, target.c, current.value);
-        markDirty();
-        return result;
-      });
+      await mutate(() => sheetApi.setCell(sheet, target.r, target.c, current.value));
     }
   }
 
@@ -255,7 +312,7 @@ export default function SheetEditor(props: Props) {
   }
 
   function clearSelection() {
-    mutate(() => sheetApi.clear(sheet, selection));
+    mutate(() => sheetApi.clear(sheet, usedSelection()));
   }
 
   function undo() {
@@ -281,10 +338,11 @@ export default function SheetEditor(props: Props) {
 
   /** Texto separado por tabuladores de la selección, calculado al momento. */
   function selectionText(): string {
+    const range = usedSelection();
     const lines: string[] = [];
-    for (let r = selection.r1; r <= selection.r2; r++) {
+    for (let r = range.r1; r <= range.r2; r++) {
       const cells: string[] = [];
-      for (let c = selection.c1; c <= selection.c2; c++) cells.push(rows[r]?.[c]?.[0] ?? "");
+      for (let c = range.c1; c <= range.c2; c++) cells.push(rows[r]?.[c]?.[0] ?? "");
       lines.push(cells.join("\t"));
     }
     return lines.join("\n");
@@ -293,10 +351,11 @@ export default function SheetEditor(props: Props) {
   async function copySelection(cut: boolean, clipboard?: DataTransfer | null) {
     // Desde el menú Edición, el sistema pide el texto en el momento.
     clipboard?.setData("text/plain", selectionText());
+    const range = usedSelection();
     try {
-      const text = await sheetApi.copy(sheet, selection, cut);
+      const text = await sheetApi.copy(sheet, range, cut);
       if (!clipboard) await writeText(text);
-      setCopied({ range: selection, cut });
+      setCopied({ range, cut });
       showStatus({ text: cut ? "Cortado: elige dónde pegar" : "Copiado" });
     } catch (e) {
       showStatus({ text: String(e), error: true });
@@ -307,7 +366,7 @@ export default function SheetEditor(props: Props) {
     if (!text) return;
     const target = active;
     const lines = text.replace(/\n$/, "").split("\n");
-    const width = Math.max(...lines.map((l) => l.split("\t").length));
+    const width = lines.reduce((max, l) => Math.max(max, l.split("\t").length), 1);
     await mutate(() => sheetApi.paste(sheet, target.r, target.c, text));
     // Selecciona lo pegado: al pegar algo copiado en WEPO, toma el tamaño original.
     const size = copied
@@ -374,8 +433,8 @@ export default function SheetEditor(props: Props) {
       // Si la columna (o fila) es parte de la selección, se ajustan todas las seleccionadas.
       const [from, to] =
         axis === "col"
-          ? index >= selection.c1 && index <= selection.c2 ? [selection.c1, selection.c2] : [index, index]
-          : index >= selection.r1 && index <= selection.r2 ? [selection.r1, selection.r2] : [index, index];
+          ? index >= selection.c1 && index <= selection.c2 && wholeCols ? [selection.c1, selection.c2] : [index, index]
+          : index >= selection.r1 && index <= selection.r2 && wholeRows ? [selection.r1, selection.r2] : [index, index];
       mutate(() =>
         axis === "col" ? sheetApi.columnWidth(sheet, from, to, size) : sheetApi.rowHeight(sheet, from, to, size),
       );
@@ -388,11 +447,170 @@ export default function SheetEditor(props: Props) {
     };
   });
 
+  // ───────────── autollenado ─────────────
+
+  /** Rango que cubriría el autollenado si se suelta en `to`: crece en una sola dirección. */
+  function fillRange(to: Cell): Range {
+    const down = to.r - selection.r2;
+    const up = selection.r1 - to.r;
+    const right = to.c - selection.c2;
+    const left = selection.c1 - to.c;
+    const vertical = Math.max(down, up);
+    const horizontal = Math.max(right, left);
+    if (vertical <= 0 && horizontal <= 0) return selection;
+    if (vertical >= horizontal) {
+      return down > 0 ? { ...selection, r2: to.r } : { ...selection, r1: to.r };
+    }
+    return right > 0 ? { ...selection, c2: to.c } : { ...selection, c1: to.c };
+  }
+
+  async function autofill(target: Range, source: Range = selection) {
+    if (target.r1 === source.r1 && target.r2 === source.r2 && target.c1 === source.c1 && target.c2 === source.c2) return;
+    const ok = await mutate(() => sheetApi.autofill(sheet, source, target));
+    if (ok) {
+      setActive({ r: target.r1, c: target.c1 });
+      setEnd({ r: target.r2, c: target.c2 });
+    }
+  }
+
+  /** Doble clic en la esquina: llena hacia abajo hasta donde llegan los datos de la columna vecina. */
+  function autofillDown() {
+    const neighbor = selection.c1 > 0 ? selection.c1 - 1 : selection.c2 + 1;
+    let last = selection.r2;
+    while ((rows[last + 1]?.[neighbor]?.[0] ?? "") !== "") last++;
+    if (last > selection.r2) autofill({ ...selection, r2: last });
+  }
+
+  useEffect(() => {
+    if (!fillTo) return;
+    const onUp = () => {
+      const target = fillRange(fillTo);
+      setFillTo(null);
+      autofill(target);
+    };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  });
+
+  // ───────────── filas, columnas y estructura ─────────────
+
+  const rowSpan = selection.r2 - selection.r1 + 1;
+  const colSpan = selection.c2 - selection.c1 + 1;
+
+  function insertRows(below: boolean) {
+    const count = wholeRows ? rowSpan : 1;
+    mutate(() => sheetApi.insertRows(sheet, below ? selection.r2 + 1 : selection.r1, count));
+  }
+
+  function insertColumns(right: boolean) {
+    const count = wholeCols ? colSpan : 1;
+    mutate(() => sheetApi.insertColumns(sheet, right ? selection.c2 + 1 : selection.c1, count));
+  }
+
+  function deleteRows() {
+    mutate(() => sheetApi.deleteRows(sheet, selection.r1, rowSpan));
+  }
+
+  function deleteColumns() {
+    mutate(() => sheetApi.deleteColumns(sheet, selection.c1, colSpan));
+  }
+
+  function setRowsHidden(hidden: boolean) {
+    // Para mostrar, se incluyen las filas vecinas: así se recuperan las ocultas entre ellas.
+    const [r1, r2] = hidden ? [selection.r1, selection.r2] : [Math.max(0, selection.r1 - 1), selection.r2 + 1];
+    mutate(() => sheetApi.hideRows(sheet, r1, r2, hidden));
+  }
+
+  function setColumnsHidden(hidden: boolean) {
+    const [c1, c2] = hidden ? [selection.c1, selection.c2] : [Math.max(0, selection.c1 - 1), selection.c2 + 1];
+    mutate(() => sheetApi.hideColumns(sheet, c1, c2, hidden));
+  }
+
+  const activeMerged = merged.at(active.r, active.c);
+
+  function toggleMerge() {
+    if (activeMerged) mutate(() => sheetApi.merge(sheet, activeMerged, false));
+    else mutate(() => sheetApi.merge(sheet, usedSelection(), true));
+  }
+
+  function freezeAtSelection(rowsToo = true, colsToo = true) {
+    mutate(() => sheetApi.freeze(sheet, rowsToo ? active.r : 0, colsToo ? active.c : 0));
+  }
+
+  function unfreeze() {
+    mutate(() => sheetApi.freeze(sheet, 0, 0));
+  }
+
+  // ───────────── ordenar y filtrar ─────────────
+
+  /** Tabla sobre la que se ordena o filtra: la selección, o la región alrededor de la celda. */
+  function dataRegion(col: number): Range {
+    if (isMultiSelection && !wholeCols && !wholeRows) return selection;
+    const start = wholeCols ? { r: firstDataRow(col), c: col } : { r: active.r, c: col };
+    return currentRegion(rows, start);
+  }
+
+  function firstDataRow(col: number): number {
+    const r = rows.findIndex((row) => (row?.[col]?.[0] ?? "") !== "");
+    return r === -1 ? 0 : r;
+  }
+
+  async function sortBy(col: number, ascending: boolean) {
+    const region = dataRegion(col);
+    if (region.r2 <= region.r1) return showStatus({ text: "No hay datos para ordenar aquí" });
+    const header = looksLikeHeader(rows, region);
+    const ok = await mutate(() => sheetApi.sort(sheet, region, [{ col, ascending }], header));
+    if (ok) showStatus({ text: `Ordenado por la columna ${columnName(col)} ${ascending ? "(A → Z)" : "(Z → A)"}` });
+  }
+
+  function openFilter(col: number, x: number, y: number) {
+    const region = filter && col >= filter.region.c1 && col <= filter.region.c2 ? filter.region : dataRegion(col);
+    if (region.r2 <= region.r1) return showStatus({ text: "Pon el cursor dentro de una tabla con encabezados para filtrar" });
+    setFilterMenu({ x, y, col, region });
+  }
+
+  function filterValues(region: Range, col: number): string[] {
+    const values = new Set<string>();
+    for (let r = region.r1 + 1; r <= region.r2; r++) values.add(rows[r]?.[col]?.[0] ?? "");
+    return [...values].sort((a, b) => a.localeCompare(b, "es", { numeric: true }));
+  }
+
+  async function applyFilter(region: Range, col: number, keep: string[] | null) {
+    const ok = await mutate(() => sheetApi.filter(sheet, region, col, keep));
+    if (ok) setFilter(keep ? { region, col, keep } : null);
+  }
+
+  // ───────────── buscar y reemplazar ─────────────
+
+  async function goToMatch(match: FindMatch) {
+    if (match.sheet !== sheet) {
+      setActive({ r: match.row, c: match.col });
+      setEnd({ r: match.row, c: match.col });
+      await run(() => sheetApi.view(match.sheet));
+      requestAnimationFrame(() => select({ r: match.row, c: match.col }));
+      return;
+    }
+    select({ r: match.row, c: match.col });
+  }
+
+  async function replaceAll(query: string, replacement: string, options: FindOptions) {
+    try {
+      const { count, view: next } = await sheetApi.replaceAll(sheet, query, replacement, options);
+      setView(next);
+      if (count) markDirty();
+      return count;
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+      return 0;
+    }
+  }
+
   // ───────────── hojas ─────────────
 
   function resetSelection() {
     setActive({ r: 0, c: 0 });
     setEnd({ r: 0, c: 0 });
+    setFilter(null);
     scrollRef.current?.scrollTo(0, 0);
   }
 
@@ -404,11 +622,7 @@ export default function SheetEditor(props: Props) {
 
   function addSheet() {
     resetSelection();
-    run(async () => {
-      const result = await sheetApi.addSheet();
-      markDirty();
-      return result;
-    });
+    mutate(() => sheetApi.addSheet());
   }
 
   // ───────────── guardar ─────────────
@@ -437,7 +651,8 @@ export default function SheetEditor(props: Props) {
       await run(() => saveTo(path));
       return;
     }
-    const base = (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
+    const base =
+      (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
     const target = await save({
       defaultPath: `${base}.xlsx`,
       filters: [
@@ -454,14 +669,19 @@ export default function SheetEditor(props: Props) {
     await run(() => saveTo(finalPath));
   }
 
-  // ⌘S y ⌘⇧S funcionan desde cualquier parte de la ventana.
-  const saveRef = useRef(saveDocument);
-  saveRef.current = saveDocument;
+  // ⌘S, ⌘⇧S y ⌘F funcionan desde cualquier parte de la ventana.
+  const windowKeys = useRef({ saveDocument, setFindOpen });
+  windowKeys.current = { saveDocument, setFindOpen };
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
-      if (e.metaKey && e.key.toLowerCase() === "s") {
+      if (!e.metaKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "s") {
         e.preventDefault();
-        saveRef.current(e.shiftKey);
+        windowKeys.current.saveDocument(e.shiftKey);
+      } else if (key === "f") {
+        e.preventDefault();
+        windowKeys.current.setFindOpen(true);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -485,6 +705,13 @@ export default function SheetEditor(props: Props) {
         b: () => applyStyle("font.b", String(!activeStyle.b)),
         i: () => applyStyle("font.i", String(!activeStyle.i)),
         u: () => applyStyle("font.u", String(!activeStyle.u)),
+        // ⌘D: copia la primera fila de la selección hacia abajo, como en Excel.
+        d: () => selection.r2 > selection.r1 && autofill(selection, { ...selection, r2: selection.r1 }),
+        a: () => {
+          const region = currentRegion(rows, active);
+          setActive({ r: region.r1, c: region.c1 });
+          setEnd({ r: region.r2, c: region.c2 });
+        },
       };
       if (shortcuts[key]) {
         e.preventDefault();
@@ -559,12 +786,224 @@ export default function SheetEditor(props: Props) {
     }
   }
 
+  // ───────────── menús de clic derecho ─────────────
+
+  function openMenu(e: ReactMouseEvent, kind: Menu["kind"], cell: Cell) {
+    e.preventDefault();
+    // En un encabezado solo cuenta como "dentro" si ya hay columnas (o filas) completas seleccionadas.
+    const inside =
+      kind === "col"
+        ? wholeCols && cell.c >= selection.c1 && cell.c <= selection.c2
+        : kind === "row"
+          ? wholeRows && cell.r >= selection.r1 && cell.r <= selection.r2
+          : cell.r >= selection.r1 && cell.r <= selection.r2 && cell.c >= selection.c1 && cell.c <= selection.c2;
+    // Clic derecho fuera de la selección: primero se selecciona lo que está bajo el mouse.
+    if (!inside) {
+      if (kind === "col") selectColumns(cell.c, cell.c);
+      else if (kind === "row") selectRows(cell.r, cell.r);
+      else select(cell);
+    }
+    setMenu({ x: e.clientX, y: e.clientY, kind });
+  }
+
+  function plural(n: number, one: string, many: string) {
+    return n === 1 ? one : `${n} ${many}`;
+  }
+
+  function menuItems(kind: Menu["kind"]): MenuItem[] {
+    const clipboard: MenuItem[] = [
+      { label: "Cortar", shortcut: "⌘X", action: () => copySelection(true) },
+      { label: "Copiar", shortcut: "⌘C", action: () => copySelection(false) },
+      { label: "Pegar", shortcut: "⌘V", action: pasteFromSystem },
+    ];
+    const rowsCount = wholeRows ? rowSpan : 1;
+    const colsCount = wholeCols ? colSpan : 1;
+    const rowItems: MenuItem[] = [
+      { label: `Insertar ${plural(rowsCount, "fila", "filas")} arriba`, action: () => insertRows(false) },
+      { label: `Insertar ${plural(rowsCount, "fila", "filas")} abajo`, action: () => insertRows(true) },
+      { label: `Eliminar ${plural(rowSpan, "fila", "filas")}`, action: deleteRows },
+    ];
+    const colItems: MenuItem[] = [
+      { label: `Insertar ${plural(colsCount, "columna", "columnas")} a la izquierda`, action: () => insertColumns(false) },
+      { label: `Insertar ${plural(colsCount, "columna", "columnas")} a la derecha`, action: () => insertColumns(true) },
+      { label: `Eliminar ${plural(colSpan, "columna", "columnas")}`, action: deleteColumns },
+    ];
+    const freezeItem: MenuItem =
+      frozenRows || frozenCols
+        ? { label: "Quitar inmovilización", action: unfreeze }
+        : kind === "row"
+          ? { label: `Inmovilizar hasta la fila ${selection.r2 + 1}`, action: () => mutate(() => sheetApi.freeze(sheet, selection.r2 + 1, 0)) }
+          : kind === "col"
+            ? { label: `Inmovilizar hasta la columna ${columnName(selection.c2)}`, action: () => mutate(() => sheetApi.freeze(sheet, 0, selection.c2 + 1)) }
+            : {
+                label: "Inmovilizar filas y columnas anteriores",
+                disabled: active.r === 0 && active.c === 0,
+                action: () => freezeAtSelection(),
+              };
+    const sortItems: MenuItem[] = [
+      { label: "Ordenar de A a Z", action: () => sortBy(active.c, true) },
+      { label: "Ordenar de Z a A", action: () => sortBy(active.c, false) },
+      {
+        label: "Filtrar…",
+        action: () => openFilter(active.c, menu?.x ?? 200, menu?.y ?? 200),
+      },
+    ];
+
+    if (kind === "row") {
+      return [
+        ...clipboard,
+        "separator",
+        ...rowItems,
+        "separator",
+        { label: `Ocultar ${plural(rowSpan, "fila", "filas")}`, action: () => setRowsHidden(true) },
+        { label: "Mostrar filas ocultas", action: () => setRowsHidden(false) },
+        "separator",
+        freezeItem,
+      ];
+    }
+    if (kind === "col") {
+      return [
+        ...clipboard,
+        "separator",
+        ...colItems,
+        "separator",
+        ...sortItems,
+        "separator",
+        { label: `Ocultar ${plural(colSpan, "columna", "columnas")}`, action: () => setColumnsHidden(true) },
+        { label: "Mostrar columnas ocultas", action: () => setColumnsHidden(false) },
+        "separator",
+        freezeItem,
+      ];
+    }
+    return [
+      ...clipboard,
+      "separator",
+      rowItems[0],
+      colItems[0],
+      rowItems[2],
+      colItems[2],
+      "separator",
+      {
+        label: activeMerged ? "Separar celdas" : "Combinar celdas",
+        disabled: !activeMerged && !isMultiSelection,
+        action: toggleMerge,
+      },
+      ...sortItems,
+      "separator",
+      freezeItem,
+      { label: "Borrar contenido", shortcut: "⌫", action: clearSelection },
+    ];
+  }
+
   // ───────────── dibujo ─────────────
 
   const isMultiSelection = selection.r1 !== selection.r2 || selection.c1 !== selection.c2;
   const selectionLabel = isMultiSelection
-    ? `${cellName({ r: selection.r1, c: selection.c1 })}:${cellName({ r: selection.r2, c: selection.c2 })}`
+    ? wholeCols
+      ? selection.c1 === selection.c2
+        ? `Columna ${columnName(selection.c1)}`
+        : `${columnName(selection.c1)}:${columnName(selection.c2)}`
+      : wholeRows
+        ? selection.r1 === selection.r2
+          ? `Fila ${selection.r1 + 1}`
+          : `${selection.r1 + 1}:${selection.r2 + 1}`
+        : `${cellName({ r: selection.r1, c: selection.c1 })}:${cellName({ r: selection.r2, c: selection.c2 })}`
     : cellName(active);
+
+  function cellClasses(r: number, c: number, numeric: boolean, extra = "") {
+    const isActive = r === active.r && c === active.c;
+    const inRange =
+      isMultiSelection && r >= selection.r1 && r <= selection.r2 && c >= selection.c1 && c <= selection.c2;
+    return `cell${numeric ? " number" : ""}${isActive ? " active" : ""}${inRange ? " in-range" : ""}${extra}`;
+  }
+
+  /** Dibuja una celda (o un bloque combinado) en la posición indicada. */
+  function renderCell(r: number, c: number, box: { top: number; left: number; width: number; height: number }, key: string, extra = "") {
+    const [text, numeric, styleId] = rows[r]?.[c] ?? ["", false, 0];
+    const cellStyle = view.styles[styleId] ?? view.styles[0];
+    return (
+      <div
+        key={key}
+        className={cellClasses(r, c, numeric, extra)}
+        style={{ ...cellCss(cellStyle, numeric), ...box }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          mouseSelecting.current = "cells";
+          select({ r, c }, e.shiftKey);
+        }}
+        onMouseEnter={() => {
+          if (fillTo) setFillTo({ r, c });
+          else if (mouseSelecting.current === "cells") setEnd({ r, c });
+        }}
+        onDoubleClick={() => startEditing(input, false)}
+        onContextMenu={(e) => openMenu(e, "cell", { r, c })}
+        title={text}
+      >
+        <span className="cell-text">{text}</span>
+      </div>
+    );
+  }
+
+  function renderColHeader(index: number, left: number, width: number, frozen: boolean) {
+    const filtered = filter && filter.col === index;
+    return (
+      <div
+        key={`ch-${index}`}
+        className={`col-header${index >= selection.c1 && index <= selection.c2 ? " active" : ""}${frozen ? " frozen" : ""}`}
+        style={{ left, width }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          mouseSelecting.current = "cols";
+          if (e.shiftKey) setEnd({ r: MAX_ROW, c: index });
+          else selectColumns(index, index);
+        }}
+        onMouseEnter={() => mouseSelecting.current === "cols" && setEnd({ r: MAX_ROW, c: index })}
+        onContextMenu={(e) => openMenu(e, "col", { r: 0, c: index })}
+      >
+        {columnName(index)}
+        {filtered && (
+          <button
+            type="button"
+            className="filter-indicator"
+            title="Filtro activo: clic para cambiarlo"
+            aria-label={`Filtro de la columna ${columnName(index)}`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => openFilter(index, e.clientX, e.clientY + 12)}
+          >
+            ⏷
+          </button>
+        )}
+        <span className="col-resize" title="Arrastra para cambiar el ancho" onMouseDown={(e) => startResize(e, "col", index)} />
+      </div>
+    );
+  }
+
+  function renderRowHeader(index: number, top: number, height: number, frozen: boolean) {
+    return (
+      <div
+        key={`rh-${index}`}
+        className={`row-header${index >= selection.r1 && index <= selection.r2 ? " active" : ""}${frozen ? " frozen" : ""}`}
+        style={{ top, left: scrollX, height, width: HEADER_WIDTH }}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          mouseSelecting.current = "rows";
+          if (e.shiftKey) setEnd({ r: index, c: MAX_COL });
+          else selectRows(index, index);
+        }}
+        onMouseEnter={() => mouseSelecting.current === "rows" && setEnd({ r: index, c: MAX_COL })}
+        onContextMenu={(e) => openMenu(e, "row", { r: index, c: 0 })}
+      >
+        {index + 1}
+        <span className="row-resize" title="Arrastra para cambiar el alto" onMouseDown={(e) => startResize(e, "row", index)} />
+      </div>
+    );
+  }
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const virtualCols = colVirtualizer.getVirtualItems();
+  const selectionBox = rangeBox(selection);
+  const showFillHandle = !editing && !wholeCols && !wholeRows && selection.r2 < rowCount && selection.c2 < colCount;
+  const editingFrozen = editing && { r: editing.cell.r < frozenRows, c: editing.cell.c < frozenCols };
 
   const toolbarActions = (
     <div className="toolbar-group">
@@ -573,6 +1012,9 @@ export default function SheetEditor(props: Props) {
       </button>
       <button className="btn btn-icon" onClick={redo} title="Rehacer (⌘⇧Z)" aria-label="Rehacer">
         ↷
+      </button>
+      <button className="btn btn-icon" onClick={() => setFindOpen((v) => !v)} title="Buscar y reemplazar (⌘F)" aria-label="Buscar">
+        ⌕
       </button>
       <button className="btn" onClick={() => saveDocument()} title="Guardar (⌘S)">
         Guardar
@@ -591,7 +1033,60 @@ export default function SheetEditor(props: Props) {
         actions={toolbarActions}
       />
 
-      <FormatBar style={activeStyle} onStyle={applyStyle} onBorder={applyBorder} onDone={focusGrid} />
+      <FormatBar style={activeStyle} onStyle={applyStyle} onBorder={applyBorder} onDone={focusGrid}>
+        <Separator />
+        <ToolButton
+          label={activeMerged ? "Separar celdas" : "Combinar celdas"}
+          pressed={Boolean(activeMerged)}
+          onClick={toggleMerge}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="5" width="18" height="14" rx="1.5" />
+            <path d="M7 12h10M14 9l3 3-3 3M10 9l-3 3 3 3" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Ordenar de A a Z" onClick={() => sortBy(active.c, true)}>
+          <span className="fb-text-icon">A↓Z</span>
+        </ToolButton>
+        <ToolButton label="Ordenar de Z a A" onClick={() => sortBy(active.c, false)}>
+          <span className="fb-text-icon">Z↓A</span>
+        </ToolButton>
+        <ToolButton
+          label="Filtrar esta columna"
+          pressed={Boolean(filter)}
+          onClick={() => {
+            const box = scrollRef.current?.getBoundingClientRect();
+            openFilter(active.c, (box?.left ?? 0) + HEADER_WIDTH + colAxis.start(active.c) - scrollX, (box?.top ?? 0) + HEADER_HEIGHT);
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" />
+          </svg>
+        </ToolButton>
+        <ToolButton
+          label={frozenRows || frozenCols ? "Quitar inmovilización" : "Inmovilizar filas y columnas anteriores a la celda"}
+          pressed={Boolean(frozenRows || frozenCols)}
+          onClick={() => (frozenRows || frozenCols ? unfreeze() : freezeAtSelection())}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="3" width="18" height="18" rx="1.5" />
+            <path d="M3 9h18M9 3v18" strokeWidth="2.6" />
+          </svg>
+        </ToolButton>
+      </FormatBar>
+
+      {findOpen && (
+        <FindBar
+          sheet={sheet}
+          version={view}
+          onGo={goToMatch}
+          onReplaceAll={replaceAll}
+          onClose={() => {
+            setFindOpen(false);
+            focusGrid();
+          }}
+        />
+      )}
 
       {showDrawingsNotice && (
         <div className="sheet-notice" role="status">
@@ -620,9 +1115,7 @@ export default function SheetEditor(props: Props) {
           onChange={(e) => {
             const value = e.target.value;
             setEditing((prev) =>
-              prev
-                ? { ...prev, value }
-                : { value, source: "bar", quick: false, cell: active, original: input },
+              prev ? { ...prev, value } : { value, source: "bar", quick: false, cell: active, original: input },
             );
           }}
           onKeyDown={onEditorKeyDown}
@@ -631,87 +1124,108 @@ export default function SheetEditor(props: Props) {
       </div>
 
       <div
-        className="grid-scroll"
+        className={`grid-scroll${fillTo ? " filling" : ""}`}
         ref={scrollRef}
         tabIndex={0}
         onKeyDown={onGridKeyDown}
         aria-label="Cuadrícula de la hoja"
       >
-        <div
-          className="grid-canvas"
-          style={{ width: colVirtualizer.getTotalSize(), height: rowVirtualizer.getTotalSize() }}
-        >
+        <div className="grid-canvas" style={{ width: colVirtualizer.getTotalSize(), height: rowVirtualizer.getTotalSize() }}>
           {/* Encabezados de columna (A, B, C…) fijos arriba */}
           <div className="col-headers" style={{ width: colVirtualizer.getTotalSize() }}>
+            {virtualCols.map((col) => (col.index < frozenCols ? null : renderColHeader(col.index, col.start, col.size, false)))}
+            {Array.from({ length: frozenCols }, (_, c) =>
+              renderColHeader(c, HEADER_WIDTH + colAxis.start(c) + scrollX, colAxis.size(c), true),
+            )}
             <div className="corner" style={{ left: scrollX, width: HEADER_WIDTH }} />
-            {colVirtualizer.getVirtualItems().map((col) => (
-              <div
-                key={col.key}
-                className={`col-header ${col.index >= selection.c1 && col.index <= selection.c2 ? "active" : ""}`}
-                style={{ left: col.start, width: col.size }}
-              >
-                {columnName(col.index)}
-                <span
-                  className="col-resize"
-                  title="Arrastra para cambiar el ancho"
-                  onMouseDown={(e) => startResize(e, "col", col.index)}
-                />
-              </div>
-            ))}
           </div>
 
-          {rowVirtualizer.getVirtualItems().map((row) => (
-            <div key={row.key}>
-              {/* Número de fila fijo a la izquierda */}
-              <div
-                className={`row-header ${row.index >= selection.r1 && row.index <= selection.r2 ? "active" : ""}`}
-                style={{ top: row.start, left: scrollX, height: row.size, width: HEADER_WIDTH }}
-              >
-                {row.index + 1}
+          {/* Celdas normales (las inmovilizadas y combinadas se dibujan aparte) */}
+          {virtualRows.map((row) =>
+            virtualCols.map((col) =>
+              merged.at(row.index, col.index)
+                ? null
+                : renderCell(row.index, col.index, { top: row.start, left: col.start, width: col.size, height: row.size }, `${row.key}-${col.key}`),
+            ),
+          )}
+
+          {/* Celdas combinadas: un bloque por cada rango */}
+          {merged.ranges.map((m) => renderCell(m.r1, m.c1, rangeBox(m), `m-${m.r1}-${m.c1}`, " merged"))}
+
+          {/* Paneles inmovilizados: se desplazan con la hoja para quedarse fijos */}
+          {frozenRows > 0 &&
+            Array.from({ length: frozenRows }, (_, r) =>
+              virtualCols.map((col) =>
+                col.index < frozenCols
+                  ? null
+                  : renderCell(
+                      r,
+                      col.index,
+                      { top: HEADER_HEIGHT + rowAxis.start(r) + scrollY, left: col.start, width: col.size, height: rowAxis.size(r) },
+                      `fr-${r}-${col.key}`,
+                      " frozen",
+                    ),
+              ),
+            )}
+          {frozenCols > 0 &&
+            virtualRows.map((row) =>
+              Array.from({ length: frozenCols }, (_, c) =>
+                row.index < frozenRows
+                  ? null
+                  : renderCell(
+                      row.index,
+                      c,
+                      { top: row.start, left: HEADER_WIDTH + colAxis.start(c) + scrollX, width: colAxis.size(c), height: row.size },
+                      `fc-${row.key}-${c}`,
+                      " frozen",
+                    ),
+              ),
+            )}
+          {frozenRows > 0 &&
+            frozenCols > 0 &&
+            Array.from({ length: frozenRows }, (_, r) =>
+              Array.from({ length: frozenCols }, (_, c) =>
+                renderCell(
+                  r,
+                  c,
+                  {
+                    top: HEADER_HEIGHT + rowAxis.start(r) + scrollY,
+                    left: HEADER_WIDTH + colAxis.start(c) + scrollX,
+                    width: colAxis.size(c),
+                    height: rowAxis.size(r),
+                  },
+                  `fx-${r}-${c}`,
+                  " frozen corner-frozen",
+                ),
+              ),
+            )}
+          {frozenRows > 0 && <div className="frozen-line h" style={{ top: HEADER_HEIGHT + frozenHeight + scrollY - 1 }} />}
+          {frozenCols > 0 && <div className="frozen-line v" style={{ left: HEADER_WIDTH + frozenWidth + scrollX - 1 }} />}
+
+          {/* Números de fila fijos a la izquierda (los de filas inmovilizadas, aparte) */}
+          {virtualRows.map((row) => (row.index < frozenRows ? null : renderRowHeader(row.index, row.start, row.size, false)))}
+          {Array.from({ length: frozenRows }, (_, r) =>
+            renderRowHeader(r, HEADER_HEIGHT + rowAxis.start(r) + scrollY, rowAxis.size(r), true),
+          )}
+
+          {/* Contorno de la selección con la esquina para el autollenado */}
+          {!wholeCols && !wholeRows && (
+            <div className="selection-outline" style={selectionBox}>
+              {showFillHandle && (
                 <span
-                  className="row-resize"
-                  title="Arrastra para cambiar el alto"
-                  onMouseDown={(e) => startResize(e, "row", row.index)}
+                  className="fill-handle"
+                  title="Arrastra para continuar la serie; doble clic para llenar hacia abajo"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setFillTo({ r: selection.r2, c: selection.c2 });
+                  }}
+                  onDoubleClick={autofillDown}
                 />
-              </div>
-              {colVirtualizer.getVirtualItems().map((col) => {
-                const [text, numeric, styleId] = rows[row.index]?.[col.index] ?? ["", false, 0];
-                const cellStyle = view.styles[styleId] ?? view.styles[0];
-                const isActive = row.index === active.r && col.index === active.c;
-                const inRange =
-                  isMultiSelection &&
-                  row.index >= selection.r1 &&
-                  row.index <= selection.r2 &&
-                  col.index >= selection.c1 &&
-                  col.index <= selection.c2;
-                return (
-                  <div
-                    key={col.key}
-                    className={`cell${numeric ? " number" : ""}${isActive ? " active" : ""}${inRange ? " in-range" : ""}`}
-                    style={{
-                      ...cellCss(cellStyle, numeric),
-                      top: row.start,
-                      left: col.start,
-                      width: col.size,
-                      height: row.size,
-                    }}
-                    onMouseDown={(e) => {
-                      if (e.button !== 0) return;
-                      mouseSelecting.current = true;
-                      select({ r: row.index, c: col.index }, e.shiftKey);
-                    }}
-                    onMouseEnter={() => {
-                      if (mouseSelecting.current) setEnd({ r: row.index, c: col.index });
-                    }}
-                    onDoubleClick={() => startEditing(input, false)}
-                    title={text}
-                  >
-                    <span className="cell-text">{text}</span>
-                  </div>
-                );
-              })}
+              )}
             </div>
-          ))}
+          )}
+          {fillTo && <div className="fill-preview" style={rangeBox(fillRange(fillTo))} />}
 
           {editing?.source === "cell" && (
             <input
@@ -721,8 +1235,8 @@ export default function SheetEditor(props: Props) {
               value={editing.value}
               style={{
                 ...cellCss(activeStyle, false),
-                top: HEADER_HEIGHT + rowAxis.start(editing.cell.r),
-                left: HEADER_WIDTH + colAxis.start(editing.cell.c),
+                top: HEADER_HEIGHT + rowAxis.start(editing.cell.r) + (editingFrozen?.r ? scrollY : 0),
+                left: HEADER_WIDTH + colAxis.start(editing.cell.c) + (editingFrozen?.c ? scrollX : 0),
                 height: Math.max(rowAxis.size(editing.cell.r), DEFAULT_ROW_HEIGHT),
                 width: Math.max(colAxis.size(editing.cell.c), editing.value.length * 8 + 20),
                 background: activeStyle.fill ?? undefined,
@@ -739,7 +1253,7 @@ export default function SheetEditor(props: Props) {
           )}
 
           {/* Contorno punteado de lo que se copió o cortó */}
-          {copied && copied.range && <div className="copy-outline" style={rangeBox(copied.range)} />}
+          {copied && <div className="copy-outline" style={rangeBox(copied.range)} />}
 
           {/* Guía mientras se arrastra el borde de una columna o fila */}
           {resize && (
@@ -755,25 +1269,42 @@ export default function SheetEditor(props: Props) {
         </div>
       </div>
 
-      <footer className="sheet-tabs">
-        {view.sheet_names.map((name, i) => (
-          <button
-            key={`${i}-${name}`}
-            className={`btn ${i === sheet ? "active" : ""}`}
-            onClick={() => switchSheet(i)}
-          >
-            {name}
-          </button>
-        ))}
-        <button className="btn btn-icon" onClick={addSheet} title="Agregar hoja" aria-label="Agregar hoja">
-          +
-        </button>
+      <SheetTabs
+        names={view.sheet_names}
+        active={sheet}
+        onSelect={switchSheet}
+        onAdd={addSheet}
+        onRename={(i, name) => mutate(() => sheetApi.renameSheet(i, name))}
+        onDuplicate={(i) => {
+          resetSelection();
+          mutate(() => sheetApi.duplicateSheet(i));
+        }}
+        onDelete={(i) => {
+          resetSelection();
+          mutate(() => sheetApi.deleteSheet(i));
+        }}
+        onMove={(i, to) => mutate(() => sheetApi.moveSheet(i, to))}
+      >
         {status && (
           <span className={`sheet-status ${status.error ? "error" : ""}`} role="status">
             {status.text}
           </span>
         )}
-      </footer>
+      </SheetTabs>
+
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.kind)} onClose={() => setMenu(null)} />}
+
+      {filterMenu && (
+        <FilterMenu
+          x={filterMenu.x}
+          y={filterMenu.y}
+          column={columnName(filterMenu.col)}
+          values={filterValues(filterMenu.region, filterMenu.col)}
+          current={filter && filter.col === filterMenu.col ? filter.keep : null}
+          onApply={(keep) => applyFilter(filterMenu.region, filterMenu.col, keep)}
+          onClose={() => setFilterMenu(null)}
+        />
+      )}
     </div>
   );
 }

@@ -37,7 +37,10 @@ src/                      Interfaz (React + TypeScript)
 
 src-tauri/                Núcleo nativo (Rust)
 ├── src/lib.rs            Comandos que la interfaz puede llamar
-├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar y guardar
+├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar, deshacer y guardar
+├── src/sheets/
+│   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
+│   └── data.rs           Ordenar, filtrar, buscar y reemplazar
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
 ```
 
@@ -69,6 +72,13 @@ cargo test
 | Copiar / cortar / pegar | ⌘C / ⌘X / ⌘V (también con Excel, Numbers y Google Sheets) |
 | Negrita / cursiva / subrayado | ⌘B / ⌘I / ⌘U |
 | Cambiar ancho de columna o alto de fila | Arrastra el borde del encabezado |
+| Seleccionar fila o columna completa | Clic en su número o letra |
+| Menú con más opciones | Clic derecho en una celda, encabezado o pestaña |
+| Autollenar una serie o fórmula | Arrastra la esquina inferior derecha de la selección |
+| Llenar hacia abajo | ⌘D, o doble clic en la esquina de la selección |
+| Seleccionar la tabla actual | ⌘A |
+| Buscar y reemplazar | ⌘F |
+| Renombrar una hoja | Doble clic en su pestaña |
 | Deshacer / rehacer | ⌘Z / ⌘⇧Z |
 | Guardar / guardar como | ⌘S / ⌘⇧S |
 
@@ -79,7 +89,8 @@ cargo test
 - [x] WEPO Sheets: editar celdas, navegar con el teclado, fórmulas, deshacer/rehacer y guardar en .xlsx y .csv
 - [x] WEPO Sheets: formato de celdas (fuente, tamaño, negrita, colores, bordes, alineación, formato de número)
 - [x] WEPO Sheets: copiar, cortar y pegar con fórmulas y formato; ancho de columnas y alto de filas
-- [ ] WEPO Sheets: insertar y eliminar filas/columnas, combinar celdas, inmovilizar paneles, autollenado
+- [x] WEPO Sheets: insertar, eliminar y ocultar filas/columnas, combinar celdas, inmovilizar paneles, autollenado
+- [x] WEPO Sheets: ordenar, filtrar, buscar y reemplazar; renombrar, duplicar, mover y eliminar hojas
 - [ ] WEPO Sheets: autocompletado de fórmulas (ya calcula más de 490 funciones)
 - [ ] WEPO Sheets: gráficas
 - [ ] WEPO Sheets: imágenes

@@ -162,3 +162,67 @@
   white-space: nowrap;
 }
 .sheet-status.error { color: var(--danger); }
+
+/* Encabezados: clic para seleccionar filas o columnas completas */
+.col-header,
+.row-header { cursor: default; overflow: hidden; }
+.col-header.frozen { z-index: 1; }
+.row-header.frozen { z-index: 4; }
+.filter-indicator {
+  position: absolute;
+  right: 6px;
+  padding: 0 3px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #fff;
+  background: var(--kind-accent);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Celdas combinadas y paneles inmovilizados */
+.cell.merged { z-index: 1; background: var(--bg); }
+.cell.frozen { z-index: 2; background: var(--bg); }
+.cell.corner-frozen { z-index: 3; }
+.frozen-line { position: absolute; z-index: 3; background: var(--muted); pointer-events: none; }
+.frozen-line.h { left: 0; right: 0; height: 2px; }
+.frozen-line.v { top: 0; bottom: 0; width: 2px; }
+
+/* Contorno de la selección y esquina de autollenado */
+.selection-outline {
+  position: absolute;
+  z-index: 1;
+  border: 2px solid var(--kind-accent);
+  pointer-events: none;
+}
+.fill-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  background: var(--kind-accent);
+  border: 1px solid var(--bg);
+  cursor: crosshair;
+  pointer-events: auto;
+}
+.fill-preview {
+  position: absolute;
+  z-index: 1;
+  border: 2px dashed var(--kind-accent);
+  pointer-events: none;
+}
+.grid-scroll.filling { cursor: crosshair; }
+
+.sheet-tab-input {
+  width: 120px;
+  height: 26px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--kind-accent);
+  border-radius: 6px;
+  outline: none;
+}

@@ -7,7 +7,8 @@ mod sheets;
 
 use std::sync::Mutex;
 
-use sheets::{Rect, SheetDocument, SheetView};
+use serde::Serialize;
+use sheets::{FindMatch, Rect, SheetDocument, SheetView, SortKey};
 use tauri::State;
 
 /// Hoja de cálculo abierta actualmente (WEPO abre un documento a la vez).
@@ -144,6 +145,159 @@ fn sheet_paste(state: State<OpenSheet>, sheet: u32, row: i32, col: i32, text: St
     with_sheet(&state, sheet, |doc| doc.paste(sheet, row, col, &text))
 }
 
+// ───────────── filas, columnas y estructura ─────────────
+
+#[tauri::command]
+fn sheet_insert_rows(state: State<OpenSheet>, sheet: u32, row: i32, count: i32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.insert_rows(sheet, row, count))
+}
+
+#[tauri::command]
+fn sheet_delete_rows(state: State<OpenSheet>, sheet: u32, row: i32, count: i32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.delete_rows(sheet, row, count))
+}
+
+#[tauri::command]
+fn sheet_insert_columns(state: State<OpenSheet>, sheet: u32, col: i32, count: i32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.insert_columns(sheet, col, count))
+}
+
+#[tauri::command]
+fn sheet_delete_columns(state: State<OpenSheet>, sheet: u32, col: i32, count: i32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.delete_columns(sheet, col, count))
+}
+
+#[tauri::command]
+fn sheet_hide_rows(state: State<OpenSheet>, sheet: u32, row1: i32, row2: i32, hidden: bool) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.set_rows_hidden(sheet, row1, row2, hidden))
+}
+
+#[tauri::command]
+fn sheet_hide_columns(state: State<OpenSheet>, sheet: u32, col1: i32, col2: i32, hidden: bool) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.set_columns_hidden(sheet, col1, col2, hidden))
+}
+
+#[tauri::command]
+fn sheet_merge(state: State<OpenSheet>, sheet: u32, row1: i32, col1: i32, row2: i32, col2: i32, merge: bool) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| if merge { doc.merge(sheet, rect) } else { doc.unmerge(sheet, rect) })
+}
+
+#[tauri::command]
+fn sheet_freeze(state: State<OpenSheet>, sheet: u32, rows: i32, cols: i32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.freeze(sheet, rows, cols))
+}
+
+/// Autollenado: `source` y `target` son [fila1, columna1, fila2, columna2].
+#[tauri::command]
+fn sheet_autofill(state: State<OpenSheet>, sheet: u32, source: [i32; 4], target: [i32; 4]) -> Result<SheetView, String> {
+    let rect = |r: [i32; 4]| Rect { row1: r[0], col1: r[1], row2: r[2], col2: r[3] };
+    with_sheet(&state, sheet, |doc| doc.auto_fill(sheet, rect(source), rect(target)))
+}
+
+// ───────────── pestañas ─────────────
+
+#[tauri::command]
+fn sheet_rename(state: State<OpenSheet>, sheet: u32, name: String) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.rename_sheet(sheet, &name))
+}
+
+/// Elimina una hoja y devuelve la que queda a su izquierda.
+#[tauri::command]
+fn sheet_delete(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet.saturating_sub(1), |doc| doc.delete_sheet(sheet))
+}
+
+#[tauri::command]
+fn sheet_duplicate(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let copy = doc.duplicate_sheet(sheet)?;
+    doc.view(copy)
+}
+
+#[tauri::command]
+fn sheet_move(state: State<OpenSheet>, sheet: u32, to: u32) -> Result<SheetView, String> {
+    with_sheet(&state, to, |doc| doc.move_sheet(sheet, to))
+}
+
+// ───────────── datos ─────────────
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_sort(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    keys: Vec<SortKey>,
+    header: bool,
+) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| doc.sort(sheet, rect, &keys, header))
+}
+
+/// Filtra las filas debajo del encabezado: solo quedan visibles las que en
+/// `col` tienen alguno de los valores de `keep`. Sin `keep`, quita el filtro.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_filter(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    col: i32,
+    keep: Option<Vec<String>>,
+) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| match &keep {
+        Some(keep) => doc.filter(sheet, rect, col, keep),
+        None => doc.clear_filter(sheet, rect),
+    })
+}
+
+/// `case`: distinguir mayúsculas; `whole`: celda completa; `all`: todas las hojas.
+#[tauri::command]
+fn sheet_find(
+    state: State<OpenSheet>,
+    sheet: u32,
+    query: String,
+    case: bool,
+    whole: bool,
+    all: bool,
+) -> Result<Vec<FindMatch>, String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.find(sheet, &query, case, whole, all)
+}
+
+#[derive(Serialize)]
+struct ReplaceResult {
+    count: usize,
+    view: SheetView,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_replace(
+    state: State<OpenSheet>,
+    sheet: u32,
+    query: String,
+    replacement: String,
+    case: bool,
+    whole: bool,
+    all: bool,
+) -> Result<ReplaceResult, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let count = doc.replace_all(sheet, &query, &replacement, case, whole, all)?;
+    Ok(ReplaceResult { count, view: doc.view(sheet)? })
+}
+
 #[tauri::command]
 fn sheet_undo(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
     with_sheet(&state, sheet, |doc| doc.undo())
@@ -191,6 +345,23 @@ pub fn run() {
             sheet_row_height,
             sheet_copy,
             sheet_paste,
+            sheet_insert_rows,
+            sheet_delete_rows,
+            sheet_insert_columns,
+            sheet_delete_columns,
+            sheet_hide_rows,
+            sheet_hide_columns,
+            sheet_merge,
+            sheet_freeze,
+            sheet_autofill,
+            sheet_rename,
+            sheet_delete,
+            sheet_duplicate,
+            sheet_move,
+            sheet_sort,
+            sheet_filter,
+            sheet_find,
+            sheet_replace,
             sheet_undo,
             sheet_redo,
             sheet_add,

@@ -21,6 +21,11 @@ use serde::Serialize;
 
 use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 
+mod data;
+mod structure;
+
+pub use data::{FindMatch, SortKey};
+
 const LOCALE: &str = "en";
 const TIMEZONE: &str = "UTC";
 const LANGUAGE: &str = "en";
@@ -38,6 +43,10 @@ pub struct SheetDocument {
     has_drawings: bool,
     /// Lo último que se copió dentro de WEPO (con fórmulas y formato).
     clipboard: Option<InternalClipboard>,
+    /// Cuántos pasos del motor forman cada acción del usuario. Ordenar o
+    /// reemplazar todo son muchos pasos, pero ⌘Z los deshace de una vez.
+    history: Vec<usize>,
+    future: Vec<usize>,
 }
 
 struct InternalClipboard {
@@ -88,6 +97,14 @@ pub struct SheetView {
     /// Filas con alto distinto al normal: (fila desde 1, píxeles).
     pub row_heights: Vec<(i32, f64)>,
     pub has_drawings: bool,
+    /// Celdas combinadas: (fila, columna, ancho, alto), desde 1.
+    pub merged: Vec<(i32, i32, i32, i32)>,
+    /// Filas y columnas inmovilizadas (siempre visibles al desplazarse).
+    pub frozen_rows: i32,
+    pub frozen_cols: i32,
+    /// Filas y columnas ocultas, desde 1.
+    pub hidden_rows: Vec<i32>,
+    pub hidden_cols: Vec<i32>,
 }
 
 fn extension(path: &str) -> String {
@@ -108,7 +125,7 @@ fn xlsx_has_drawings(path: &str) -> bool {
 
 impl SheetDocument {
     fn wrap(model: UserModel<'static>) -> Self {
-        Self { model, has_drawings: false, clipboard: None }
+        Self { model, has_drawings: false, clipboard: None, history: Vec::new(), future: Vec::new() }
     }
 
     /// Libro vacío con una hoja.
@@ -270,8 +287,13 @@ impl SheetDocument {
 
         // Anchos de columna y altos de fila que no son los normales.
         let mut col_widths = Vec::new();
+        let mut hidden_cols = Vec::new();
         for col in &worksheet.cols {
             for c in col.min..=col.max.min(MAX_SCANNED_COLUMN) {
+                if col.hidden {
+                    hidden_cols.push(c);
+                    continue;
+                }
                 let width = model.get_column_width(sheet, c)?;
                 if (width - DEFAULT_COLUMN_WIDTH).abs() > 0.5 {
                     col_widths.push((c, width));
@@ -279,12 +301,23 @@ impl SheetDocument {
             }
         }
         let mut row_heights = Vec::new();
+        let mut hidden_rows = Vec::new();
         for row in &worksheet.rows {
+            if row.hidden {
+                hidden_rows.push(row.r);
+                continue;
+            }
             let height = model.get_row_height(sheet, row.r)?;
             if (height - DEFAULT_ROW_HEIGHT).abs() > 0.5 {
                 row_heights.push((row.r, height));
             }
         }
+        let merged = self
+            .model
+            .get_merged_cells(sheet)?
+            .into_iter()
+            .map(|m| (m.row, m.column, m.width, m.height))
+            .collect();
 
         Ok(SheetView {
             sheet_names: self.sheet_names(),
@@ -294,6 +327,11 @@ impl SheetDocument {
             col_widths,
             row_heights,
             has_drawings: self.has_drawings,
+            merged,
+            frozen_rows: self.model.get_frozen_rows_count(sheet)?,
+            frozen_cols: self.model.get_frozen_columns_count(sheet)?,
+            hidden_rows,
+            hidden_cols,
         })
     }
 
@@ -310,25 +348,72 @@ impl SheetDocument {
         self.model.get_cell_content(sheet, row, col)
     }
 
+    // ───────────── historial ─────────────
+
+    /// Registra una acción del usuario formada por `steps` pasos del motor.
+    fn record(&mut self, steps: usize) {
+        if steps > 0 {
+            self.history.push(steps);
+            self.future.clear();
+        }
+    }
+
+    /// Ejecuta un solo paso del motor y lo registra como una acción.
+    fn step<T>(&mut self, action: impl FnOnce(&mut UserModel<'static>) -> Result<T, String>) -> Result<T, String> {
+        let result = action(&mut self.model)?;
+        self.record(1);
+        Ok(result)
+    }
+
+    /// Ejecuta varios pasos como una sola acción: si uno falla, deshace los anteriores.
+    fn transaction(
+        &mut self,
+        action: impl FnOnce(&mut Self, &mut usize) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut steps = 0;
+        match action(self, &mut steps) {
+            Ok(()) => {
+                self.record(steps);
+                Ok(())
+            }
+            Err(e) => {
+                for _ in 0..steps {
+                    let _ = self.model.undo();
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Escribe en una celda (texto, número o fórmula) y recalcula el libro.
     pub fn set_cell(&mut self, sheet: u32, row: i32, col: i32, input: &str) -> Result<(), String> {
         if input.is_empty() {
             let rect = Rect { row1: row, col1: col, row2: row, col2: col };
             return self.clear_range(sheet, rect);
         }
-        self.model.set_user_input(sheet, row, col, input)
+        self.step(|m| m.set_user_input(sheet, row, col, input))
     }
 
     pub fn clear_range(&mut self, sheet: u32, rect: Rect) -> Result<(), String> {
-        self.model.range_clear_contents(&rect.area(sheet))
+        self.step(|m| m.range_clear_contents(&rect.area(sheet)))
     }
 
     pub fn undo(&mut self) -> Result<(), String> {
-        self.model.undo()
+        let Some(steps) = self.history.pop() else { return Ok(()) };
+        for _ in 0..steps {
+            self.model.undo()?;
+        }
+        self.future.push(steps);
+        Ok(())
     }
 
     pub fn redo(&mut self) -> Result<(), String> {
-        self.model.redo()
+        let Some(steps) = self.future.pop() else { return Ok(()) };
+        for _ in 0..steps {
+            self.model.redo()?;
+        }
+        self.history.push(steps);
+        Ok(())
     }
 
     /// Agrega una hoja al final con un nombre libre (Hoja2, Hoja3…) y devuelve su índice.
@@ -338,9 +423,14 @@ impl SheetDocument {
             .map(|n| format!("Hoja{n}"))
             .find(|candidate| !names.contains(candidate))
             .unwrap_or_default();
-        self.model.new_sheet()?;
         let index = names.len() as u32;
-        self.model.rename_sheet(index, &name)?;
+        self.transaction(|doc, steps| {
+            doc.model.new_sheet()?;
+            *steps += 1;
+            doc.model.rename_sheet(index, &name)?;
+            *steps += 1;
+            Ok(())
+        })?;
         Ok(index)
     }
 
@@ -356,7 +446,7 @@ impl SheetDocument {
         if path == "font.name" {
             return self.set_font_name(&area, value);
         }
-        self.model.update_range_style(&area, path, value)
+        self.step(|m| m.update_range_style(&area, path, value))
     }
 
     /// Para cambiar la fuente copiamos el estilo de cada celda con el nombre
@@ -373,7 +463,7 @@ impl SheetDocument {
             styles.push(line);
         }
         self.select(area.sheet, area.row, area.column, area.row + area.height - 1, area.column + area.width - 1)?;
-        self.model.on_paste_styles(&styles)
+        self.step(|m| m.on_paste_styles(&styles))
     }
 
     /// Bordes de un rango. `kind`: all, outer, inner, top, bottom, left, right, none.
@@ -385,17 +475,17 @@ impl SheetDocument {
         };
         let json = serde_json::json!({ "item": item, "type": border_type(kind)? });
         let border: BorderArea = serde_json::from_value(json).map_err(|e| e.to_string())?;
-        self.model.set_area_with_border(&rect.area(sheet), &border)
+        self.step(|m| m.set_area_with_border(&rect.area(sheet), &border))
     }
 
     /// Ancho de una o varias columnas, en píxeles.
     pub fn set_column_width(&mut self, sheet: u32, col1: i32, col2: i32, width: f64) -> Result<(), String> {
-        self.model.set_columns_width(sheet, col1.min(col2), col1.max(col2), width.max(8.0))
+        self.step(|m| m.set_columns_width(sheet, col1.min(col2), col1.max(col2), width.max(8.0)))
     }
 
     /// Alto de una o varias filas, en píxeles.
     pub fn set_row_height(&mut self, sheet: u32, row1: i32, row2: i32, height: f64) -> Result<(), String> {
-        self.model.set_rows_height(sheet, row1.min(row2), row1.max(row2), height.max(8.0))
+        self.step(|m| m.set_rows_height(sheet, row1.min(row2), row1.max(row2), height.max(8.0)))
     }
 
     // ───────────── portapapeles ─────────────
@@ -406,24 +496,34 @@ impl SheetDocument {
         self.model.set_selected_range(row1, col1, row2, col2)
     }
 
-    /// Copia (o corta) un rango. Devuelve el texto separado por tabuladores,
-    /// que es lo que entienden Excel, Numbers y Google Sheets al pegar.
-    pub fn copy(&mut self, sheet: u32, rect: Rect, is_cut: bool) -> Result<String, String> {
-        let area = rect.area(sheet);
-        self.select(sheet, area.row, area.column, area.row + area.height - 1, area.column + area.width - 1)?;
+    /// Toma una "foto" de un rango con fórmulas y formato, lista para pegarla.
+    /// Devuelve el texto separado por tabuladores, el rango y los datos.
+    fn capture(
+        &mut self,
+        sheet: u32,
+        row1: i32,
+        col1: i32,
+        row2: i32,
+        col2: i32,
+    ) -> Result<(String, (i32, i32, i32, i32), ClipboardData), String> {
+        self.select(sheet, row1, col1, row2, col2)?;
         // Los campos del portapapeles de IronCalc son privados, pero se
         // pueden serializar: así recuperamos los datos para pegarlos después.
         let copied = self.model.copy_to_clipboard()?;
         let mut value = serde_json::to_value(&copied).map_err(|e| e.to_string())?;
-        let field = |v: &mut serde_json::Value, key: &str| v.get_mut(key).map(serde_json::Value::take);
+        let mut field = |key: &str| value.get_mut(key).map(serde_json::Value::take).unwrap_or_default();
+        let text = serde_json::from_value(field("csv")).map_err(|e| e.to_string())?;
+        let range = serde_json::from_value(field("range")).map_err(|e| e.to_string())?;
+        let data = serde_json::from_value(field("data")).map_err(|e| e.to_string())?;
+        Ok((text, range, data))
+    }
 
-        let text: String = serde_json::from_value(field(&mut value, "csv").unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-        let data: ClipboardData = serde_json::from_value(field(&mut value, "data").unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-        let range: (i32, i32, i32, i32) = serde_json::from_value(field(&mut value, "range").unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-
+    /// Copia (o corta) un rango. Devuelve el texto separado por tabuladores,
+    /// que es lo que entienden Excel, Numbers y Google Sheets al pegar.
+    pub fn copy(&mut self, sheet: u32, rect: Rect, is_cut: bool) -> Result<String, String> {
+        let area = rect.area(sheet);
+        let (text, range, data) =
+            self.capture(sheet, area.row, area.column, area.row + area.height - 1, area.column + area.width - 1)?;
         self.clipboard = Some(InternalClipboard { text: text.clone(), sheet, range, data, is_cut });
         Ok(text)
     }
@@ -441,7 +541,7 @@ impl SheetDocument {
             let height = clip.range.2 - clip.range.0;
             let width = clip.range.3 - clip.range.1;
             self.select(sheet, row, col, row + height, col + width)?;
-            self.model.paste_from_clipboard(clip.sheet, clip.range, &clip.data, clip.is_cut)?;
+            self.step(|m| m.paste_from_clipboard(clip.sheet, clip.range, &clip.data, clip.is_cut))?;
             // Lo cortado solo se pega una vez; lo copiado se puede pegar de nuevo.
             if !clip.is_cut {
                 self.clipboard = Some(clip);
@@ -453,7 +553,7 @@ impl SheetDocument {
         let columns = text.lines().map(|l| l.split('\t').count()).max().unwrap_or(1) as i32;
         let rect = Rect { row1: row, col1: col, row2: row + lines - 1, col2: col + columns - 1 };
         self.select(sheet, rect.row1, rect.col1, rect.row2, rect.col2)?;
-        self.model.paste_csv_string(&rect.area(sheet), text)
+        self.step(|m| m.paste_csv_string(&rect.area(sheet), text))
     }
 
     /// Guarda en .xlsx (todo el libro) o .csv (solo la hoja indicada).
@@ -655,6 +755,168 @@ mod tests {
         doc.paste(0, 8, 4, &text).unwrap();
         assert_eq!(doc.cell_input(0, 8, 4).unwrap(), "uno");
         assert_eq!(doc.cell_input(0, 5, 1).unwrap(), "");
+    }
+
+    fn text(doc: &SheetDocument, row: usize, col: usize) -> String {
+        doc.view(0).unwrap().rows.get(row - 1).and_then(|r| r.get(col - 1)).map(|c| c.0.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn filas_columnas_y_estructura() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_cell(0, 1, 1, "10").unwrap();
+        doc.set_cell(0, 2, 1, "20").unwrap();
+        doc.set_cell(0, 3, 1, "=SUM(A1:A2)").unwrap();
+
+        // Insertar una fila en medio amplía la fórmula, como en Excel.
+        doc.insert_rows(0, 2, 1).unwrap();
+        assert_eq!(doc.cell_input(0, 4, 1).unwrap(), "=SUM(A1:A3)");
+        doc.set_cell(0, 2, 1, "5").unwrap();
+        assert_eq!(text(&doc, 4, 1), "35");
+        doc.delete_rows(0, 2, 1).unwrap();
+        assert_eq!(text(&doc, 3, 1), "30");
+
+        doc.insert_columns(0, 1, 1).unwrap();
+        assert_eq!(doc.cell_input(0, 3, 2).unwrap(), "=SUM(B1:B2)");
+        doc.delete_columns(0, 1, 1).unwrap();
+
+        doc.set_rows_hidden(0, 2, 2, true).unwrap();
+        doc.set_columns_hidden(0, 3, 4, true).unwrap();
+        let view = doc.view(0).unwrap();
+        assert_eq!(view.hidden_rows, vec![2]);
+        assert_eq!(view.hidden_cols, vec![3, 4]);
+        doc.set_rows_hidden(0, 2, 2, false).unwrap();
+        assert!(doc.view(0).unwrap().hidden_rows.is_empty());
+
+        doc.merge(0, rect(5, 1, 5, 3)).unwrap();
+        assert_eq!(doc.view(0).unwrap().merged, vec![(5, 1, 3, 1)]);
+        doc.unmerge(0, rect(5, 1, 5, 1)).unwrap();
+        assert!(doc.view(0).unwrap().merged.is_empty());
+
+        doc.freeze(0, 1, 2).unwrap();
+        let view = doc.view(0).unwrap();
+        assert_eq!((view.frozen_rows, view.frozen_cols), (1, 2));
+        doc.undo().unwrap(); // un solo ⌘Z quita filas y columnas inmovilizadas
+        let view = doc.view(0).unwrap();
+        assert_eq!((view.frozen_rows, view.frozen_cols), (0, 0));
+    }
+
+    #[test]
+    fn ocultar_junto_a_celdas_combinadas() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_cell(0, 1, 1, "Título").unwrap();
+        doc.merge(0, rect(1, 1, 1, 5)).unwrap(); // A1:E1
+        doc.set_cell(0, 3, 1, "Bloque").unwrap();
+        doc.merge(0, rect(3, 1, 5, 1)).unwrap(); // A3:A5
+
+        doc.set_columns_hidden(0, 2, 2, true).unwrap();
+        let view = doc.view(0).unwrap();
+        assert_eq!(view.hidden_cols, vec![2]);
+        assert_eq!(view.merged.len(), 2, "el título sigue combinado");
+
+        doc.set_rows_hidden(0, 3, 3, true).unwrap();
+        assert_eq!(doc.view(0).unwrap().hidden_rows, vec![3]);
+
+        // Cada acción se deshace con un solo ⌘Z.
+        doc.undo().unwrap();
+        assert!(doc.view(0).unwrap().hidden_rows.is_empty());
+        doc.undo().unwrap();
+        let view = doc.view(0).unwrap();
+        assert!(view.hidden_cols.is_empty());
+        assert_eq!(view.merged.len(), 2);
+        assert_eq!(doc.cell_input(0, 1, 1).unwrap(), "Título");
+    }
+
+    #[test]
+    fn pestanas() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.rename_sheet(0, "Ventas").unwrap();
+        doc.set_cell(0, 1, 1, "dato").unwrap();
+        let copy = doc.duplicate_sheet(0).unwrap();
+        assert_eq!(copy, 1);
+        assert_eq!(doc.sheet_names().len(), 2);
+        assert_eq!(doc.cell_input(copy, 1, 1).unwrap(), "dato");
+        doc.add_sheet().unwrap();
+        let names = doc.sheet_names();
+        doc.move_sheet(2, 0).unwrap();
+        assert_eq!(doc.sheet_names()[0], names[2]);
+        doc.delete_sheet(0).unwrap();
+        assert_eq!(doc.sheet_names()[0], "Ventas");
+        assert!(doc.rename_sheet(0, "  ").is_err());
+        let mut single = SheetDocument::new_empty().unwrap();
+        assert!(single.delete_sheet(0).is_err(), "no se puede borrar la única hoja");
+    }
+
+    #[test]
+    fn autollenado() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_cell(0, 1, 1, "1").unwrap();
+        doc.set_cell(0, 2, 1, "2").unwrap();
+        doc.set_cell(0, 1, 2, "=A1*10").unwrap();
+        doc.auto_fill(0, rect(1, 1, 2, 1), rect(1, 1, 5, 1)).unwrap();
+        assert_eq!((1..=5).map(|r| text(&doc, r, 1)).collect::<Vec<_>>(), ["1", "2", "3", "4", "5"]);
+        doc.auto_fill(0, rect(1, 2, 1, 2), rect(1, 2, 5, 2)).unwrap();
+        assert_eq!(doc.cell_input(0, 5, 2).unwrap(), "=A5*10");
+        assert_eq!(text(&doc, 5, 2), "50");
+        doc.set_cell(0, 1, 4, "lunes").unwrap();
+        doc.auto_fill(0, rect(1, 4, 1, 4), rect(1, 4, 1, 6)).unwrap();
+        assert!(text(&doc, 1, 6).len() > 0, "la serie de días también avanza a la derecha");
+    }
+
+    #[test]
+    fn ordenar_filtrar_buscar_y_reemplazar() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        for (r, (name, qty)) in [("Producto", "Cantidad"), ("Pera", "3"), ("manzana", "10"), ("Uva", ""), ("Kiwi", "7")]
+            .iter()
+            .enumerate()
+        {
+            doc.set_cell(0, r as i32 + 1, 1, name).unwrap();
+            if !qty.is_empty() {
+                doc.set_cell(0, r as i32 + 1, 2, qty).unwrap();
+            }
+            doc.set_cell(0, r as i32 + 1, 3, &format!("=B{}*2", r + 1)).unwrap();
+        }
+        doc.set_style(0, rect(2, 1, 2, 1), "font.b", "true").unwrap(); // Pera en negrita
+
+        // Por cantidad, de mayor a menor; la celda vacía va al final.
+        let by_qty = [SortKey { col: 2, ascending: false }];
+        doc.sort(0, rect(1, 1, 5, 3), &by_qty, true).unwrap();
+        let names: Vec<_> = (1..=5).map(|r| text(&doc, r, 1)).collect();
+        assert_eq!(names, ["Producto", "manzana", "Kiwi", "Pera", "Uva"]);
+        // Las fórmulas viajan con su fila y el formato también.
+        assert_eq!(doc.cell_input(0, 2, 3).unwrap(), "=B2*2");
+        assert_eq!(text(&doc, 2, 3), "20");
+        assert!(style_of(&doc, 4, 1).b);
+
+        // Por nombre, sin importar mayúsculas.
+        doc.sort(0, rect(1, 1, 5, 3), &[SortKey { col: 1, ascending: true }], true).unwrap();
+        let names: Vec<_> = (2..=5).map(|r| text(&doc, r, 1)).collect();
+        assert_eq!(names, ["Kiwi", "manzana", "Pera", "Uva"]);
+
+        // Un solo ⌘Z deshace el ordenamiento completo.
+        doc.undo().unwrap();
+        let names: Vec<_> = (2..=5).map(|r| text(&doc, r, 1)).collect();
+        assert_eq!(names, ["manzana", "Kiwi", "Pera", "Uva"]);
+        doc.redo().unwrap();
+
+        // Filtrar deja visibles solo Kiwi y Uva (filas 2 y 5).
+        doc.filter(0, rect(1, 1, 5, 3), 1, &["Kiwi".into(), "Uva".into()]).unwrap();
+        assert_eq!(doc.view(0).unwrap().hidden_rows, vec![3, 4]);
+        doc.clear_filter(0, rect(1, 1, 5, 3)).unwrap();
+        assert!(doc.view(0).unwrap().hidden_rows.is_empty());
+
+        // Buscar en valores y fórmulas.
+        let found = doc.find(0, "kiwi", false, false, false).unwrap();
+        assert_eq!(found, vec![FindMatch { sheet: 0, row: 2, col: 1 }]);
+        assert!(doc.find(0, "kiwi", true, false, false).unwrap().is_empty());
+        assert_eq!(doc.find(0, "B3", false, false, false).unwrap().len(), 1);
+
+        // Reemplazar todo, también dentro de fórmulas, y deshacer de una vez.
+        let count = doc.replace_all(0, "*2", "*3", false, false, false).unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(text(&doc, 3, 3), "30");
+        doc.undo().unwrap();
+        assert_eq!(text(&doc, 3, 3), "20");
     }
 
     #[test]

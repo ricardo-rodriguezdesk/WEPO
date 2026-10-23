@@ -43,7 +43,17 @@ export type SheetView = {
   row_heights: [number, number][];
   /** El archivo tenía gráficas o imágenes que WEPO todavía no conserva. */
   has_drawings: boolean;
+  /** Celdas combinadas: [fila, columna, ancho, alto], desde 1. */
+  merged: [number, number, number, number][];
+  frozen_rows: number;
+  frozen_cols: number;
+  /** Filas y columnas ocultas, desde 1. */
+  hidden_rows: number[];
+  hidden_cols: number[];
 };
+
+export type FindMatch = { sheet: number; row: number; col: number };
+export type FindOptions = { case: boolean; whole: boolean; all: boolean };
 
 /** Rango en el formato que esperan los comandos de Rust (base 1). */
 function rect(range: Range) {
@@ -83,6 +93,55 @@ export const sheetApi = {
 
   paste: (sheet: number, row: number, col: number, text: string) =>
     invoke<SheetView>("sheet_paste", { sheet, row: row + 1, col: col + 1, text }),
+
+  // Filas y columnas (índices desde 0 en la interfaz)
+  insertRows: (sheet: number, row: number, count: number) =>
+    invoke<SheetView>("sheet_insert_rows", { sheet, row: row + 1, count }),
+  deleteRows: (sheet: number, row: number, count: number) =>
+    invoke<SheetView>("sheet_delete_rows", { sheet, row: row + 1, count }),
+  insertColumns: (sheet: number, col: number, count: number) =>
+    invoke<SheetView>("sheet_insert_columns", { sheet, col: col + 1, count }),
+  deleteColumns: (sheet: number, col: number, count: number) =>
+    invoke<SheetView>("sheet_delete_columns", { sheet, col: col + 1, count }),
+  hideRows: (sheet: number, row1: number, row2: number, hidden: boolean) =>
+    invoke<SheetView>("sheet_hide_rows", { sheet, row1: row1 + 1, row2: row2 + 1, hidden }),
+  hideColumns: (sheet: number, col1: number, col2: number, hidden: boolean) =>
+    invoke<SheetView>("sheet_hide_columns", { sheet, col1: col1 + 1, col2: col2 + 1, hidden }),
+  merge: (sheet: number, range: Range, merge: boolean) =>
+    invoke<SheetView>("sheet_merge", { sheet, ...rect(range), merge }),
+  /** Deja fijas las primeras `rows` filas y `cols` columnas (0 para quitar). */
+  freeze: (sheet: number, rows: number, cols: number) => invoke<SheetView>("sheet_freeze", { sheet, rows, cols }),
+  autofill: (sheet: number, source: Range, target: Range) =>
+    invoke<SheetView>("sheet_autofill", {
+      sheet,
+      source: [source.r1 + 1, source.c1 + 1, source.r2 + 1, source.c2 + 1],
+      target: [target.r1 + 1, target.c1 + 1, target.r2 + 1, target.c2 + 1],
+    }),
+
+  // Pestañas
+  renameSheet: (sheet: number, name: string) => invoke<SheetView>("sheet_rename", { sheet, name }),
+  deleteSheet: (sheet: number) => invoke<SheetView>("sheet_delete", { sheet }),
+  duplicateSheet: (sheet: number) => invoke<SheetView>("sheet_duplicate", { sheet }),
+  moveSheet: (sheet: number, to: number) => invoke<SheetView>("sheet_move", { sheet, to }),
+
+  // Datos
+  /** Ordena por una o varias columnas (índices desde 0). */
+  sort: (sheet: number, range: Range, keys: { col: number; ascending: boolean }[], header: boolean) =>
+    invoke<SheetView>("sheet_sort", {
+      sheet,
+      ...rect(range),
+      keys: keys.map((k) => ({ col: k.col + 1, ascending: k.ascending })),
+      header,
+    }),
+  /** Deja visibles solo las filas cuyo valor en `col` está en `keep`; `null` quita el filtro. */
+  filter: (sheet: number, range: Range, col: number, keep: string[] | null) =>
+    invoke<SheetView>("sheet_filter", { sheet, ...rect(range), col: col + 1, keep }),
+  find: async (sheet: number, query: string, options: FindOptions): Promise<FindMatch[]> => {
+    const found = await invoke<FindMatch[]>("sheet_find", { sheet, query, ...options });
+    return found.map((m) => ({ sheet: m.sheet, row: m.row - 1, col: m.col - 1 }));
+  },
+  replaceAll: (sheet: number, query: string, replacement: string, options: FindOptions) =>
+    invoke<{ count: number; view: SheetView }>("sheet_replace", { sheet, query, replacement, ...options }),
 
   undo: (sheet: number) => invoke<SheetView>("sheet_undo", { sheet }),
   redo: (sheet: number) => invoke<SheetView>("sheet_redo", { sheet }),
