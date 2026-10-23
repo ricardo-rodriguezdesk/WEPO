@@ -7,7 +7,7 @@ import EditorToolbar from "../../components/EditorToolbar";
 import ContextMenu from "../../components/ContextMenu";
 import type { MenuItem } from "../../components/ContextMenu";
 import { extensionOf, fileNameOf } from "../../lib/documents";
-import type { BorderKind, Cell, FindMatch, FindOptions, Range, SheetView } from "../../lib/spreadsheet";
+import type { BorderKind, Cell, Decoration, FindMatch, FindOptions, ListSource, Range, SheetView } from "../../lib/spreadsheet";
 import { cellName, columnName, rangeOf, sheetApi } from "../../lib/spreadsheet";
 import FormatBar, { Separator, ToolButton } from "./FormatBar";
 import FindBar from "./FindBar";
@@ -15,6 +15,9 @@ import FilterMenu from "./FilterMenu";
 import SheetTabs from "./SheetTabs";
 import { cellCss } from "./cellStyle";
 import FormulaInput from "./FormulaInput";
+import ConditionalFormatDialog from "./ConditionalFormatDialog";
+import ValidationDialog from "./ValidationDialog";
+import { lineHeight, textWidth, wrappedLines } from "./measure";
 import FormulaAssist from "./FormulaAssist";
 import type { FunctionInfo } from "./functions";
 import { findFunction, suggestFunctions } from "./functions";
@@ -24,6 +27,30 @@ import { getFormulaLanguage, setFormulaLanguage } from "../../lib/preferences";
 import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH } from "./layout";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
+
+/** Íconos del formato condicional (nombres de IronCalc) dibujados con caracteres. */
+const ICON_GLYPHS: Record<string, string> = {
+  ArrowUp: "▲",
+  ArrowRight: "▶",
+  ArrowDown: "▼",
+  ArrowAngleUp: "◥",
+  ArrowAngleDown: "◢",
+  Circle: "●",
+  TriangleUp: "▲",
+  TriangleDown: "▼",
+  TriangleUpFilled: "▲",
+  TriangleDownFilled: "▼",
+  FlatRectangle: "▬",
+  Rhombus: "◆",
+  Flag: "⚑",
+  Check: "✔",
+  Cross: "✖",
+  Exclamation: "!",
+  Star: "★",
+  Heart: "♥",
+  ThumbsUp: "👍",
+  ThumbsDown: "👎",
+};
 
 const MIN_ROWS = 100;
 const MIN_COLS = 26;
@@ -96,6 +123,8 @@ export default function SheetEditor(props: Props) {
   const [assistDismissed, setAssistDismissed] = useState(false);
   const [pointing, setPointing] = useState<Pointing | null>(null);
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
+  const [dialog, setDialog] = useState<"conditional" | "validation" | null>(null);
+  const [listOpen, setListOpen] = useState(false);
   const [copied, setCopied] = useState<{ range: Range; cut: boolean } | null>(null);
   const [resize, setResize] = useState<Resize | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -136,10 +165,41 @@ export default function SheetEditor(props: Props) {
     () => new Axis(DEFAULT_COL_WIDTH, [...view.col_widths, ...view.hidden_cols.map((c) => [c, 0] as [number, number])]),
     [view.col_widths, view.hidden_cols],
   );
+  // Alto automático: filas con letra más grande o texto en varias líneas crecen
+  // solas, como en Excel, salvo que el alto se haya fijado a mano.
+  const autoHeights = useMemo(() => {
+    const fixed = new Set([...view.row_heights.map(([r]) => r - 1), ...view.hidden_rows.map((r) => r - 1)]);
+    const baseSize = view.styles[0]?.size ?? 11;
+    const result: [number, number][] = [];
+    rows.forEach((row, r) => {
+      if (!row || fixed.has(r)) return;
+      let height = DEFAULT_ROW_HEIGHT;
+      row.forEach(([text, , styleId], c) => {
+        const style = view.styles[styleId];
+        if (!style || !text || (style.size <= baseSize && !style.wrap)) return;
+        const lines = style.wrap ? wrappedLines(text, style, colAxis.size(c) - 12) : 1;
+        height = Math.max(height, lines * lineHeight(style) + 6);
+      });
+      if (height > DEFAULT_ROW_HEIGHT) result.push([r + 1, height]);
+    });
+    return result;
+  }, [rows, view.styles, view.row_heights, view.hidden_rows, colAxis]);
   const rowAxis = useMemo(
-    () => new Axis(DEFAULT_ROW_HEIGHT, [...view.row_heights, ...view.hidden_rows.map((r) => [r, 0] as [number, number])]),
-    [view.row_heights, view.hidden_rows],
+    () =>
+      new Axis(DEFAULT_ROW_HEIGHT, [
+        ...autoHeights,
+        ...view.row_heights,
+        ...view.hidden_rows.map((r) => [r, 0] as [number, number]),
+      ]),
+    [autoHeights, view.row_heights, view.hidden_rows],
   );
+
+  // Barras de datos, íconos y calificaciones, por celda.
+  const decorations = useMemo(() => {
+    const map = new Map<string, Decoration>();
+    for (const d of view.decorations) map.set(`${d.row - 1},${d.col - 1}`, d);
+    return map;
+  }, [view.decorations]);
   const frozenHeight = rowAxis.start(frozenRows);
   const frozenWidth = colAxis.start(frozenCols);
 
@@ -184,6 +244,11 @@ export default function SheetEditor(props: Props) {
   }
 
   const activeStyle = view.styles[rows[active.r]?.[active.c]?.[2] ?? 0] ?? view.styles[0];
+  // Lista desplegable de la celda activa, si tiene.
+  const activeValidation =
+    view.validations.find(
+      (v) => active.r + 1 >= v.row1 && active.r + 1 <= v.row2 && active.c + 1 >= v.col1 && active.c + 1 <= v.col2,
+    ) ?? null;
 
   // ───────────── utilidades ─────────────
 
@@ -227,6 +292,9 @@ export default function SheetEditor(props: Props) {
     const timer = setTimeout(() => setStatus(null), 4000);
     return () => clearTimeout(timer);
   }, [status]);
+
+  // La lista desplegable se cierra al moverse a otra celda.
+  useEffect(() => setListOpen(false), [active.r, active.c, sheet]);
 
   // Contenido crudo (fórmula o valor) de la celda activa, para la barra de fórmulas.
   useEffect(() => {
@@ -568,6 +636,43 @@ export default function SheetEditor(props: Props) {
     };
   });
 
+  /** Doble clic en el borde de un encabezado: la columna se ajusta a su texto más largo. */
+  function autofitColumn(col: number) {
+    let width = 30;
+    rows.forEach((row) => {
+      const cell = row?.[col];
+      if (!cell || !cell[0]) return;
+      const style = view.styles[cell[2]] ?? view.styles[0];
+      width = Math.max(width, textWidth(cell[0], style) + 16);
+    });
+    const [from, to] = wholeCols && col >= selection.c1 && col <= selection.c2 ? [selection.c1, selection.c2] : [col, col];
+    mutate(() => sheetApi.columnWidth(sheet, from, to, Math.min(600, Math.ceil(width))));
+  }
+
+  // ───────────── formato condicional y listas ─────────────
+
+  async function addConditionalRule(rule: object | { iconSet: string }) {
+    const range = usedSelection();
+    return mutate(() =>
+      "iconSet" in rule ? sheetApi.addIconSet(sheet, range, rule.iconSet) : sheetApi.addConditionalRule(sheet, range, rule),
+    );
+  }
+
+  async function saveValidation(source: ListSource | null) {
+    const range = activeValidation && !isMultiSelection
+      ? { r1: activeValidation.row1 - 1, c1: activeValidation.col1 - 1, r2: activeValidation.row2 - 1, c2: activeValidation.col2 - 1 }
+      : usedSelection();
+    const ok = await mutate(() => sheetApi.setValidation(sheet, range, source));
+    if (ok) showStatus({ text: source ? "Lista desplegable guardada" : "Lista desplegable quitada" });
+    return ok;
+  }
+
+  async function pickFromList(value: string) {
+    setListOpen(false);
+    focusGrid();
+    await mutate(() => sheetApi.setCell(sheet, active.r, active.c, value));
+  }
+
   // ───────────── autollenado ─────────────
 
   /** Rango que cubriría el autollenado si se suelta en `to`: crece en una sola dirección. */
@@ -841,6 +946,12 @@ export default function SheetEditor(props: Props) {
       return;
     }
 
+    // Alt + ↓ abre la lista desplegable de la celda, como en Excel.
+    if (e.altKey && e.key === "ArrowDown" && activeValidation) {
+      e.preventDefault();
+      return setListOpen(true);
+    }
+
     switch (e.key) {
       case "ArrowUp":
         e.preventDefault();
@@ -1078,10 +1189,32 @@ export default function SheetEditor(props: Props) {
     return `cell${numeric ? " number" : ""}${isActive ? " active" : ""}${inRange ? " in-range" : ""}${extra}`;
   }
 
+  /** ¿La celda está vacía y sin relleno, de modo que el texto de su vecina puede pasar por encima? */
+  function canSpillInto(r: number, c: number) {
+    const cell = rows[r]?.[c];
+    if (cell && cell[0] !== "") return false;
+    if (cell && view.styles[cell[2]]?.fill) return false;
+    return !merged.at(r, c) && !decorations.has(`${r},${c}`);
+  }
+
   /** Dibuja una celda (o un bloque combinado) en la posición indicada. */
-  function renderCell(r: number, c: number, box: { top: number; left: number; width: number; height: number }, key: string, extra = "") {
+  function renderCell(r: number, c: number, cellBox: { top: number; left: number; width: number; height: number }, key: string, extra = "") {
     const [text, numeric, styleId] = rows[r]?.[c] ?? ["", false, 0];
     const cellStyle = view.styles[styleId] ?? view.styles[0];
+    const deco = decorations.get(`${r},${c}`);
+    let box = cellBox;
+    // Texto largo: se desborda sobre las celdas vacías de la derecha, como en Excel.
+    if (text && !numeric && !cellStyle.wrap && (!cellStyle.h || cellStyle.h === "left") && !extra.includes("merged") && !deco) {
+      const needed = textWidth(text, cellStyle) + 12;
+      if (needed > box.width) {
+        let width = box.width;
+        for (let k = c + 1; width < needed && k < c + 30 && canSpillInto(r, k); k++) width += colAxis.size(k);
+        if (width > box.width) {
+          box = { ...box, width };
+          extra += " spill";
+        }
+      }
+    }
     return (
       <div
         key={key}
@@ -1109,7 +1242,31 @@ export default function SheetEditor(props: Props) {
         onContextMenu={(e) => openMenu(e, "cell", { r, c })}
         title={text}
       >
-        <span className="cell-text">{text}</span>
+        {deco?.bar && (
+          <span
+            className="data-bar"
+            style={{
+              width: `${Math.max(0, Math.min(1, deco.bar.value)) * 100}%`,
+              background: deco.bar.gradient ? `linear-gradient(90deg, ${deco.bar.color}, ${deco.bar.color}22)` : deco.bar.color,
+              borderColor: deco.bar.color,
+            }}
+          />
+        )}
+        {deco?.icon && (
+          <span className="cf-icon" style={{ color: deco.icon.color }}>
+            {ICON_GLYPHS[deco.icon.icon] ?? "●"}
+          </span>
+        )}
+        {deco?.rating && (
+          <span className="cf-rating" style={{ color: deco.rating.color }}>
+            {Array.from({ length: deco.rating.max }, (_, i) => (
+              <span key={i} style={{ opacity: i < deco.rating!.count ? 1 : 0.25 }}>
+                {ICON_GLYPHS[deco.rating!.icon] ?? "★"}
+              </span>
+            ))}
+          </span>
+        )}
+        {(!deco || deco.show_value) && <span className="cell-text">{text}</span>}
       </div>
     );
   }
@@ -1143,7 +1300,15 @@ export default function SheetEditor(props: Props) {
             ⏷
           </button>
         )}
-        <span className="col-resize" title="Arrastra para cambiar el ancho" onMouseDown={(e) => startResize(e, "col", index)} />
+        <span
+          className="col-resize"
+          title="Arrastra para cambiar el ancho; doble clic para ajustarlo al texto"
+          onMouseDown={(e) => startResize(e, "col", index)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            autofitColumn(index);
+          }}
+        />
       </div>
     );
   }
@@ -1231,6 +1396,22 @@ export default function SheetEditor(props: Props) {
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
             <path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" />
+          </svg>
+        </ToolButton>
+        <Separator />
+        <ToolButton label="Formato condicional" onClick={() => setDialog("conditional")}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="1.5" />
+            <path d="M3 10h18M3 15h18" />
+            <rect x="5" y="11.5" width="9" height="2" fill="currentColor" stroke="none" />
+            <rect x="5" y="16.5" width="13" height="2" fill="currentColor" stroke="none" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Lista desplegable (validación de datos)" pressed={Boolean(activeValidation)} onClick={() => setDialog("validation")}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="5" width="18" height="6" rx="1.5" />
+            <path d="M15 7.5l1.5 1.5L18 7.5" />
+            <path d="M5 15h10M5 19h7" />
           </svg>
         </ToolButton>
         <ToolButton
@@ -1411,6 +1592,44 @@ export default function SheetEditor(props: Props) {
           )}
           {fillTo && <div className="fill-preview" style={rangeBox(fillRange(fillTo))} />}
 
+          {/* Flecha y opciones de la lista desplegable de la celda activa */}
+          {activeValidation && !editing && (() => {
+            const box = rangeBox({ r1: active.r, c1: active.c, r2: active.r, c2: active.c });
+            return (
+              <>
+                <button
+                  type="button"
+                  className="list-arrow"
+                  style={{ left: box.left + box.width + 2, top: box.top + Math.max(0, (box.height - 20) / 2) }}
+                  title="Elegir de la lista (⌥↓)"
+                  aria-label="Abrir lista de opciones"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setListOpen((v) => !v)}
+                >
+                  ▾
+                </button>
+                {listOpen && (
+                  <div className="list-picker" role="listbox" style={{ left: box.left, top: box.top + box.height + 2, minWidth: box.width }}>
+                    {activeValidation.items.length === 0 && <div className="list-empty">La lista está vacía</div>}
+                    {activeValidation.items.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        role="option"
+                        aria-selected={item === rows[active.r]?.[active.c]?.[0]}
+                        className={`list-option${item === rows[active.r]?.[active.c]?.[0] ? " selected" : ""}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickFromList(item)}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
           {/* Referencias de la fórmula en edición, pintadas sobre la cuadrícula */}
           {editing &&
             findRefs(editing.value)
@@ -1505,6 +1724,34 @@ export default function SheetEditor(props: Props) {
           selected={assist.selected}
           onPick={acceptSuggestion}
           signature={assist.signature}
+        />
+      )}
+
+      {dialog === "conditional" && (
+        <ConditionalFormatDialog
+          sheet={sheet}
+          range={usedSelection()}
+          onAdd={addConditionalRule}
+          onDelete={(index) => mutate(() => sheetApi.deleteConditionalRule(sheet, index))}
+          onClose={() => {
+            setDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {dialog === "validation" && (
+        <ValidationDialog
+          range={
+            activeValidation && !isMultiSelection
+              ? { r1: activeValidation.row1 - 1, c1: activeValidation.col1 - 1, r2: activeValidation.row2 - 1, c2: activeValidation.col2 - 1 }
+              : usedSelection()
+          }
+          current={activeValidation}
+          onSave={saveValidation}
+          onClose={() => {
+            setDialog(null);
+            focusGrid();
+          }}
         />
       )}
 

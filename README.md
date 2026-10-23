@@ -40,7 +40,10 @@ src-tauri/                Núcleo nativo (Rust)
 ├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar, deshacer y guardar
 ├── src/sheets/
 │   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
-│   └── data.rs           Ordenar, filtrar, buscar y reemplazar
+│   ├── data.rs           Ordenar, filtrar, buscar y reemplazar
+│   ├── conditional.rs    Formato condicional (reglas, barras de datos, íconos)
+│   └── validation.rs     Listas desplegables
+├── src/xlsx_extras.rs    Partes del .xlsx que el motor no maneja (se leen y escriben aparte)
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
 
 src/editors/sheets/functions.ts  Catálogo de funciones en español e inglés (generado del motor)
@@ -84,6 +87,8 @@ cargo test
 | Insertar una función sugerida | ↑↓ para elegir, Tab o ↩ para insertar |
 | Insertar una referencia en una fórmula | Clic (o arrastrar) en las celdas, o flechas justo después de `=`, `(`, `,` o un operador |
 | Alternar referencia relativa/absoluta | F4 (A1 → $A$1 → A$1 → $A1) |
+| Abrir la lista desplegable de una celda | ⌥↓ o clic en su flecha |
+| Ajustar el ancho de una columna a su texto | Doble clic en el borde de su encabezado |
 
 ## Fórmulas en español o en inglés
 
@@ -101,6 +106,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: insertar, eliminar y ocultar filas/columnas, combinar celdas, inmovilizar paneles, autollenado
 - [x] WEPO Sheets: ordenar, filtrar, buscar y reemplazar; renombrar, duplicar, mover y eliminar hojas
 - [x] WEPO Sheets: fórmulas en español o inglés, autocompletado con ayuda de argumentos, referencias de colores, F4
+- [x] WEPO Sheets: formato condicional (resaltar, superiores/inferiores, barras de datos, escalas de color, íconos)
+- [x] WEPO Sheets: listas desplegables, texto que se desborda, alto automático de filas, autoajuste de columnas
 - [ ] WEPO Sheets: gráficas
 - [ ] WEPO Sheets: imágenes
 - [ ] WEPO Write: abrir, editar y guardar .docx

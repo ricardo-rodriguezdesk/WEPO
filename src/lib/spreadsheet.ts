@@ -50,6 +50,41 @@ export type SheetView = {
   /** Filas y columnas ocultas, desde 1. */
   hidden_rows: number[];
   hidden_cols: number[];
+  /** Barras de datos, íconos y calificaciones del formato condicional (filas y columnas desde 1). */
+  decorations: Decoration[];
+  /** Listas desplegables de la hoja (desde 1). */
+  validations: ValidationView[];
+};
+
+export type Decoration = {
+  row: number;
+  col: number;
+  bar: { value: number; axis: number; color: string; negative: string; gradient: boolean } | null;
+  icon: { icon: string; color: string } | null;
+  rating: { icon: string; count: number; max: number; color: string } | null;
+  show_value: boolean;
+};
+
+export type ValidationView = {
+  row1: number;
+  col1: number;
+  row2: number;
+  col2: number;
+  /** Opciones ya resueltas. */
+  items: string[];
+  /** Cómo se definió: "Sí, No" o "=$H$1:$H$5". */
+  source: string;
+};
+
+export type ListSource = { kind: "items"; items: string[] } | { kind: "range"; range: string };
+
+/** Una regla de formato condicional tal como la describe el motor. */
+export type ConditionalRule = {
+  index: number;
+  range: string;
+  priority: number;
+  cf_rule: { type: string; [key: string]: unknown };
+  format: { font?: { color?: string; b?: boolean } | null; fill?: { color?: string } | null } | null;
 };
 
 export type FindMatch = { sheet: number; row: number; col: number };
@@ -148,6 +183,18 @@ export const sheetApi = {
   },
   replaceAll: (sheet: number, query: string, replacement: string, options: FindOptions) =>
     invoke<{ count: number; view: SheetView }>("sheet_replace", { sheet, query, replacement, ...options }),
+
+  // Formato condicional y listas desplegables
+  conditionalRules: (sheet: number) => invoke<ConditionalRule[]>("sheet_cf_list", { sheet }),
+  /** `rule` en el formato de IronCalc, p. ej. {type: "CellIs", operator: "GreaterThan", …}. */
+  addConditionalRule: (sheet: number, range: Range, rule: object) =>
+    invoke<SheetView>("sheet_cf_add", { sheet, ...rect(range), rule }),
+  addIconSet: (sheet: number, range: Range, preset: string) =>
+    invoke<SheetView>("sheet_cf_icons", { sheet, ...rect(range), preset }),
+  deleteConditionalRule: (sheet: number, index: number) => invoke<SheetView>("sheet_cf_delete", { sheet, index }),
+  /** Pone una lista desplegable en el rango, o la quita con `null`. */
+  setValidation: (sheet: number, range: Range, source: ListSource | null) =>
+    invoke<SheetView>("sheet_validation", { sheet, ...rect(range), source }),
 
   // Fórmulas
   /** Idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…). */

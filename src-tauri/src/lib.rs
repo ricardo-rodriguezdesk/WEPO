@@ -4,11 +4,12 @@
 
 mod sheet_format;
 mod sheets;
+mod xlsx_extras;
 
 use std::sync::Mutex;
 
 use serde::Serialize;
-use sheets::{FindMatch, Rect, SheetDocument, SheetView, SortKey};
+use sheets::{FindMatch, ListSource, Rect, SheetDocument, SheetView, SortKey};
 use tauri::State;
 
 /// Hoja de cálculo abierta actualmente (WEPO abre un documento a la vez).
@@ -298,6 +299,67 @@ fn sheet_replace(
     Ok(ReplaceResult { count, view: doc.view(sheet)? })
 }
 
+// ───────────── formato condicional y listas ─────────────
+
+#[tauri::command]
+fn sheet_cf_list(state: State<OpenSheet>, sheet: u32) -> Result<Vec<serde_json::Value>, String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.conditional_formats(sheet)
+}
+
+/// Agrega una regla de formato condicional (`rule` en el formato de IronCalc).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_cf_add(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    rule: serde_json::Value,
+) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| doc.add_conditional_format(sheet, rect, rule))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_cf_icons(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    preset: String,
+) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| doc.add_icon_set(sheet, rect, &preset))
+}
+
+#[tauri::command]
+fn sheet_cf_delete(state: State<OpenSheet>, sheet: u32, index: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.delete_conditional_format(sheet, index))
+}
+
+/// Pone (o quita, con `source` vacío) una lista desplegable en un rango.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_validation(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    source: Option<ListSource>,
+) -> Result<SheetView, String> {
+    let rect = Rect { row1, col1, row2, col2 };
+    with_sheet(&state, sheet, |doc| doc.set_validation(sheet, rect, source))
+}
+
 // ───────────── fórmulas ─────────────
 
 /// Cambia el idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…).
@@ -389,6 +451,11 @@ pub fn run() {
             sheet_filter,
             sheet_find,
             sheet_replace,
+            sheet_cf_list,
+            sheet_cf_add,
+            sheet_cf_icons,
+            sheet_cf_delete,
+            sheet_validation,
             sheet_language,
             sheet_complete,
             sheet_undo,

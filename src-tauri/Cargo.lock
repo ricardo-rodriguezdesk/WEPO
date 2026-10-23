@@ -4948,6 +4948,7 @@ dependencies = [
  "calamine",
  "csv",
  "ironcalc",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
  "tauri",
@@ -4955,6 +4956,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "zip",
 ]
 
 [[package]]

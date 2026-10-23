@@ -22,10 +22,13 @@ use serde::Serialize;
 
 use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 
+mod conditional;
 mod data;
 mod structure;
+mod validation;
 
 pub use data::{FindMatch, SortKey};
+pub use validation::{ListSource, ValidationView};
 
 const LOCALE: &str = "en";
 const TIMEZONE: &str = "UTC";
@@ -44,10 +47,26 @@ pub struct SheetDocument {
     has_drawings: bool,
     /// Lo último que se copió dentro de WEPO (con fórmulas y formato).
     clipboard: Option<InternalClipboard>,
-    /// Cuántos pasos del motor forman cada acción del usuario. Ordenar o
-    /// reemplazar todo son muchos pasos, pero ⌘Z los deshace de una vez.
-    history: Vec<usize>,
-    future: Vec<usize>,
+    /// Lo que WEPO guarda por su cuenta, fuera del motor (listas desplegables…).
+    extras: Extras,
+    /// Acciones del usuario para deshacer y rehacer. Ordenar o reemplazar todo
+    /// son muchos pasos del motor, pero ⌘Z los deshace de una vez.
+    history: Vec<Step>,
+    future: Vec<Step>,
+}
+
+/// Una acción en el historial.
+enum Step {
+    /// Cierta cantidad de pasos del motor IronCalc.
+    Engine(usize),
+    /// Un cambio en lo que WEPO guarda por su cuenta: se guarda cómo estaba antes.
+    Extras(Extras),
+}
+
+/// Lo que WEPO maneja fuera del motor y escribe en el .xlsx por su cuenta.
+#[derive(Clone, Debug, Default)]
+pub struct Extras {
+    pub validations: Vec<validation::Validation>,
 }
 
 struct InternalClipboard {
@@ -59,7 +78,7 @@ struct InternalClipboard {
 }
 
 /// Rectángulo de celdas en base 1, como en Excel.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub row1: i32,
     pub col1: i32,
@@ -68,6 +87,49 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// El mismo rango con las esquinas en orden (arriba-izquierda, abajo-derecha).
+    pub fn normalized(&self) -> Rect {
+        Rect {
+            row1: self.row1.min(self.row2),
+            col1: self.col1.min(self.col2),
+            row2: self.row1.max(self.row2),
+            col2: self.col1.max(self.col2),
+        }
+    }
+
+    pub fn contains(&self, row: i32, col: i32) -> bool {
+        let r = self.normalized();
+        row >= r.row1 && row <= r.row2 && col >= r.col1 && col <= r.col2
+    }
+
+    pub fn intersects(&self, other: &Rect) -> bool {
+        let (a, b) = (self.normalized(), other.normalized());
+        a.row1 <= b.row2 && a.row2 >= b.row1 && a.col1 <= b.col2 && a.col2 >= b.col1
+    }
+
+    /// En notación de Excel: "B2:C9", o "B2" si es una sola celda.
+    pub fn to_a1(&self) -> String {
+        let r = self.normalized();
+        let start = format!("{}{}", column_letters(r.col1), r.row1);
+        if r.row1 == r.row2 && r.col1 == r.col2 {
+            start
+        } else {
+            format!("{start}:{}{}", column_letters(r.col2), r.row2)
+        }
+    }
+
+    /// Lee "B2:C9", "$B$2" o "Hoja!A1:B3" (ignora la hoja). None si no es un rango válido.
+    pub fn from_a1(text: &str) -> Option<Rect> {
+        let text = text.rsplit('!').next()?.trim().trim_start_matches('=');
+        let mut parts = text.split(':');
+        let (r1, c1) = parse_cell(parts.next()?)?;
+        let (r2, c2) = match parts.next() {
+            Some(p) => parse_cell(p)?,
+            None => (r1, c1),
+        };
+        Some(Rect { row1: r1, col1: c1, row2: r2, col2: c2 }.normalized())
+    }
+
     fn area(&self, sheet: u32) -> Area {
         Area {
             sheet,
@@ -106,6 +168,33 @@ pub struct SheetView {
     /// Filas y columnas ocultas, desde 1.
     pub hidden_rows: Vec<i32>,
     pub hidden_cols: Vec<i32>,
+    /// Barras de datos, íconos y calificaciones del formato condicional.
+    pub decorations: Vec<conditional::Decoration>,
+    /// Listas desplegables de la hoja.
+    pub validations: Vec<ValidationView>,
+}
+
+/// 1 → A, 26 → Z, 27 → AA.
+pub fn column_letters(mut col: i32) -> String {
+    let mut name = String::new();
+    while col > 0 {
+        let rem = (col - 1) % 26;
+        name.insert(0, (b'A' + rem as u8) as char);
+        col = (col - 1) / 26;
+    }
+    name
+}
+
+/// "$B$12" → (12, 2)
+fn parse_cell(text: &str) -> Option<(i32, i32)> {
+    let text = text.trim().replace('$', "");
+    let split = text.find(|c: char| c.is_ascii_digit())?;
+    let (letters, digits) = text.split_at(split);
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let col = letters.to_ascii_uppercase().bytes().fold(0, |acc, b| acc * 26 + (b - b'A' + 1) as i32);
+    Some((digits.parse().ok()?, col))
 }
 
 fn extension(path: &str) -> String {
@@ -126,7 +215,14 @@ fn xlsx_has_drawings(path: &str) -> bool {
 
 impl SheetDocument {
     fn wrap(model: UserModel<'static>) -> Self {
-        Self { model, has_drawings: false, clipboard: None, history: Vec::new(), future: Vec::new() }
+        Self {
+            model,
+            has_drawings: false,
+            clipboard: None,
+            extras: Extras::default(),
+            history: Vec::new(),
+            future: Vec::new(),
+        }
     }
 
     /// Libro vacío con una hoja.
@@ -147,6 +243,8 @@ impl SheetDocument {
                 model.evaluate();
                 let mut doc = Self::wrap(UserModel::from_model(model));
                 doc.has_drawings = xlsx_has_drawings(path);
+                // Las listas desplegables no las lee IronCalc: las leemos nosotros.
+                doc.load_validations(path);
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -244,6 +342,11 @@ impl SheetDocument {
         let default_style = model.get_style_for_cell(sheet, 1_048_576, 16_384)?;
         let mut styles = vec![style_view(&self.model, &default_style)];
         let mut style_ids: HashMap<i32, u32> = HashMap::new();
+        let mut style_index: HashMap<StyleView, u32> = HashMap::from([(styles[0].clone(), 0)]);
+        // Con formato condicional, el estilo final depende de cada valor y no
+        // solo del formato de la celda: se calcula celda por celda.
+        let has_cf = !worksheet.conditional_formatting.is_empty();
+        let mut decorations = Vec::new();
 
         let mut rows: Vec<Vec<CellView>> = Vec::new();
         // Recorremos solo las celdas que existen, no todo el rectángulo.
@@ -261,20 +364,30 @@ impl SheetDocument {
                 let numeric = !text.is_empty()
                     && matches!(model.get_cell_type(sheet, row, col)?, CellType::Number);
 
-                let xf = model.get_cell_style_index(sheet, row, col)?;
-                let style = match style_ids.get(&xf) {
-                    Some(&id) => id,
-                    None => {
-                        let view = style_view(&self.model, &model.get_style_for_cell(sheet, row, col)?);
-                        let id = match styles.iter().position(|s| *s == view) {
-                            Some(existing) => existing as u32,
-                            None => {
-                                styles.push(view);
-                                (styles.len() - 1) as u32
-                            }
-                        };
-                        style_ids.insert(xf, id);
-                        id
+                let mut intern = |view: StyleView| -> u32 {
+                    if let Some(&id) = style_index.get(&view) {
+                        return id;
+                    }
+                    styles.push(view.clone());
+                    let id = (styles.len() - 1) as u32;
+                    style_index.insert(view, id);
+                    id
+                };
+                let style = if has_cf {
+                    let extended = self.model.get_extended_cell_style(sheet, row, col)?;
+                    if let Some(deco) = conditional::decoration(&self.model, row, col, &extended) {
+                        decorations.push(deco);
+                    }
+                    intern(style_view(&self.model, &extended.style))
+                } else {
+                    let xf = model.get_cell_style_index(sheet, row, col)?;
+                    match style_ids.get(&xf) {
+                        Some(&id) => id,
+                        None => {
+                            let id = intern(style_view(&self.model, &model.get_style_for_cell(sheet, row, col)?));
+                            style_ids.insert(xf, id);
+                            id
+                        }
                     }
                 };
                 cells[(col - 1) as usize] = CellView(text, numeric, style);
@@ -333,6 +446,8 @@ impl SheetDocument {
             frozen_cols: self.model.get_frozen_columns_count(sheet)?,
             hidden_rows,
             hidden_cols,
+            decorations,
+            validations: self.validation_views(sheet)?,
         })
     }
 
@@ -377,9 +492,15 @@ impl SheetDocument {
     /// Registra una acción del usuario formada por `steps` pasos del motor.
     fn record(&mut self, steps: usize) {
         if steps > 0 {
-            self.history.push(steps);
+            self.history.push(Step::Engine(steps));
             self.future.clear();
         }
+    }
+
+    /// Registra un cambio en `extras`; `before` es cómo estaban antes.
+    fn record_extras(&mut self, before: Extras) {
+        self.history.push(Step::Extras(before));
+        self.future.clear();
     }
 
     /// Ejecuta un solo paso del motor y lo registra como una acción.
@@ -415,6 +536,7 @@ impl SheetDocument {
             let rect = Rect { row1: row, col1: col, row2: row, col2: col };
             return self.clear_range(sheet, rect);
         }
+        self.check_validation(sheet, row, col, input)?;
         self.step(|m| m.set_user_input(sheet, row, col, input))
     }
 
@@ -423,20 +545,32 @@ impl SheetDocument {
     }
 
     pub fn undo(&mut self) -> Result<(), String> {
-        let Some(steps) = self.history.pop() else { return Ok(()) };
-        for _ in 0..steps {
-            self.model.undo()?;
-        }
-        self.future.push(steps);
+        let Some(step) = self.history.pop() else { return Ok(()) };
+        let reverse = match step {
+            Step::Engine(steps) => {
+                for _ in 0..steps {
+                    self.model.undo()?;
+                }
+                Step::Engine(steps)
+            }
+            Step::Extras(before) => Step::Extras(std::mem::replace(&mut self.extras, before)),
+        };
+        self.future.push(reverse);
         Ok(())
     }
 
     pub fn redo(&mut self) -> Result<(), String> {
-        let Some(steps) = self.future.pop() else { return Ok(()) };
-        for _ in 0..steps {
-            self.model.redo()?;
-        }
-        self.history.push(steps);
+        let Some(step) = self.future.pop() else { return Ok(()) };
+        let reverse = match step {
+            Step::Engine(steps) => {
+                for _ in 0..steps {
+                    self.model.redo()?;
+                }
+                Step::Engine(steps)
+            }
+            Step::Extras(after) => Step::Extras(std::mem::replace(&mut self.extras, after)),
+        };
+        self.history.push(reverse);
         Ok(())
     }
 
@@ -603,7 +737,18 @@ impl SheetDocument {
         let file = fs::File::create(path).map_err(|e| e.to_string())?;
         save_xlsx_to_writer(self.model.get_model(), BufWriter::new(file))
             .map(|_| ())
-            .map_err(|e| format!("{e:?}"))
+            .map_err(|e| format!("{e:?}"))?;
+        // Después agregamos lo que IronCalc no escribe (listas desplegables…).
+        crate::xlsx_extras::write_extras(path, &self.extras_for_xlsx())
+    }
+
+    /// Identificador estable de una hoja (no cambia al renombrarla ni moverla).
+    fn sheet_id(&self, index: u32) -> Option<u32> {
+        self.model.get_worksheets_properties().get(index as usize).map(|p| p.sheet_id)
+    }
+
+    fn sheet_index(&self, id: u32) -> Option<u32> {
+        self.model.get_worksheets_properties().iter().position(|p| p.sheet_id == id).map(|i| i as u32)
     }
 
     fn write_csv(&self, path: &str, sheet: u32) -> Result<(), String> {
