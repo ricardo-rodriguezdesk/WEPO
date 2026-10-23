@@ -37,7 +37,8 @@ src/                      Interfaz (React + TypeScript)
 
 src-tauri/                Núcleo nativo (Rust)
 ├── src/lib.rs            Comandos que la interfaz puede llamar
-└── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular y guardar
+├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar y guardar
+└── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
 ```
 
 ## Ejecutar en desarrollo
@@ -65,6 +66,9 @@ cargo test
 | Cancelar la edición | Esc |
 | Seleccionar un rango | Shift + flechas, o arrastrar con el mouse |
 | Borrar la selección | Delete |
+| Copiar / cortar / pegar | ⌘C / ⌘X / ⌘V (también con Excel, Numbers y Google Sheets) |
+| Negrita / cursiva / subrayado | ⌘B / ⌘I / ⌘U |
+| Cambiar ancho de columna o alto de fila | Arrastra el borde del encabezado |
 | Deshacer / rehacer | ⌘Z / ⌘⇧Z |
 | Guardar / guardar como | ⌘S / ⌘⇧S |
 
@@ -73,7 +77,12 @@ cargo test
 - [x] Abrir hojas de cálculo (.xlsx, .xls, .ods, .csv) con todas sus hojas
 - [x] Pantalla de inicio y apertura de archivos por extensión o arrastrándolos a la ventana
 - [x] WEPO Sheets: editar celdas, navegar con el teclado, fórmulas, deshacer/rehacer y guardar en .xlsx y .csv
-- [ ] WEPO Sheets: copiar y pegar, formato de celdas (negritas, colores, número), ancho de columnas
+- [x] WEPO Sheets: formato de celdas (fuente, tamaño, negrita, colores, bordes, alineación, formato de número)
+- [x] WEPO Sheets: copiar, cortar y pegar con fórmulas y formato; ancho de columnas y alto de filas
+- [ ] WEPO Sheets: insertar y eliminar filas/columnas, combinar celdas, inmovilizar paneles, autollenado
+- [ ] WEPO Sheets: autocompletado de fórmulas (ya calcula más de 490 funciones)
+- [ ] WEPO Sheets: gráficas
+- [ ] WEPO Sheets: imágenes
 - [ ] WEPO Write: abrir, editar y guardar .docx
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [ ] Exportar a PDF

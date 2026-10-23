@@ -6,15 +6,49 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-/** [texto ya formateado, es número] */
-export type CellView = [string, boolean];
+/** [texto ya formateado, es número, índice de su estilo en `styles`] */
+export type CellView = [string, boolean, number];
+
+export type BorderView = { style: string; color: string } | null;
+
+/** Estilo de una celda, tal como lo prepara Rust (ver sheet_format.rs). */
+export type StyleView = {
+  b: boolean;
+  i: boolean;
+  u: boolean;
+  strike: boolean;
+  /** Tamaño en puntos */
+  size: number;
+  font: string;
+  color: string | null;
+  fill: string | null;
+  h: "left" | "center" | "right" | "justify" | null;
+  v: "top" | "center" | null;
+  wrap: boolean;
+  /** arriba, derecha, abajo, izquierda */
+  borders: [BorderView, BorderView, BorderView, BorderView];
+  num_fmt: string;
+};
 
 /** "Foto" de una hoja que devuelve Rust después de cada operación. */
 export type SheetView = {
   sheet_names: string[];
   sheet: number;
   rows: CellView[][];
+  /** Estilos usados en la hoja; el 0 es el de una celda vacía. */
+  styles: StyleView[];
+  /** [columna desde 1, píxeles] de las columnas con ancho propio */
+  col_widths: [number, number][];
+  /** [fila desde 1, píxeles] de las filas con alto propio */
+  row_heights: [number, number][];
+  /** El archivo tenía gráficas o imágenes que WEPO todavía no conserva. */
+  has_drawings: boolean;
 };
+
+/** Rango en el formato que esperan los comandos de Rust (base 1). */
+function rect(range: Range) {
+  return { row1: range.r1 + 1, col1: range.c1 + 1, row2: range.r2 + 1, col2: range.c2 + 1 };
+}
 
 export const sheetApi = {
   create: () => invoke<SheetView>("sheet_new"),
@@ -28,14 +62,27 @@ export const sheetApi = {
   setCell: (sheet: number, row: number, col: number, input: string) =>
     invoke<SheetView>("sheet_set_cell", { sheet, row: row + 1, col: col + 1, input }),
 
-  clear: (sheet: number, range: Range) =>
-    invoke<SheetView>("sheet_clear", {
-      sheet,
-      row1: range.r1 + 1,
-      col1: range.c1 + 1,
-      row2: range.r2 + 1,
-      col2: range.c2 + 1,
-    }),
+  clear: (sheet: number, range: Range) => invoke<SheetView>("sheet_clear", { sheet, ...rect(range) }),
+
+  /** Cambia una propiedad de formato: font.b, font.size, fill.fg_color, num_fmt… */
+  style: (sheet: number, range: Range, path: string, value: string) =>
+    invoke<SheetView>("sheet_style", { sheet, ...rect(range), path, value }),
+
+  border: (sheet: number, range: Range, kind: BorderKind, style: string, color: string) =>
+    invoke<SheetView>("sheet_border", { sheet, ...rect(range), kind, style, color }),
+
+  columnWidth: (sheet: number, col1: number, col2: number, width: number) =>
+    invoke<SheetView>("sheet_column_width", { sheet, col1: col1 + 1, col2: col2 + 1, width }),
+
+  rowHeight: (sheet: number, row1: number, row2: number, height: number) =>
+    invoke<SheetView>("sheet_row_height", { sheet, row1: row1 + 1, row2: row2 + 1, height }),
+
+  /** Copia o corta y devuelve el texto (separado por tabuladores) para el portapapeles. */
+  copy: (sheet: number, range: Range, cut: boolean) =>
+    invoke<string>("sheet_copy", { sheet, ...rect(range), cut }),
+
+  paste: (sheet: number, row: number, col: number, text: string) =>
+    invoke<SheetView>("sheet_paste", { sheet, row: row + 1, col: col + 1, text }),
 
   undo: (sheet: number) => invoke<SheetView>("sheet_undo", { sheet }),
   redo: (sheet: number) => invoke<SheetView>("sheet_redo", { sheet }),
@@ -44,6 +91,8 @@ export const sheetApi = {
   /** .xlsx guarda el libro completo; .csv solo la hoja indicada. */
   save: (path: string, sheet: number) => invoke<void>("sheet_save", { path, sheet }),
 };
+
+export type BorderKind = "all" | "outer" | "inner" | "top" | "bottom" | "left" | "right" | "none";
 
 export type Cell = { r: number; c: number };
 export type Range = { r1: number; c1: number; r2: number; c2: number };

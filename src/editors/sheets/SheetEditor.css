@@ -64,6 +64,42 @@
   border-bottom: 1px solid var(--border);
 }
 .col-header { top: 0; height: 24px; }
+
+/* Asas para cambiar el ancho de columnas y el alto de filas */
+.col-resize,
+.row-resize { position: absolute; z-index: 1; }
+.col-resize { top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; }
+.row-resize { left: 0; bottom: -4px; width: 100%; height: 8px; cursor: row-resize; }
+.col-resize:hover,
+.row-resize:hover { background: color-mix(in srgb, var(--kind-accent) 40%, transparent); }
+
+.resize-guide { position: absolute; z-index: 5; background: var(--kind-accent); pointer-events: none; }
+.resize-guide.col { top: 0; bottom: 0; width: 2px; }
+.resize-guide.row { left: 0; right: 0; height: 2px; }
+
+/* Contorno de lo que se copió, como las "hormigas" de Excel */
+.copy-outline {
+  position: absolute;
+  z-index: 2;
+  border: 2px dashed var(--kind-accent);
+  pointer-events: none;
+  animation: copy-pulse 1.2s ease-in-out infinite;
+}
+@keyframes copy-pulse { 50% { opacity: 0.45; } }
+
+.sheet-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #fff4d6;
+  color: #6b4d00;
+  border-bottom: 1px solid #f0d58a;
+}
+.sheet-notice span { flex: 1; }
+@media (prefers-color-scheme: dark) {
+  .sheet-notice { background: #3a2f12; color: #f3d98b; border-color: #5c4a1a; }
+}
 .row-header { z-index: 3; }
 .col-header.active,
 .row-header.active {
@@ -74,24 +110,32 @@
 
 .cell {
   position: absolute;
-  padding: 0 6px;
-  line-height: 24px;
+  display: flex;
+  padding: 1px 5px;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   border-right: 1px solid var(--grid-line);
   border-bottom: 1px solid var(--grid-line);
   cursor: cell;
 }
-.cell.number { text-align: right; font-variant-numeric: tabular-nums; }
-.cell.in-range { background: var(--kind-soft); }
+.cell.number { font-variant-numeric: tabular-nums; }
+.cell-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* La selección se pinta encima del relleno de la celda sin taparlo */
+.cell.in-range::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--kind-accent) 14%, transparent);
+  pointer-events: none;
+}
 .cell.active { outline: 2px solid var(--kind-accent); outline-offset: -2px; z-index: 1; }
 
 /* Caja donde se escribe dentro de la celda */
 .cell-editor {
   position: absolute;
   z-index: 2;
-  padding: 0 6px;
+  padding: 0 5px;
   font: inherit;
   color: var(--text);
   background: var(--surface);
