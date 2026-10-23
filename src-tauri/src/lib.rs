@@ -704,6 +704,7 @@ pub fn run() {
             sheet_paste_special,
             sheet_paste_format,
             recovery::recovery_save,
+            recovery::recovery_save_file,
             recovery::recovery_info,
             recovery::recovery_clear,
             recovery::recovery_discard,

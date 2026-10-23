@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { JSONContent } from "@tiptap/react";
 import type { WriteDocument } from "../editors/write/docx";
 import { LETTER, NO_HEADER_FOOTER, readDocx, readMarkdown, readText, writeDocx, writeMarkdown } from "../editors/write/docx";
+import { readOdt } from "../editors/write/odt";
 import { extensionOf } from "./documents";
 
 function toBase64(bytes: Uint8Array): string {
@@ -35,6 +36,7 @@ export async function openWriteDocument(path: string): Promise<WriteDocument> {
   const bytes = fromBase64(await invoke<string>("file_read", { path }));
   const ext = extensionOf(path);
   if (ext === "docx") return readDocx(bytes);
+  if (ext === "odt") return readOdt(bytes);
   if (ext === "md") return { ...emptyDocument(), content: readMarkdown(decoder.decode(bytes)) };
   if (ext === "txt") return { ...emptyDocument(), content: readText(decoder.decode(bytes)) };
   throw new Error(`WEPO Write todavía no abre archivos .${ext}`);
@@ -56,6 +58,11 @@ export async function saveWriteDocument(
   else if (ext === "txt") bytes = encoder.encode(plain.endsWith("\n") ? plain : `${plain}\n`);
   else throw new Error(`WEPO Write todavía no guarda archivos .${ext}`);
   await invoke("file_write", { path, data: toBase64(bytes) });
+}
+
+/** El documento como .docx en base64 (para la copia de recuperación). */
+export async function docxBase64(content: JSONContent, page: WriteDocument["page"], headerFooter: WriteDocument["headerFooter"], title: string) {
+  return toBase64(await writeDocx(content, page, title, headerFooter));
 }
 
 /** Lee una imagen del disco como data URL (para insertarla en el documento). */

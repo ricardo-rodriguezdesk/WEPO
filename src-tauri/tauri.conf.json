@@ -53,6 +53,18 @@
       },
       {
         "ext": [
+          "odt"
+        ],
+        "name": "Documento de OpenDocument",
+        "description": "Documento de texto de LibreOffice",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.oasis-open.opendocument.text"
+        ]
+      },
+      {
+        "ext": [
           "xlsx",
           "xlsm"
         ],

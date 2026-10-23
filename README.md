@@ -10,7 +10,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
 
 | Editor | Para | Formatos |
 |---|---|---|
-| **WEPO Write** | Documentos de texto | .docx, .txt, .md |
+| **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx, .odp |
 
@@ -125,6 +125,7 @@ En Windows y Linux, ⌘ es Ctrl.
 | Atajo | Qué hace |
 |---|---|
 | ⌘B / ⌘I / ⌘U | Negrita, cursiva, subrayado |
+| ⌘⇧X | Tachado |
 | ⌘K | Insertar o editar un vínculo (⌘ + clic lo abre) |
 | ⌘↩ | Salto de página |
 | ⌘F | Buscar y reemplazar |
@@ -193,6 +194,9 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: abrir, editar y guardar .docx (también .md y .txt)
 - [x] WEPO Write: páginas reales con saltos de página, encabezado y pie con número de página (se leen y guardan en .docx)
 - [x] WEPO Write: buscar y reemplazar, interlineado, espacio entre párrafos y sangrías
+- [x] WEPO Write: autoguardado y recuperación si la app se cierra de golpe
+- [x] WEPO Write: abrir documentos de LibreOffice (.odt)
+- [x] WEPO Write: tablas con celdas combinadas, color de celda y ancho de columnas
 - [ ] WEPO Write: comentarios y control de cambios
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar

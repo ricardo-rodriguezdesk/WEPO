@@ -6,7 +6,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { Color, FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
-import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
+import { Table, TableRow } from "@tiptap/extension-table";
 import { CharacterCount, Placeholder } from "@tiptap/extensions";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
@@ -19,11 +19,12 @@ import { clampZoom, stepZoom } from "../sheets/layout";
 import type { HeaderFooterSet, PageSize, WriteDocument } from "./docx";
 import { LETTER, NO_HEADER_FOOTER } from "./docx";
 import type { PageLayout, ParagraphFormat } from "./extensions";
-import { PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, currentParagraphFormat, fillFields } from "./extensions";
+import { ColoredCell, ColoredHeader, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, currentParagraphFormat, fillFields } from "./extensions";
 import HeaderFooterDialog from "./HeaderFooterDialog";
 import ParagraphDialog from "./ParagraphDialog";
 import WriteFindBar from "./WriteFindBar";
-import { imageDataUrl, saveWriteDocument } from "../../lib/write";
+import { docxBase64, imageDataUrl, saveWriteDocument } from "../../lib/write";
+import { recoveryApi } from "../../lib/recovery";
 import { extensionOf, fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, isMac, isWindows, keys } from "../../lib/platform";
@@ -39,7 +40,18 @@ type Props = {
   onOpen: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (path: string) => void;
+  /** Viene de una copia de recuperación: empieza con cambios sin guardar. */
+  recovered?: boolean;
 };
+
+const AUTOSAVE_KEY = "wepo.autosave";
+function loadAutosave(): boolean {
+  try {
+    return localStorage.getItem(AUTOSAVE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** Tamaños de página comunes, en twips (1/1440 de pulgada). */
 const PAGE_SIZES: { label: string; width: number; height: number }[] = [
@@ -56,6 +68,17 @@ const STYLES = [
   { value: "quote", label: "Cita" },
 ];
 
+/**
+ * El editor siempre agrega un párrafo vacío después de una tabla o un salto al final del documento;
+ * se agrega desde antes para que abrir un archivo no cuente como un cambio.
+ */
+function withTrailingParagraph(content: WriteDocument["content"]): WriteDocument["content"] {
+  const blocks = content.content ?? [];
+  const last = blocks[blocks.length - 1];
+  if (last && (last.type === "paragraph" || last.type === "heading")) return content;
+  return { ...content, content: [...blocks, { type: "paragraph" }] };
+}
+
 /** twips → píxeles de pantalla (96 por pulgada). */
 const px = (twips: number) => (twips / 1440) * 96;
 
@@ -65,7 +88,13 @@ export default function WriteEditor(props: Props) {
   const [path, setPath] = useState(props.path);
   const [fileName, setFileName] = useState(props.fileName);
   const [page, setPage] = useState<PageSize>(initial.page ?? LETTER);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty] = useState(Boolean(props.recovered));
+  const [autosave, setAutosave] = useState(loadAutosave);
+  /** Cuenta los cambios: así se sabe si la copia de recuperación o el archivo ya están al día. */
+  const [changes, setChanges] = useState(0);
+  const changesRef = useRef(0);
+  changesRef.current = changes;
+  const recoveredAt = useRef(-1);
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [zoom, setZoomState] = useState(() => loadZoom(props.path));
   const [linkDialog, setLinkDialog] = useState<{ text: string; href: string | null } | null>(null);
@@ -75,8 +104,10 @@ export default function WriteEditor(props: Props) {
   const [findOpen, setFindOpen] = useState(false);
   const [pages, setPages] = useState(1);
   // Un archivo con cosas que WEPO todavía no conserva se guarda como copia.
+  // Los .odt se abren pero se guardan como .docx (nuevo archivo).
+  const fromOdt = Boolean(props.path && extensionOf(props.path) === "odt");
   const [protectedPath] = useState(initial.unsupported.length ? props.path : null);
-  const [notice, setNotice] = useState(initial.unsupported.length > 0);
+  const [notice, setNotice] = useState(initial.unsupported.length > 0 || fromOdt);
   const loading = useRef(true);
 
   // Lo que la paginación necesita saber de la hoja (se lee en cada medición).
@@ -97,7 +128,8 @@ export default function WriteEditor(props: Props) {
 
   const extensions = useMemo(
     () => [
-      StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: "https" } }),
+      StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: "https" }, strike: false }),
+      WepoStrike,
       TextStyle,
       Color,
       FontFamily,
@@ -105,10 +137,10 @@ export default function WriteEditor(props: Props) {
       Highlight.configure({ multicolor: true }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       Image.configure({ inline: true, allowBase64: true, resize: { enabled: true, minWidth: 40, minHeight: 30, alwaysPreserveAspectRatio: true } }),
-      Table.configure({ resizable: false }),
+      Table.configure({ resizable: true, cellMinWidth: 40, lastColumnResizable: false }),
       TableRow,
-      TableHeader,
-      TableCell,
+      ColoredHeader,
+      ColoredCell,
       CharacterCount,
       PageBreak,
       ParagraphFormatExtension,
@@ -121,13 +153,12 @@ export default function WriteEditor(props: Props) {
 
   const editor = useEditor({
     extensions,
-    content: initial.content,
+    content: withTrailingParagraph(initial.content),
     autofocus: "start",
     editorProps: { attributes: { class: "write-content", spellcheck: "true", lang: "es" } },
     onUpdate: () => {
       if (loading.current) return;
-      setDirty(true);
-      onDirtyChange(true);
+      markDirty();
     },
   });
 
@@ -142,8 +173,16 @@ export default function WriteEditor(props: Props) {
 
   function markDirty() {
     setDirty(true);
+    setChanges((n) => n + 1);
     onDirtyChange(true);
   }
+
+  useEffect(() => {
+    if (props.recovered) {
+      onDirtyChange(true);
+      setStatus({ text: "Documento recuperado: guárdalo para conservar los cambios" });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Los mensajes normales desaparecen solos; los errores se quedan.
   useEffect(() => {
@@ -155,6 +194,8 @@ export default function WriteEditor(props: Props) {
   // ───────────── guardar ─────────────
 
   function markSaved(target: string) {
+    recoveryApi.clear();
+    recoveredAt.current = -1;
     setPath(target);
     setFileName(fileNameOf(target));
     setDirty(false);
@@ -162,13 +203,16 @@ export default function WriteEditor(props: Props) {
     onSaved(target);
   }
 
-  async function saveTo(target: string) {
+  async function saveTo(target: string, quiet = false) {
     if (!editor) return false;
+    const savedChanges = changesRef.current;
     try {
       await saveWriteDocument(target, editor.getJSON(), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""));
-      markSaved(target);
+      // Si se siguió escribiendo mientras se guardaba, sigue habiendo cambios.
+      if (changesRef.current === savedChanges) markSaved(target);
+      else (setPath(target), setFileName(fileNameOf(target)), onSaved(target));
       const note = extensionOf(target) === "docx" ? "" : " (como texto: sin imágenes ni la mayoría del formato)";
-      setStatus({ text: `Guardado${note}` });
+      if (!quiet || note) setStatus({ text: `Guardado${note}` });
       return true;
     } catch (e) {
       setStatus({ text: `No se pudo guardar: ${e}`, error: true });
@@ -176,10 +220,13 @@ export default function WriteEditor(props: Props) {
     }
   }
 
+  /** Se puede guardar encima del archivo sin preguntar. */
+  function canOverwrite(target: string | null): target is string {
+    return Boolean(target && target !== protectedPath && ["docx", "md", "txt"].includes(extensionOf(target)));
+  }
+
   async function saveDocument(saveAs = false) {
-    const ext = path ? extensionOf(path) : "";
-    const canOverwrite = path && path !== protectedPath && ["docx", "md", "txt"].includes(ext);
-    if (!saveAs && canOverwrite) return saveTo(path);
+    if (!saveAs && canOverwrite(path)) return saveTo(path);
     const base = (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
     const target = await save({
       defaultPath: `${base}.docx`,
@@ -196,6 +243,50 @@ export default function WriteEditor(props: Props) {
       return false;
     }
     return saveTo(finalPath);
+  }
+
+  // Autoguardado: con el interruptor encendido, se guarda solo un par de segundos después de cada cambio.
+  useEffect(() => {
+    if (!autosave || !dirty || !canOverwrite(path) || extensionOf(path) !== "docx") return;
+    const timer = setTimeout(() => {
+      saveTo(path, true).then((ok) => ok || setAutosave(false));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [autosave, dirty, changes, path]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Copia de recuperación cada 20 segundos mientras haya cambios sin guardar.
+  const recoveryState = useRef({ dirty, fileName, path, page, headerFooter });
+  recoveryState.current = { dirty, fileName, path, page, headerFooter };
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      const r = recoveryState.current;
+      if (!r.dirty || !editor || recoveredAt.current === changesRef.current) return;
+      recoveredAt.current = changesRef.current;
+      try {
+        const data = await docxBase64(editor.getJSON(), r.page, r.headerFooter, r.fileName.replace(/\.[^.]+$/, ""));
+        await recoveryApi.saveFile(r.fileName, r.path, data);
+      } catch {
+        // Si no se pudo, se intenta en la siguiente vuelta.
+        recoveredAt.current = -1;
+      }
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [editor]);
+
+  async function toggleAutosave() {
+    const next = !autosave;
+    if (next && (!canOverwrite(path) || extensionOf(path) !== "docx")) {
+      // Como en Word: para autoguardar, primero el documento necesita un lugar (como .docx).
+      setStatus({ text: "Elige dónde guardar el documento para activar el autoguardado" });
+      if (!(await saveDocument(true))) return;
+    }
+    setAutosave(next);
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, next ? "1" : "0");
+    } catch {
+      // Sin almacenamiento la preferencia no se recuerda.
+    }
+    setStatus({ text: next ? "Autoguardado activado: cada cambio se guarda solo" : "Autoguardado desactivado" });
   }
 
   // ───────────── zoom e impresión ─────────────
@@ -329,6 +420,18 @@ export default function WriteEditor(props: Props) {
           <rect x="7" y="14" width="10" height="7" rx="1" />
         </svg>
       </button>
+      <label
+        className={`autosave-toggle${autosave ? " on" : ""}`}
+        title={
+          autosave
+            ? "Cada cambio se guarda solo en el archivo"
+            : "Guardar solo cada cambio en el archivo (también hay una copia de recuperación por si la app se cierra)"
+        }
+      >
+        <input type="checkbox" role="switch" checked={autosave} onChange={toggleAutosave} />
+        <span className="autosave-track" aria-hidden />
+        Autoguardado
+      </label>
       <button className="btn" onClick={() => saveDocument()} title={keys("Guardar (⌘S)")}>
         Guardar
       </button>
@@ -353,8 +456,9 @@ export default function WriteEditor(props: Props) {
       {notice && (
         <div className="sheet-notice write-notice" role="status">
           <span>
-            Este documento tiene cosas que WEPO Write todavía no conserva ({initial.unsupported.join(", ")}). Al guardar se crea una
-            copia y el original queda intacto.
+            {initial.unsupported.length
+              ? `Este documento tiene cosas que WEPO Write todavía no conserva (${initial.unsupported.join(", ")}). Al guardar se crea una copia y el original queda intacto.`
+              : "WEPO Write abre los documentos de LibreOffice (.odt) y los guarda como Word (.docx): al guardar se crea un archivo nuevo y el original queda intacto."}
           </span>
           <button className="btn btn-icon" aria-label="Cerrar aviso" onClick={() => setNotice(false)}>
             ×
@@ -480,6 +584,9 @@ function WriteBar(props: { editor: Editor; onLink: () => void; onImage: () => vo
       ordered: e.isActive("orderedList"),
       link: e.isActive("link"),
       table: e.isActive("table"),
+      canMerge: e.can().mergeCells(),
+      canSplit: e.can().splitCell(),
+      cellColor: (e.getAttributes("tableCell").backgroundColor ?? e.getAttributes("tableHeader").backgroundColor ?? null) as string | null,
       list: e.isActive("listItem"),
       format: currentParagraphFormat(e),
     }),
@@ -500,217 +607,248 @@ function WriteBar(props: { editor: Editor; onLink: () => void; onImage: () => vo
   const fonts = !fontName || FONTS.includes(fontName) ? FONTS : [fontName, ...FONTS];
 
   return (
-    <div className="format-bar" role="toolbar" aria-label="Formato del texto">
-      <select
-        className="fb-select write-style"
-        aria-label="Estilo del párrafo"
-        value={s.style}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v === "p") chain().setParagraph().run();
-          else if (v === "quote") chain().setParagraph().toggleBlockquote().run();
-          else chain().setHeading({ level: Number(v) as 1 | 2 | 3 }).run();
-        }}
-      >
-        {STYLES.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <select
-        className="fb-select fb-font"
-        aria-label="Fuente"
-        value={fontName}
-        onChange={(e) => (e.target.value ? chain().setFontFamily(e.target.value).run() : chain().unsetFontFamily().run())}
-      >
-        <option value="">Predeterminada</option>
-        {fonts.map((f) => (
-          <option key={f} value={f} style={{ fontFamily: f }}>
-            {f}
-          </option>
-        ))}
-      </select>
-      <select className="fb-select fb-size" aria-label="Tamaño de letra" value={sizeNumber} onChange={(e) => chain().setFontSize(`${e.target.value}pt`).run()}>
-        {sizes.map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
+    <>
+      <div className="format-bar write-format-bar" role="toolbar" aria-label="Formato del texto">
+        <select
+          className="fb-select write-style"
+          aria-label="Estilo del párrafo"
+          value={s.style}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "p") chain().setParagraph().run();
+            else if (v === "quote") chain().setParagraph().toggleBlockquote().run();
+            else chain().setHeading({ level: Number(v) as 1 | 2 | 3 }).run();
+          }}
+        >
+          {STYLES.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="fb-select fb-font"
+          aria-label="Fuente"
+          value={fontName}
+          onChange={(e) => (e.target.value ? chain().setFontFamily(e.target.value).run() : chain().unsetFontFamily().run())}
+        >
+          <option value="">Predeterminada</option>
+          {fonts.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <select className="fb-select fb-size" aria-label="Tamaño de letra" value={sizeNumber} onChange={(e) => chain().setFontSize(`${e.target.value}pt`).run()}>
+          {sizes.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
 
-      <Separator />
-      <ToolButton label={keys("Negrita (⌘B)")} pressed={s.bold} onClick={() => chain().toggleBold().run()}>
-        <b>B</b>
-      </ToolButton>
-      <ToolButton label={keys("Cursiva (⌘I)")} pressed={s.italic} onClick={() => chain().toggleItalic().run()}>
-        <i style={{ fontFamily: "Georgia, serif" }}>I</i>
-      </ToolButton>
-      <ToolButton label={keys("Subrayado (⌘U)")} pressed={s.underline} onClick={() => chain().toggleUnderline().run()}>
-        <u>U</u>
-      </ToolButton>
-      <ToolButton label="Tachado" pressed={s.strike} onClick={() => chain().toggleStrike().run()}>
-        <s>S</s>
-      </ToolButton>
-      <ColorButton
-        label="Color de texto"
-        current={s.color}
-        emptyLabel="Automático"
-        onPick={(color) => (color ? chain().setColor(color).run() : chain().unsetColor().run())}
-        icon={<span className="fb-letter">A</span>}
-      />
-      <ColorButton
-        label="Resaltado"
-        current={s.highlight}
-        emptyLabel="Sin resaltado"
-        onPick={(color) => (color ? chain().setHighlight({ color }).run() : chain().unsetHighlight().run())}
-        icon={
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-            <path d="M9 11l-4 4v3h3l4-4M9 11l5-5 4 4-5 5M9 11l4 4" />
+        <Separator />
+        <ToolButton label={keys("Negrita (⌘B)")} pressed={s.bold} onClick={() => chain().toggleBold().run()}>
+          <b>B</b>
+        </ToolButton>
+        <ToolButton label={keys("Cursiva (⌘I)")} pressed={s.italic} onClick={() => chain().toggleItalic().run()}>
+          <i style={{ fontFamily: "Georgia, serif" }}>I</i>
+        </ToolButton>
+        <ToolButton label={keys("Subrayado (⌘U)")} pressed={s.underline} onClick={() => chain().toggleUnderline().run()}>
+          <u>U</u>
+        </ToolButton>
+        <ToolButton label={keys("Tachado (⌘⇧X)")} pressed={s.strike} onClick={() => chain().toggleStrike().run()}>
+          <s>S</s>
+        </ToolButton>
+        <ColorButton
+          label="Color de texto"
+          current={s.color}
+          emptyLabel="Automático"
+          onPick={(color) => (color ? chain().setColor(color).run() : chain().unsetColor().run())}
+          icon={<span className="fb-letter">A</span>}
+        />
+        <ColorButton
+          label="Resaltado"
+          current={s.highlight}
+          emptyLabel="Sin resaltado"
+          onPick={(color) => (color ? chain().setHighlight({ color }).run() : chain().unsetHighlight().run())}
+          icon={
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="M9 11l-4 4v3h3l4-4M9 11l5-5 4 4-5 5M9 11l4 4" />
+            </svg>
+          }
+        />
+
+        <Separator />
+        <ToolButton label="Alinear a la izquierda" pressed={s.align === "left"} onClick={() => chain().setTextAlign("left").run()}>
+          <AlignIcon lines={["M4 6h16", "M4 10h10", "M4 14h16", "M4 18h10"]} />
+        </ToolButton>
+        <ToolButton label="Centrar" pressed={s.align === "center"} onClick={() => chain().setTextAlign("center").run()}>
+          <AlignIcon lines={["M4 6h16", "M7 10h10", "M4 14h16", "M7 18h10"]} />
+        </ToolButton>
+        <ToolButton label="Alinear a la derecha" pressed={s.align === "right"} onClick={() => chain().setTextAlign("right").run()}>
+          <AlignIcon lines={["M4 6h16", "M10 10h10", "M4 14h16", "M10 18h10"]} />
+        </ToolButton>
+        <ToolButton label="Justificar" pressed={s.align === "justify"} onClick={() => chain().setTextAlign("justify").run()}>
+          <AlignIcon lines={["M4 6h16", "M4 10h16", "M4 14h16", "M4 18h16"]} />
+        </ToolButton>
+
+        <Separator />
+        <ToolButton label="Lista con viñetas" pressed={s.bullet} onClick={() => chain().toggleBulletList().run()}>
+          <AlignIcon lines={["M9 6h11", "M9 12h11", "M9 18h11", "M4.5 6h.01", "M4.5 12h.01", "M4.5 18h.01"]} />
+        </ToolButton>
+        <ToolButton label="Lista numerada" pressed={s.ordered} onClick={() => chain().toggleOrderedList().run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <path d="M10 6h10M10 12h10M10 18h10" />
+            <text x="2" y="8.5" fontSize="7" fill="currentColor" stroke="none">1</text>
+            <text x="2" y="14.5" fontSize="7" fill="currentColor" stroke="none">2</text>
+            <text x="2" y="20.5" fontSize="7" fill="currentColor" stroke="none">3</text>
           </svg>
-        }
-      />
-
-      <Separator />
-      <ToolButton label="Alinear a la izquierda" pressed={s.align === "left"} onClick={() => chain().setTextAlign("left").run()}>
-        <AlignIcon lines={["M4 6h16", "M4 10h10", "M4 14h16", "M4 18h10"]} />
-      </ToolButton>
-      <ToolButton label="Centrar" pressed={s.align === "center"} onClick={() => chain().setTextAlign("center").run()}>
-        <AlignIcon lines={["M4 6h16", "M7 10h10", "M4 14h16", "M7 18h10"]} />
-      </ToolButton>
-      <ToolButton label="Alinear a la derecha" pressed={s.align === "right"} onClick={() => chain().setTextAlign("right").run()}>
-        <AlignIcon lines={["M4 6h16", "M10 10h10", "M4 14h16", "M10 18h10"]} />
-      </ToolButton>
-      <ToolButton label="Justificar" pressed={s.align === "justify"} onClick={() => chain().setTextAlign("justify").run()}>
-        <AlignIcon lines={["M4 6h16", "M4 10h16", "M4 14h16", "M4 18h16"]} />
-      </ToolButton>
-
-      <Separator />
-      <ToolButton label="Lista con viñetas" pressed={s.bullet} onClick={() => chain().toggleBulletList().run()}>
-        <AlignIcon lines={["M9 6h11", "M9 12h11", "M9 18h11", "M4.5 6h.01", "M4.5 12h.01", "M4.5 18h.01"]} />
-      </ToolButton>
-      <ToolButton label="Lista numerada" pressed={s.ordered} onClick={() => chain().toggleOrderedList().run()}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-          <path d="M10 6h10M10 12h10M10 18h10" />
-          <text x="2" y="8.5" fontSize="7" fill="currentColor" stroke="none">1</text>
-          <text x="2" y="14.5" fontSize="7" fill="currentColor" stroke="none">2</text>
-          <text x="2" y="20.5" fontSize="7" fill="currentColor" stroke="none">3</text>
-        </svg>
-      </ToolButton>
-      <ToolButton label="Reducir sangría" onClick={() => indent(-1)}>
-        <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M7 9l-3 3 3 3"]} />
-      </ToolButton>
-      <ToolButton label="Aumentar sangría" onClick={() => indent(1)}>
-        <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M4 9l3 3-3 3"]} />
-      </ToolButton>
-      <Popover
-        button={(toggle, open) => (
-          <ToolButton label="Interlineado y espacio entre párrafos" pressed={open} onClick={toggle}>
-            <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M5 4v16", "M3 6l2-2 2 2", "M3 18l2 2 2-2"]} />
-          </ToolButton>
-        )}
-      >
-        {(close) => (
-          <div className="write-menu" role="menu">
-            {LINE_SPACINGS.map((o) => (
+        </ToolButton>
+        <ToolButton label="Reducir sangría" onClick={() => indent(-1)}>
+          <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M7 9l-3 3 3 3"]} />
+        </ToolButton>
+        <ToolButton label="Aumentar sangría" onClick={() => indent(1)}>
+          <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M4 9l3 3-3 3"]} />
+        </ToolButton>
+        <Popover
+          button={(toggle, open) => (
+            <ToolButton label="Interlineado y espacio entre párrafos" pressed={open} onClick={toggle}>
+              <AlignIcon lines={["M11 6h9", "M11 12h9", "M11 18h9", "M5 4v16", "M3 6l2-2 2 2", "M3 18l2 2 2-2"]} />
+            </ToolButton>
+          )}
+        >
+          {(close) => (
+            <div className="write-menu" role="menu">
+              {LINE_SPACINGS.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={s.format.lineHeight === o.value}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => (chain().setParagraphFormat({ lineHeight: o.value }).run(), close())}
+                >
+                  <span className="write-menu-check">{s.format.lineHeight === o.value ? "✓" : ""}</span>
+                  {o.label}
+                </button>
+              ))}
+              <hr />
               <button
-                key={o.value}
                 type="button"
-                role="menuitemradio"
-                aria-checked={s.format.lineHeight === o.value}
+                role="menuitem"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => (chain().setParagraphFormat({ lineHeight: o.value }).run(), close())}
+                onClick={() => (chain().setParagraphFormat({ spaceBefore: s.format.spaceBefore ? null : 12 }).run(), close())}
               >
-                <span className="write-menu-check">{s.format.lineHeight === o.value ? "✓" : ""}</span>
-                {o.label}
+                <span className="write-menu-check" />
+                {s.format.spaceBefore ? "Quitar espacio antes del párrafo" : "Agregar espacio antes del párrafo"}
               </button>
-            ))}
-            <hr />
+              <button
+                type="button"
+                role="menuitem"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => (chain().setParagraphFormat({ spaceAfter: s.format.spaceAfter === 0 ? null : 0 }).run(), close())}
+              >
+                <span className="write-menu-check" />
+                {s.format.spaceAfter === 0 ? "Agregar espacio después del párrafo" : "Quitar espacio después del párrafo"}
+              </button>
+              <hr />
+              <button type="button" role="menuitem" onClick={() => (close(), props.onParagraph())}>
+                <span className="write-menu-check" />
+                Opciones de párrafo…
+              </button>
+            </div>
+          )}
+        </Popover>
+
+        <Separator />
+        <ToolButton label={keys("Vínculo (⌘K)")} pressed={s.link} onClick={onLink}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Insertar imagen" onClick={onImage}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <circle cx="9" cy="10" r="2" />
+            <path d="M21 17l-5-5-9 8" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Insertar tabla" onClick={() => chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="1.5" />
+            <path d="M3 9h18M3 14h18M9 4v16M15 4v16" />
+          </svg>
+        </ToolButton>
+        <ToolButton label={keys("Salto de página (⌘↩)")} onClick={() => chain().setPageBreak().run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M6 3v5h12V3M6 21v-5h12v5" />
+            <path d="M3 12h3M9 12h2M13 12h2M18 12h3" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Encabezado y pie de página" onClick={props.onHeaderFooter}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="4" y="3" width="16" height="18" rx="1.5" />
+            <path d="M4 7.5h16M4 16.5h16" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Quitar formato" onClick={() => chain().unsetAllMarks().clearNodes().setParagraphFormat({ lineHeight: null, spaceBefore: null, spaceAfter: null, indent: null, firstLine: null }).run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M6 5h12M12 5l-3 14M4 20l16-16" />
+          </svg>
+        </ToolButton>
+
+      </div>
+        {s.table && (
+          <div className="format-bar write-table-bar" role="toolbar" aria-label="Tabla">
+            <span className="write-table-label">Tabla:</span>
+            <button type="button" className="btn write-table-btn" onClick={() => chain().addRowAfter().run()}>
+              + Fila
+            </button>
+            <button type="button" className="btn write-table-btn" onClick={() => chain().addColumnAfter().run()}>
+              + Columna
+            </button>
+            <button type="button" className="btn write-table-btn" onClick={() => chain().deleteRow().run()}>
+              − Fila
+            </button>
+            <button type="button" className="btn write-table-btn" onClick={() => chain().deleteColumn().run()}>
+              − Columna
+            </button>
+            {s.canMerge && (
+              <button type="button" className="btn write-table-btn" onClick={() => chain().mergeCells().run()}>
+                Combinar
+              </button>
+            )}
+            {s.canSplit && (
+              <button type="button" className="btn write-table-btn" onClick={() => chain().splitCell().run()}>
+                Dividir
+              </button>
+            )}
             <button
               type="button"
-              role="menuitem"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => (chain().setParagraphFormat({ spaceBefore: s.format.spaceBefore ? null : 12 }).run(), close())}
+              className="btn write-table-btn"
+              title="La primera fila como encabezado (en Word se repite en cada hoja)"
+              onClick={() => chain().toggleHeaderRow().run()}
             >
-              <span className="write-menu-check" />
-              {s.format.spaceBefore ? "Quitar espacio antes del párrafo" : "Agregar espacio antes del párrafo"}
+              Encabezado
             </button>
-            <button
-              type="button"
-              role="menuitem"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => (chain().setParagraphFormat({ spaceAfter: s.format.spaceAfter === 0 ? null : 0 }).run(), close())}
-            >
-              <span className="write-menu-check" />
-              {s.format.spaceAfter === 0 ? "Agregar espacio después del párrafo" : "Quitar espacio después del párrafo"}
-            </button>
-            <hr />
-            <button type="button" role="menuitem" onClick={() => (close(), props.onParagraph())}>
-              <span className="write-menu-check" />
-              Opciones de párrafo…
+            <ColorButton
+              label="Color de la celda"
+              current={s.cellColor}
+              emptyLabel="Sin color"
+              onPick={(color) => chain().setCellAttribute("backgroundColor", color).run()}
+              icon={
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <rect x="4" y="4" width="16" height="16" rx="1.5" />
+                  <path d="M4 12h16M12 4v16" />
+                </svg>
+              }
+            />
+            <button type="button" className="btn write-table-btn" onClick={() => chain().deleteTable().run()}>
+              Borrar tabla
             </button>
           </div>
         )}
-      </Popover>
-
-      <Separator />
-      <ToolButton label={keys("Vínculo (⌘K)")} pressed={s.link} onClick={onLink}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-          <path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1" />
-        </svg>
-      </ToolButton>
-      <ToolButton label="Insertar imagen" onClick={onImage}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <circle cx="9" cy="10" r="2" />
-          <path d="M21 17l-5-5-9 8" />
-        </svg>
-      </ToolButton>
-      <ToolButton label="Insertar tabla" onClick={() => chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-          <rect x="3" y="4" width="18" height="16" rx="1.5" />
-          <path d="M3 9h18M3 14h18M9 4v16M15 4v16" />
-        </svg>
-      </ToolButton>
-      <ToolButton label={keys("Salto de página (⌘↩)")} onClick={() => chain().setPageBreak().run()}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-          <path d="M6 3v5h12V3M6 21v-5h12v5" />
-          <path d="M3 12h3M9 12h2M13 12h2M18 12h3" />
-        </svg>
-      </ToolButton>
-      <ToolButton label="Encabezado y pie de página" onClick={props.onHeaderFooter}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-          <rect x="4" y="3" width="16" height="18" rx="1.5" />
-          <path d="M4 7.5h16M4 16.5h16" />
-        </svg>
-      </ToolButton>
-      <ToolButton label="Quitar formato" onClick={() => chain().unsetAllMarks().clearNodes().setParagraphFormat({ lineHeight: null, spaceBefore: null, spaceAfter: null, indent: null, firstLine: null }).run()}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-          <path d="M6 5h12M12 5l-3 14M4 20l16-16" />
-        </svg>
-      </ToolButton>
-
-      {s.table && (
-        <>
-          <Separator />
-          <span className="write-table-label">Tabla:</span>
-          <button type="button" className="btn write-table-btn" onClick={() => chain().addRowAfter().run()}>
-            + Fila
-          </button>
-          <button type="button" className="btn write-table-btn" onClick={() => chain().addColumnAfter().run()}>
-            + Columna
-          </button>
-          <button type="button" className="btn write-table-btn" onClick={() => chain().deleteRow().run()}>
-            − Fila
-          </button>
-          <button type="button" className="btn write-table-btn" onClick={() => chain().deleteColumn().run()}>
-            − Columna
-          </button>
-          <button type="button" className="btn write-table-btn" onClick={() => chain().deleteTable().run()}>
-            Borrar tabla
-          </button>
-        </>
-      )}
-    </div>
+    </>
   );
 }

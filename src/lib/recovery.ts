@@ -7,6 +7,8 @@ export type RecoveryInfo = { name: string; original: string | null; time: number
 export const recoveryApi = {
   /** Guarda la copia del libro de esta ventana. */
   save: (name: string, original: string | null) => invoke<void>("recovery_save", { name, original }).catch(() => {}),
+  /** Guarda la copia de un documento de WEPO Write (.docx en base64). */
+  saveFile: (name: string, original: string | null, data: string) => invoke<void>("recovery_save_file", { name, original, data }).catch(() => {}),
   /** Copias que quedaron de la última vez, la más reciente primero. */
   list: () => invoke<RecoveryInfo[]>("recovery_info").catch(() => [] as RecoveryInfo[]),
   /** Borra la copia de esta ventana. */

@@ -68,6 +68,13 @@ function flag(el: Element | undefined): boolean {
   return v === null || !["0", "false", "none", "off"].includes(v);
 }
 
+/** "#c00000", "rgb(192, 0, 0)" → "C00000" (como lo escribe Word). */
+function colorHex(color: string): string {
+  const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  if (rgb) return rgb.slice(1, 4).map((n) => Number(n).toString(16).padStart(2, "0")).join("").toUpperCase();
+  return color.replace("#", "").slice(0, 6).toUpperCase();
+}
+
 function escapeXml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -380,18 +387,43 @@ class Reader {
 
   async table(tbl: Element): Promise<JSONContent> {
     const rows: JSONContent[] = [];
+    // Ancho de cada columna (twips → píxeles).
+    const grid = kids(child(tbl, "tblGrid"), "gridCol").map((g) => Math.round(Number(attr(g, "w") ?? 0) / 15) || null);
+    // Celdas combinadas hacia abajo que siguen abiertas, por columna.
+    const open = new Map<number, JSONContent>();
     for (const tr of kids(tbl, "tr")) {
       const header = Boolean(child(child(tr, "trPr"), "tblHeader"));
       const cells: JSONContent[] = [];
+      let col = Number(attr(child(child(tr, "trPr"), "gridBefore"), "val") ?? 0);
       for (const tc of kids(tr, "tc")) {
         const tcPr = child(tc, "tcPr");
         const span = Number(attr(child(tcPr, "gridSpan"), "val") ?? 1);
+        const vMerge = child(tcPr, "vMerge");
+        const merge = vMerge ? (attr(vMerge, "val") ?? "continue") : null;
+        if (merge === "continue" && open.has(col)) {
+          // Es la continuación de la celda de arriba: esa celda crece una fila.
+          const above = open.get(col)!;
+          above.attrs!.rowspan = Number(above.attrs!.rowspan) + 1;
+          col += span;
+          continue;
+        }
         const content = await this.blocks(tc);
-        cells.push({
+        const fill = attr(child(tcPr, "shd"), "fill");
+        const widths = grid.slice(col, col + span);
+        const cell: JSONContent = {
           type: header ? "tableHeader" : "tableCell",
-          attrs: { colspan: span, rowspan: 1, colwidth: null },
+          attrs: {
+            colspan: span,
+            rowspan: 1,
+            colwidth: widths.length === span && widths.every((w) => w) ? widths : null,
+            backgroundColor: fill && fill !== "auto" ? `#${fill}` : null,
+          },
           content: content.length ? content : [{ type: "paragraph" }],
-        });
+        };
+        for (let c = col; c < col + span; c++) open.delete(c);
+        if (merge === "restart") open.set(col, cell);
+        cells.push(cell);
+        col += span;
       }
       if (cells.length) rows.push({ type: "tableRow", content: cells });
     }
@@ -607,13 +639,13 @@ class Writer {
     if (has("bold")) props += "<w:b/>";
     if (has("italic")) props += "<w:i/>";
     if (has("strike")) props += "<w:strike/>";
-    if (style?.color) props += `<w:color w:val="${style.color.replace("#", "").slice(0, 6).toUpperCase()}"/>`;
+    if (style?.color) props += `<w:color w:val="${colorHex(style.color)}"/>`;
     if (style?.fontSize) {
       const m = /([\d.]+)\s*(pt|px)?/.exec(style.fontSize);
       if (m) props += `<w:sz w:val="${Math.round((m[2] === "px" ? Number(m[1]) * 0.75 : Number(m[1])) * 2)}"/>`;
     }
     const highlight = has("highlight")?.attrs as { color?: string } | undefined;
-    if (highlight) props += `<w:shd w:val="clear" w:color="auto" w:fill="${(highlight.color ?? "#FFFF00").replace("#", "").toUpperCase()}"/>`;
+    if (highlight) props += `<w:shd w:val="clear" w:color="auto" w:fill="${colorHex(highlight.color ?? "#FFFF00")}"/>`;
     if (has("underline")) props += '<w:u w:val="single"/>';
     return props ? `<w:rPr>${props}</w:rPr>` : "";
   }
@@ -707,22 +739,60 @@ class Writer {
 
   table(table: JSONContent): string {
     const rows = table.content ?? [];
+    // Columnas: lo que mide la primera fila más lo que ocupan las celdas combinadas de arriba.
     const columns = Math.max(1, ...rows.map((r) => (r.content ?? []).reduce((n, c) => n + Number(c.attrs?.colspan ?? 1), 0)));
     const usable = this.page.width - this.page.left - this.page.right;
-    const col = Math.floor(usable / columns);
-    const grid = Array.from({ length: columns }, () => `<w:gridCol w:w="${col}"/>`).join("");
+    // Anchos guardados (en píxeles) si la tabla se ajustó a mano; si no, columnas iguales.
+    const widths: (number | null)[] = Array(columns).fill(null);
+    for (const row of rows) {
+      let c = 0;
+      for (const cell of row.content ?? []) {
+        const span = Number(cell.attrs?.colspan ?? 1);
+        const cw = cell.attrs?.colwidth as (number | null)[] | null;
+        cw?.forEach((w, i) => w && widths[c + i] === null && (widths[c + i] = w * 15));
+        c += span;
+      }
+    }
+    const known = widths.filter((w): w is number => w !== null);
+    const rest = columns - known.length;
+    const fallback = rest ? Math.max(600, Math.floor((usable - known.reduce((a, b) => a + b, 0)) / rest)) : 0;
+    const colW = widths.map((w) => Math.round(w ?? fallback));
+    const grid = colW.map((w) => `<w:gridCol w:w="${w}"/>`).join("");
+    const width = (col: number, span: number) => colW.slice(col, col + span).reduce((a, b) => a + b, 0);
+    const cellProps = (cell: JSONContent | null, col: number, span: number, merge: "restart" | "continue" | null) => {
+      const fill = cell?.attrs?.backgroundColor as string | null | undefined;
+      const shd = fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${colorHex(fill)}"/>` : "";
+      return `<w:tcPr><w:tcW w:w="${width(col, span)}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}${merge ? `<w:vMerge${merge === "restart" ? ' w:val="restart"' : ""}/>` : ""}${shd}</w:tcPr>`;
+    };
+    // Celdas combinadas hacia abajo: en Word cada fila lleva su pedazo (vMerge).
+    const pending = new Map<number, { left: number; span: number; cell: JSONContent }>();
     const body = rows
       .map((row) => {
         const header = (row.content ?? []).every((c) => c.type === "tableHeader");
-        const cells = (row.content ?? [])
-          .map((cell) => {
-            const span = Number(cell.attrs?.colspan ?? 1);
-            const props = `<w:tcPr><w:tcW w:w="${col * span}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}</w:tcPr>`;
-            const inner = (cell.content ?? []).map((b) => this.block(b)).join("") || "<w:p/>";
-            // En Word una celda debe terminar en párrafo.
-            return `<w:tc>${props}${inner.endsWith("</w:p>") || inner.endsWith("<w:p/>") ? inner : inner + "<w:p/>"}</w:tc>`;
-          })
-          .join("");
+        const queue = [...(row.content ?? [])];
+        let cells = "";
+        let col = 0;
+        while (col < columns && (queue.length || [...pending.keys()].some((k) => k >= col))) {
+          const below = pending.get(col);
+          if (below) {
+            cells += `<w:tc>${cellProps(below.cell, col, below.span, "continue")}<w:p/></w:tc>`;
+            if (--below.left === 0) pending.delete(col);
+            col += below.span;
+            continue;
+          }
+          const cell = queue.shift();
+          if (!cell) {
+            col++;
+            continue;
+          }
+          const span = Number(cell.attrs?.colspan ?? 1);
+          const rowspan = Number(cell.attrs?.rowspan ?? 1);
+          if (rowspan > 1) pending.set(col, { left: rowspan - 1, span, cell });
+          const inner = (cell.content ?? []).map((b) => this.block(b)).join("") || "<w:p/>";
+          // En Word una celda debe terminar en párrafo.
+          cells += `<w:tc>${cellProps(cell, col, span, rowspan > 1 ? "restart" : null)}${inner.endsWith("</w:p>") || inner.endsWith("<w:p/>") ? inner : inner + "<w:p/>"}</w:tc>`;
+          col += span;
+        }
         return `<w:tr>${header ? "<w:trPr><w:tblHeader/></w:trPr>" : ""}${cells}</w:tr>`;
       })
       .join("");

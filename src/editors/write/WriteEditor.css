@@ -49,7 +49,13 @@
 .write-content td, .write-content th { padding: 4px 7px; vertical-align: top; border: 1px solid #a6a6a6; }
 .write-content th { font-weight: 700; text-align: left; background: #f2f2f2; }
 .write-content td p, .write-content th p { margin: 0; }
-.write-content .selectedCell { background: color-mix(in srgb, var(--kind-accent) 14%, transparent); }
+.write-content .selectedCell { position: relative; }
+.write-content .selectedCell::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: color-mix(in srgb, var(--kind-accent) 16%, transparent); }
+.write-content td, .write-content th { position: relative; }
+/* Arrastrar el borde de una columna para cambiar su ancho */
+.write-content .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px; background: var(--kind-accent); pointer-events: none; }
+.write-content.resize-cursor, .ProseMirror.resize-cursor { cursor: col-resize; }
+.write-content .tableWrapper { overflow-x: auto; margin-right: -2px; padding-right: 2px; }
 .write-content hr { border: 0; border-top: 1px solid #999; margin: 12pt 0; }
 .write-content code { font-family: Menlo, Consolas, monospace; font-size: 0.92em; padding: 0 3px; background: #f1f1f1; border-radius: 3px; }
 .write-content p.is-editor-empty:first-child::before {
@@ -155,6 +161,9 @@
 .hf-fields { flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 
 .write-style { width: 104px; }
+/* En ventanas angostas la barra baja a otra línea en vez de esconder botones. */
+.write-format-bar { flex-wrap: wrap; row-gap: 4px; }
+.write-table-bar { gap: 6px; padding-top: 4px; padding-bottom: 4px; flex-wrap: wrap; }
 .write-table-label { font-size: 12px; color: var(--muted); margin: 0 2px 0 4px; }
 .write-table-btn { padding: 2px 8px; font-size: 12px; }
 

@@ -12,6 +12,8 @@ import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import type { EditorState, Transaction } from "@tiptap/pm/state";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { TableCell, TableHeader } from "@tiptap/extension-table";
+import Strike from "@tiptap/extension-strike";
 import type { EditorView } from "@tiptap/pm/view";
 
 declare module "@tiptap/core" {
@@ -33,6 +35,8 @@ declare module "@tiptap/core" {
 
 export const PageBreak = Node.create({
   name: "pageBreak",
+  // Antes que el salto de línea de TipTap, que también usa ⌘↩.
+  priority: 1000,
   group: "block",
   atom: true,
   selectable: true,
@@ -48,6 +52,36 @@ export const PageBreak = Node.create({
   },
   addKeyboardShortcuts() {
     return { "Mod-Enter": () => this.editor.commands.setPageBreak() };
+  },
+});
+
+// ───────────── tachado ─────────────
+
+/** El tachado de TipTap usa ⌘⇧S, que en WEPO es «Guardar como»: aquí va en ⌘⇧X, como en Google Docs. */
+export const WepoStrike = Strike.extend({
+  addKeyboardShortcuts() {
+    return { "Mod-Shift-x": () => this.editor.commands.toggleStrike() };
+  },
+});
+
+// ───────────── celdas con color ─────────────
+
+const backgroundColor = {
+  default: null,
+  parseHTML: (el: HTMLElement) => el.style.backgroundColor || el.getAttribute("data-background") || null,
+  renderHTML: (attrs: Record<string, unknown>) => (attrs.backgroundColor ? { style: `background-color: ${attrs.backgroundColor}` } : {}),
+};
+
+/** Celdas de tabla con color de fondo (en el .docx es el sombreado de la celda). */
+export const ColoredCell = TableCell.extend({
+  addAttributes() {
+    return { ...this.parent?.(), backgroundColor };
+  },
+});
+
+export const ColoredHeader = TableHeader.extend({
+  addAttributes() {
+    return { ...this.parent?.(), backgroundColor };
   },
 });
 

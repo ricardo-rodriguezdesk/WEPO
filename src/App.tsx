@@ -66,9 +66,14 @@ export default function App() {
     if (!(await confirmDiscard())) return;
     try {
       const copy = await recoveryApi.take(info.path);
-      const sheet = await sheetApi.open(copy);
       const base = info.name.replace(/\.[^.]+$/, "") || "Sin título";
-      show({ id: nextId.current++, kind: "sheets", fileName: `${base} (recuperado)`, path: null, sheet, recovered: true });
+      if (extensionOf(copy) === "docx") {
+        const write = await openWriteDocument(copy);
+        show({ id: nextId.current++, kind: "write", fileName: `${base} (recuperado)`, path: null, write, recovered: true });
+      } else {
+        const sheet = await sheetApi.open(copy);
+        show({ id: nextId.current++, kind: "sheets", fileName: `${base} (recuperado)`, path: null, sheet, recovered: true });
+      }
       dirty.current = true;
       setRecovery((list) => list.filter((r) => r.path !== info.path));
     } catch (e) {
@@ -293,6 +298,7 @@ export default function App() {
         key={doc.id}
         initial={doc.write}
         path={doc.path}
+        recovered={doc.recovered}
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
         {...common}
