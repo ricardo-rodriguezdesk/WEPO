@@ -42,6 +42,8 @@ src-tauri/                Núcleo nativo (Rust)
 │   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
 │   └── data.rs           Ordenar, filtrar, buscar y reemplazar
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
+
+src/editors/sheets/functions.ts  Catálogo de funciones en español e inglés (generado del motor)
 ```
 
 ## Ejecutar en desarrollo
@@ -79,6 +81,13 @@ cargo test
 | Seleccionar la tabla actual | ⌘A |
 | Buscar y reemplazar | ⌘F |
 | Renombrar una hoja | Doble clic en su pestaña |
+| Insertar una función sugerida | ↑↓ para elegir, Tab o ↩ para insertar |
+| Insertar una referencia en una fórmula | Clic (o arrastrar) en las celdas, o flechas justo después de `=`, `(`, `,` o un operador |
+| Alternar referencia relativa/absoluta | F4 (A1 → $A$1 → A$1 → $A1) |
+
+## Fórmulas en español o en inglés
+
+WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=SI`, `=BUSCARV`, `=SUMAR.SI.CONJUNTO`) o en inglés (`=SUM`, `=IF`, `=VLOOKUP`); el botón **ES/EN** de la barra de fórmulas cambia el idioma. En el archivo .xlsx siempre se guardan en inglés, así que se abren bien en cualquier versión de Excel.
 | Deshacer / rehacer | ⌘Z / ⌘⇧Z |
 | Guardar / guardar como | ⌘S / ⌘⇧S |
 
@@ -91,7 +100,7 @@ cargo test
 - [x] WEPO Sheets: copiar, cortar y pegar con fórmulas y formato; ancho de columnas y alto de filas
 - [x] WEPO Sheets: insertar, eliminar y ocultar filas/columnas, combinar celdas, inmovilizar paneles, autollenado
 - [x] WEPO Sheets: ordenar, filtrar, buscar y reemplazar; renombrar, duplicar, mover y eliminar hojas
-- [ ] WEPO Sheets: autocompletado de fórmulas (ya calcula más de 490 funciones)
+- [x] WEPO Sheets: fórmulas en español o inglés, autocompletado con ayuda de argumentos, referencias de colores, F4
 - [ ] WEPO Sheets: gráficas
 - [ ] WEPO Sheets: imágenes
 - [ ] WEPO Write: abrir, editar y guardar .docx

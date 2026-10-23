@@ -14,6 +14,13 @@ import FindBar from "./FindBar";
 import FilterMenu from "./FilterMenu";
 import SheetTabs from "./SheetTabs";
 import { cellCss } from "./cellStyle";
+import FormulaInput from "./FormulaInput";
+import FormulaAssist from "./FormulaAssist";
+import type { FunctionInfo } from "./functions";
+import { findFunction, suggestFunctions } from "./functions";
+import { canPointAt, cycleReference, findRefs } from "./formulaRefs";
+import type { FormulaLanguage } from "../../lib/preferences";
+import { getFormulaLanguage, setFormulaLanguage } from "../../lib/preferences";
 import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH } from "./layout";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
@@ -54,6 +61,18 @@ type Resize = { axis: "col" | "row"; index: number; startPos: number; startSize:
 
 type Menu = { x: number; y: number; kind: "cell" | "row" | "col" };
 
+/** Ayuda mientras se escribe una fórmula: funciones sugeridas o argumentos de la función actual. */
+type Assist = {
+  suggestions: FunctionInfo[];
+  selected: number;
+  /** Desde dónde se reemplaza el texto al elegir una sugerencia. */
+  replaceStart: number;
+  signature: { fn: FunctionInfo; arg: number } | null;
+};
+
+/** Referencia insertada con el mouse o las flechas mientras se escribe una fórmula. */
+type Pointing = { start: number; end: number; anchor: Cell; focus: Cell };
+
 /** Filtro activo: la tabla filtrada, la columna y los valores visibles. */
 type Filter = { region: Range; col: number; keep: string[] };
 
@@ -72,6 +91,11 @@ export default function SheetEditor(props: Props) {
   const [end, setEnd] = useState<Cell>({ r: 0, c: 0 });
   const [input, setInput] = useState(""); // contenido crudo de la celda activa
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [assist, setAssist] = useState<Assist | null>(null);
+  const [assistDismissed, setAssistDismissed] = useState(false);
+  const [pointing, setPointing] = useState<Pointing | null>(null);
+  const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
   const [copied, setCopied] = useState<{ range: Range; cut: boolean } | null>(null);
   const [resize, setResize] = useState<Resize | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -86,9 +110,10 @@ export default function SheetEditor(props: Props) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const cellEditorRef = useRef<HTMLInputElement>(null);
+  const barInputRef = useRef<HTMLInputElement>(null);
   const editingRef = useRef<Editing | null>(null);
   editingRef.current = editing;
-  const mouseSelecting = useRef<"cells" | "rows" | "cols" | null>(null);
+  const mouseSelecting = useRef<"cells" | "rows" | "cols" | "ref" | null>(null);
 
   const sheet = view.sheet;
   const rows = view.rows;
@@ -215,6 +240,95 @@ export default function SheetEditor(props: Props) {
     };
   }, [sheet, active.r, active.c, view]);
 
+  // Idioma de las funciones (SUMA o SUM): se aplica al abrir y al cambiarlo.
+  useEffect(() => {
+    run(() => sheetApi.setLanguage(sheet, language));
+  }, [language]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleLanguage() {
+    const next = language === "es" ? "en" : "es";
+    setFormulaLanguage(next);
+    setLanguage(next);
+    showStatus({ text: next === "es" ? "Funciones en español (SUMA, SI, BUSCARV…)" : "Funciones en inglés (SUM, IF, VLOOKUP…)" });
+  }
+
+  // Autocompletado: el motor dice si en el cursor va un nombre de función o un argumento.
+  useEffect(() => {
+    if (!editing || !editing.value.startsWith("=") || assistDismissed) {
+      setAssist(null);
+      return;
+    }
+    let cancelled = false;
+    sheetApi
+      .complete(sheet, editing.cell.r, editing.cell.c, editing.value, caret)
+      .then((ctx) => {
+        if (cancelled) return;
+        let suggestions: FunctionInfo[] = [];
+        let signature: Assist["signature"] = null;
+        for (const token of ctx.expecting) {
+          if (typeof token === "object" && "FunctionName" in token) {
+            suggestions = suggestFunctions(token.FunctionName, language);
+          } else if (typeof token === "object" && "Argument" in token) {
+            const fn = findFunction(token.Argument[0]);
+            if (fn) signature = { fn, arg: Math.max(0, token.Argument[1] - 1) };
+          }
+        }
+        // Las posiciones del motor no cuentan el "=" inicial.
+        setAssist({ suggestions, selected: 0, replaceStart: ctx.replace_from + 1, signature });
+      })
+      .catch(() => !cancelled && setAssist(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [editing?.value, caret, language, assistDismissed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** El campo donde se está escribiendo (la celda o la barra de fórmulas). */
+  function activeInput(): HTMLInputElement | null {
+    return editingRef.current?.source === "bar" ? barInputRef.current : cellEditorRef.current;
+  }
+
+  /** Cambia el texto en edición y deja el cursor en `nextCaret`. */
+  function setEditValue(value: string, nextCaret: number) {
+    setEditing((prev) => (prev ? { ...prev, value } : prev));
+    if (editingRef.current) editingRef.current = { ...editingRef.current, value };
+    setCaret(nextCaret);
+    requestAnimationFrame(() => {
+      const el = activeInput();
+      if (el && document.activeElement === el) el.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
+
+  function acceptSuggestion(fn: FunctionInfo) {
+    const current = editingRef.current;
+    if (!current || !assist) return;
+    const name = `${fn[language]}(`;
+    const value = current.value.slice(0, assist.replaceStart) + name + current.value.slice(caret);
+    setEditValue(value, assist.replaceStart + name.length);
+    setPointing(null);
+  }
+
+  /** Inserta (o cambia) la referencia que se está señalando con el mouse o las flechas. */
+  function pointTo(anchor: Cell, focus: Cell) {
+    const current = editingRef.current;
+    if (!current) return;
+    const range = rangeOf(anchor, focus);
+    const text =
+      range.r1 === range.r2 && range.c1 === range.c2
+        ? cellName(anchor)
+        : `${cellName({ r: range.r1, c: range.c1 })}:${cellName({ r: range.r2, c: range.c2 })}`;
+    const [start, end] = pointing ? [pointing.start, pointing.end] : [caret, caret];
+    const value = current.value.slice(0, start) + text + current.value.slice(end);
+    setPointing({ start, end: start + text.length, anchor, focus });
+    setEditValue(value, start + text.length);
+  }
+
+  /** ¿Un clic en una celda debe insertar una referencia en la fórmula en vez de terminar la edición? */
+  function wantsReference(): boolean {
+    const current = editingRef.current;
+    if (!current || !current.value.startsWith("=")) return false;
+    return (pointing !== null && caret === pointing.end) || canPointAt(current.value, caret);
+  }
+
   // Al empezar a editar en la celda, el cursor va al final del texto.
   useEffect(() => {
     if (editing?.source === "cell") {
@@ -289,6 +403,9 @@ export default function SheetEditor(props: Props) {
     const next: Editing = { value, source, quick, cell: active, original: input };
     editingRef.current = next;
     setEditing(next);
+    setCaret(value.length);
+    setPointing(null);
+    setAssistDismissed(false);
   }
 
   /** Confirma lo que se escribió y opcionalmente se mueve a otra celda. */
@@ -297,6 +414,8 @@ export default function SheetEditor(props: Props) {
     if (!current) return;
     editingRef.current = null;
     setEditing(null);
+    setPointing(null);
+    setAssist(null);
     const target = current.cell;
     if (dr || dc) move(dr, dc);
     focusGrid();
@@ -308,6 +427,8 @@ export default function SheetEditor(props: Props) {
   function cancelEditing() {
     editingRef.current = null;
     setEditing(null);
+    setPointing(null);
+    setAssist(null);
     focusGrid();
   }
 
@@ -760,6 +881,46 @@ export default function SheetEditor(props: Props) {
 
   function onEditorKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const quick = editing?.quick;
+    const suggestions = assist?.suggestions ?? [];
+
+    // Lista de funciones sugeridas abierta: las flechas eligen, Tab o Enter insertan.
+    if (suggestions.length && !assistDismissed) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setAssist({ ...assist!, selected: (assist!.selected + step + suggestions.length) % suggestions.length });
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        return acceptSuggestion(suggestions[assist!.selected]);
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        return setAssistDismissed(true);
+      }
+    }
+
+    // F4: alterna referencias relativas y absolutas ($A$1).
+    if (e.key === "F4" && editing) {
+      e.preventDefault();
+      const next = cycleReference(editing.value, caret);
+      if (next) setEditValue(next.value, next.caret);
+      return;
+    }
+
+    // Con las flechas también se señalan celdas, como en Excel, si la fórmula espera una referencia.
+    const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    if (arrows[e.key] && quick && wantsReference()) {
+      e.preventDefault();
+      const [dr, dc] = arrows[e.key];
+      const from = pointing ? (e.shiftKey ? pointing.focus : pointing.anchor) : editing!.cell;
+      const next = clamp({ r: from.r + dr, c: from.c + dc });
+      if (e.shiftKey && pointing) pointTo(pointing.anchor, next);
+      else pointTo(next, next);
+      return;
+    }
+
     switch (e.key) {
       case "Enter":
         e.preventDefault();
@@ -928,11 +1089,20 @@ export default function SheetEditor(props: Props) {
         style={{ ...cellCss(cellStyle, numeric), ...box }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
+          // Escribiendo una fórmula: el clic inserta la referencia de la celda.
+          if (wantsReference()) {
+            e.preventDefault();
+            mouseSelecting.current = "ref";
+            const anchor = e.shiftKey && pointing ? pointing.anchor : { r, c };
+            pointTo(anchor, { r, c });
+            return;
+          }
           mouseSelecting.current = "cells";
           select({ r, c }, e.shiftKey);
         }}
         onMouseEnter={() => {
           if (fillTo) setFillTo({ r, c });
+          else if (mouseSelecting.current === "ref" && pointing) pointTo(pointing.anchor, { r, c });
           else if (mouseSelecting.current === "cells") setEnd({ r, c });
         }}
         onDoubleClick={() => startEditing(input, false)}
@@ -1105,22 +1275,36 @@ export default function SheetEditor(props: Props) {
         <span className="fx" aria-hidden>
           fx
         </span>
-        <input
-          aria-label="Contenido de la celda"
-          spellCheck={false}
+        <FormulaInput
+          className="fi-bar"
+          label="Contenido de la celda"
+          inputRef={barInputRef}
           value={editing ? editing.value : input}
           onFocus={() => {
             if (!editingRef.current) startEditing(input, false, "bar");
           }}
-          onChange={(e) => {
-            const value = e.target.value;
+          onChange={(value, nextCaret) => {
             setEditing((prev) =>
               prev ? { ...prev, value } : { value, source: "bar", quick: false, cell: active, original: input },
             );
+            setCaret(nextCaret);
+            setPointing(null);
+            setAssistDismissed(false);
           }}
+          onCaret={setCaret}
           onKeyDown={onEditorKeyDown}
           onBlur={() => editing?.source === "bar" && commit()}
         />
+        <button
+          type="button"
+          className="formula-language"
+          title={language === "es" ? "Funciones en español (SUMA, SI…). Clic para cambiar a inglés." : "Funciones en inglés (SUM, IF…). Clic para cambiar a español."}
+          aria-label="Idioma de las funciones"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggleLanguage}
+        >
+          {language.toUpperCase()}
+        </button>
       </div>
 
       <div
@@ -1227,11 +1411,23 @@ export default function SheetEditor(props: Props) {
           )}
           {fillTo && <div className="fill-preview" style={rangeBox(fillRange(fillTo))} />}
 
+          {/* Referencias de la fórmula en edición, pintadas sobre la cuadrícula */}
+          {editing &&
+            findRefs(editing.value)
+              .filter((ref) => !ref.sheet || ref.sheet === view.sheet_names[sheet])
+              .map((ref, i) => (
+                <div
+                  key={`ref-${i}`}
+                  className="ref-box"
+                  style={{ ...rangeBox(ref.range), borderColor: ref.color, background: `${ref.color}14` }}
+                />
+              ))}
+
           {editing?.source === "cell" && (
-            <input
-              ref={cellEditorRef}
+            <FormulaInput
+              inputRef={cellEditorRef}
               className="cell-editor"
-              spellCheck={false}
+              label="Editar celda"
               value={editing.value}
               style={{
                 ...cellCss(activeStyle, false),
@@ -1246,7 +1442,13 @@ export default function SheetEditor(props: Props) {
                 borderBottom: undefined,
                 borderLeft: undefined,
               }}
-              onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+              onChange={(value, nextCaret) => {
+                setEditing({ ...editing, value });
+                setCaret(nextCaret);
+                setPointing(null);
+                setAssistDismissed(false);
+              }}
+              onCaret={setCaret}
               onKeyDown={onEditorKeyDown}
               onBlur={() => commit()}
             />
@@ -1291,6 +1493,20 @@ export default function SheetEditor(props: Props) {
           </span>
         )}
       </SheetTabs>
+
+      {editing && assist && !assistDismissed && (assist.suggestions.length > 0 || assist.signature) && (
+        <FormulaAssist
+          anchor={(() => {
+            const box = activeInput()?.getBoundingClientRect();
+            return { left: box?.left ?? 0, top: box?.bottom ?? 0 };
+          })()}
+          language={language}
+          suggestions={assist.suggestions}
+          selected={assist.selected}
+          onPick={acceptSuggestion}
+          signature={assist.signature}
+        />
+      )}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.kind)} onClose={() => setMenu(null)} />}
 

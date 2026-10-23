@@ -18,18 +18,56 @@
   font-family: Georgia, serif;
   border-right: 1px solid var(--border);
 }
-.formula-bar input {
+.formula-bar .fi-bar {
   flex: 1;
   height: 100%;
-  border: 0;
   padding: 0 8px;
-  font: inherit;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: var(--text);
   background: var(--bg);
+}
+.formula-bar .fi-bar:focus-within { box-shadow: inset 0 -2px 0 var(--kind-accent); }
+.formula-language {
+  height: 22px;
+  margin: 0 6px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--kind-accent);
+  background: var(--kind-soft);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.formula-language:hover { border-color: var(--kind-accent); }
+
+/* Campo de fórmula con referencias de colores: el texto real es transparente
+   y una copia coloreada se dibuja detrás, alineada carácter por carácter. */
+.formula-input { position: relative; display: flex; align-items: center; overflow: hidden; }
+.formula-input input {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
   outline: none;
 }
-.formula-bar input:focus { box-shadow: inset 0 -2px 0 var(--kind-accent); }
+.formula-input.is-formula input { color: transparent; caret-color: var(--text); }
+.formula-input.is-formula input::selection { color: transparent; background: color-mix(in srgb, var(--kind-accent) 30%, transparent); }
+.fi-mirror {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: inherit;
+  white-space: pre;
+  overflow: hidden;
+  color: var(--text);
+  pointer-events: none;
+}
 
 .grid-scroll { flex: 1; overflow: auto; position: relative; outline: none; user-select: none; }
 .grid-canvas { position: relative; }
@@ -135,7 +173,7 @@
 .cell-editor {
   position: absolute;
   z-index: 2;
-  padding: 0 5px;
+  padding: 0 7px;
   font: inherit;
   color: var(--text);
   background: var(--surface);
@@ -226,3 +264,47 @@
   border-radius: 6px;
   outline: none;
 }
+
+/* Recuadros de las referencias de la fórmula en edición */
+.ref-box {
+  position: absolute;
+  z-index: 1;
+  border: 2px solid;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* Sugerencias de funciones y ayuda de argumentos */
+.formula-assist {
+  position: fixed;
+  z-index: 40;
+  width: 370px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+.fa-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.fa-option.selected { background: var(--kind-soft); }
+.fa-name { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; color: var(--kind-accent); }
+.fa-description { font-size: 12px; color: var(--muted); }
+.fa-hint { padding: 4px 8px 2px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
+.formula-assist.signature { padding: 8px 10px; }
+.fa-signature { font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-bottom: 2px; }
+.fa-current-arg { font-weight: 700; color: var(--kind-accent); text-decoration: underline; }

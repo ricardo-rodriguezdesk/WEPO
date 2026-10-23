@@ -11,6 +11,7 @@ use std::io::BufWriter;
 use std::path::Path;
 
 use calamine::{open_workbook_auto, Data, Reader};
+use ironcalc::base::expressions::parser::CompletionContext;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{BorderItem, CellType, Color};
 use ironcalc::base::{BorderArea, ClipboardData};
@@ -341,6 +342,29 @@ impl SheetDocument {
             .into_iter()
             .map(|p| p.name)
             .collect()
+    }
+
+    // ───────────── fórmulas ─────────────
+
+    /// Idioma de los nombres de funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…).
+    /// Solo cambia cómo se escriben y se muestran: el .xlsx siempre se guarda
+    /// en inglés, que es lo que entiende cualquier Excel.
+    pub fn set_language(&mut self, language: &str) -> Result<(), String> {
+        let id: &'static str = if language == "es" { "es" } else { "en" };
+        self.model.set_language(id)
+    }
+
+    /// Qué espera la fórmula en la posición del cursor: un nombre de función
+    /// (para sugerir), un argumento de cierta función o un rango.
+    pub fn complete(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        col: i32,
+        formula: &str,
+        cursor: usize,
+    ) -> Result<CompletionContext, String> {
+        self.model.formula_completion(sheet, row, col, formula, cursor)
     }
 
     /// Lo que el usuario escribió en la celda: la fórmula (=SUMA…) o el valor.
@@ -825,6 +849,39 @@ mod tests {
         assert!(view.hidden_cols.is_empty());
         assert_eq!(view.merged.len(), 2);
         assert_eq!(doc.cell_input(0, 1, 1).unwrap(), "Título");
+    }
+
+    #[test]
+    fn formulas_en_espanol() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        doc.set_language("es").unwrap();
+        doc.set_cell(0, 1, 1, "4").unwrap();
+        doc.set_cell(0, 2, 1, "=SUMA(A1,6)").unwrap();
+        doc.set_cell(0, 3, 1, "=SI(A2>5,\"alto\",\"bajo\")").unwrap();
+        assert_eq!(text(&doc, 2, 1), "10");
+        assert_eq!(text(&doc, 3, 1), "alto");
+        assert_eq!(doc.cell_input(0, 2, 1).unwrap(), "=SUMA(A1,6)");
+
+        // El mismo libro, mostrado en inglés.
+        doc.set_language("en").unwrap();
+        assert_eq!(doc.cell_input(0, 2, 1).unwrap(), "=SUM(A1,6)");
+
+        // Sugerencias del motor.
+        doc.set_language("es").unwrap();
+        let ctx = serde_json::to_value(doc.complete(0, 4, 1, "=BUSC", 5).unwrap()).unwrap();
+        assert_eq!(ctx["expecting"][0]["FunctionName"], "BUSC");
+        // Ojo: las posiciones que devuelve el motor no cuentan el "=" inicial.
+        assert_eq!(ctx["replace_from"], 0);
+        let ctx = serde_json::to_value(doc.complete(0, 4, 1, "=SUMA(A1,", 9).unwrap()).unwrap();
+        assert_eq!(ctx["expecting"][0]["Argument"][0], "SUMA");
+
+        // En el archivo se guarda en inglés.
+        let path = std::env::temp_dir().join(format!("wepo-es-{}.xlsx", std::process::id()));
+        let path = path.to_str().unwrap();
+        doc.save(path, 0).unwrap();
+        let reopened = SheetDocument::open(path).unwrap();
+        assert_eq!(reopened.cell_input(0, 2, 1).unwrap(), "=SUM(A1,6)");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

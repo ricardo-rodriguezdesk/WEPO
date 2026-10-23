@@ -298,6 +298,33 @@ fn sheet_replace(
     Ok(ReplaceResult { count, view: doc.view(sheet)? })
 }
 
+// ───────────── fórmulas ─────────────
+
+/// Cambia el idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…).
+#[tauri::command]
+fn sheet_language(state: State<OpenSheet>, sheet: u32, language: String) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.set_language(&language)?;
+    doc.view(sheet)
+}
+
+/// Qué espera la fórmula en la posición del cursor (para el autocompletado).
+#[tauri::command]
+fn sheet_complete(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row: i32,
+    col: i32,
+    formula: String,
+    cursor: usize,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let context = doc.complete(sheet, row, col, &formula, cursor)?;
+    serde_json::to_value(context).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn sheet_undo(state: State<OpenSheet>, sheet: u32) -> Result<SheetView, String> {
     with_sheet(&state, sheet, |doc| doc.undo())
@@ -362,6 +389,8 @@ pub fn run() {
             sheet_filter,
             sheet_find,
             sheet_replace,
+            sheet_language,
+            sheet_complete,
             sheet_undo,
             sheet_redo,
             sheet_add,

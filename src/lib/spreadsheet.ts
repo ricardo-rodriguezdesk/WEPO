@@ -53,6 +53,12 @@ export type SheetView = {
 };
 
 export type FindMatch = { sheet: number; row: number; col: number };
+
+/** Respuesta del motor sobre lo que espera una fórmula en el cursor. Sus posiciones no cuentan el "=". */
+export type CompletionContext = {
+  expecting: ({ FunctionName: string } | { Argument: [string, number] } | "Range" | "Other")[];
+  replace_from: number;
+};
 export type FindOptions = { case: boolean; whole: boolean; all: boolean };
 
 /** Rango en el formato que esperan los comandos de Rust (base 1). */
@@ -142,6 +148,13 @@ export const sheetApi = {
   },
   replaceAll: (sheet: number, query: string, replacement: string, options: FindOptions) =>
     invoke<{ count: number; view: SheetView }>("sheet_replace", { sheet, query, replacement, ...options }),
+
+  // Fórmulas
+  /** Idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…). */
+  setLanguage: (sheet: number, language: "es" | "en") => invoke<SheetView>("sheet_language", { sheet, language }),
+  /** Qué espera la fórmula en la posición del cursor (para el autocompletado). */
+  complete: (sheet: number, row: number, col: number, formula: string, cursor: number) =>
+    invoke<CompletionContext>("sheet_complete", { sheet, row: row + 1, col: col + 1, formula, cursor }),
 
   undo: (sheet: number) => invoke<SheetView>("sheet_undo", { sheet }),
   redo: (sheet: number) => invoke<SheetView>("sheet_redo", { sheet }),
