@@ -1,0 +1,64 @@
+# Crea el instalador .dmg de WEPO para Mac (Apple Silicon e Intel).
+#
+# Se ejecuta al subir una etiqueta de versión:
+#   git tag v0.1.0 && git push origin v0.1.0
+# o a mano desde la pestaña "Actions" de GitHub ("Run workflow").
+#
+# El resultado queda como borrador en la sección "Releases" del repositorio,
+# listo para revisarlo y publicarlo.
+
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: Apple Silicon
+          - target: x86_64-apple-darwin
+            label: Intel
+    name: macOS (${{ matrix.label }})
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: WEPO v__VERSION__
+          releaseBody: |
+            Descarga el .dmg que corresponde a tu Mac:
+            - **aarch64**: Mac con chip Apple (M1, M2, M3, M4…)
+            - **x64**: Mac con procesador Intel
+
+            WEPO todavía no está firmado por Apple. La primera vez, haz clic derecho sobre la app → **Abrir** → **Abrir**.
+          releaseDraft: true
+          prerelease: false

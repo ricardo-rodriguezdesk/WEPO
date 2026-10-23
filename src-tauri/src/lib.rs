@@ -2,6 +2,7 @@
 // Cada módulo atiende un tipo de documento; aquí solo se exponen sus
 // funciones a la interfaz como comandos de Tauri.
 
+mod mac;
 mod sheet_format;
 mod sheets;
 mod xlsx_extras;
@@ -475,6 +476,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(OpenSheet::default())
+        .manage(mac::OpenedFiles::default())
+        .menu(|app| mac::menu(app))
+        .on_menu_event(|app, event| mac::on_menu(app, event.id().as_ref()))
+        .setup(|app| {
+            // En Windows y Linux, "Abrir con…" pasa los archivos como argumentos.
+            let args: Vec<String> = std::env::args()
+                .skip(1)
+                .filter(|a| !a.starts_with('-') && std::path::Path::new(a).is_file())
+                .collect();
+            mac::on_opened(app.handle(), args);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             sheet_new,
             sheet_open,
@@ -521,7 +534,22 @@ pub fn run() {
             sheet_redo,
             sheet_add,
             sheet_save,
+            mac::take_opened_files,
+            mac::print_window,
+            mac::quit_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar WEPO");
+        .build(tauri::generate_context!())
+        .expect("error al iniciar WEPO")
+        .run(|_app, _event| {
+            // macOS: doble clic en Finder, "Abrir con…" o arrastrar al ícono del Dock.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let paths = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                mac::on_opened(_app, paths);
+            }
+        });
 }

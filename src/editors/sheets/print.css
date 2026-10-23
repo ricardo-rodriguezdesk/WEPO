@@ -1,0 +1,62 @@
+/* Hoja para imprimir: invisible en pantalla, lo único visible al imprimir. */
+
+.print-root {
+  display: none;
+  /* Colores claros aunque la app esté en modo oscuro. */
+  --chart-bg: #fff;
+  --chart-text: #222;
+  --chart-muted: #666;
+  --chart-grid: #e5e5e5;
+  --chart-axis: #999;
+}
+
+/* La hoja se dibuja fuera de #root (con un portal), así que al imprimir basta con ocultar la app. */
+@media print {
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  #root { display: none !important; }
+  .print-root {
+    display: block;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+.print-sheet { position: relative; }
+.print-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 11pt;
+}
+.print-table tr { break-inside: avoid; page-break-inside: avoid; }
+.print-table thead { display: table-header-group; }
+.print-table td { padding: 0; vertical-align: top; overflow: visible; }
+.print-sheet.gridlines .print-table td { border: 0.5px solid #d4d4d4; }
+.print-heading {
+  padding: 0 4px;
+  font-size: 9pt;
+  font-weight: 500;
+  color: #555;
+  background: #f1f1f1 !important;
+  border: 0.5px solid #c8c8c8;
+  text-align: center;
+}
+.print-cell {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+.print-cell.spill { overflow: visible; }
+.print-cell.spill .cell-text { max-width: none; overflow: visible; }
+.print-cell .cell-text { position: relative; overflow-wrap: anywhere; }
+.print-cell .data-bar { position: absolute; left: 1px; top: 3px; bottom: 3px; border-radius: 1px; opacity: 0.85; }
+.print-cell .cf-icon { margin-right: 4px; }
+.print-cell .cf-rating { letter-spacing: 1px; }
+.print-drawing { position: absolute; break-inside: avoid; }
+.print-drawing img { width: 100%; height: 100%; object-fit: fill; }
+.print-drawing .chart-svg { display: block; }

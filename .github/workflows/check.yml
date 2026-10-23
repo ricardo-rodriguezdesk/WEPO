@@ -1,0 +1,27 @@
+# Revisa que todo compile y que las pruebas pasen en cada cambio.
+name: Revisión
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - name: Interfaz (TypeScript y Vite)
+        run: npm run build
+      - name: Núcleo (pruebas de Rust)
+        working-directory: src-tauri
+        run: cargo test --lib

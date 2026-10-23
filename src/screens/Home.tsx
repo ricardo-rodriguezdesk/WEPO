@@ -1,11 +1,18 @@
 import type { DocKind } from "../lib/documents";
 import { DOC_KINDS } from "../lib/documents";
 import KindIcon from "../components/KindIcon";
+import appIcon from "../assets/wepo-icon.png";
+import type { RecentFile } from "../lib/recents";
+import { folderLabel, whenLabel } from "../lib/recents";
 import "./Home.css";
 
 type Props = {
   onNew: (kind: DocKind) => void;
   onOpen: () => void;
+  onOpenRecent: (path: string) => void;
+  onRemoveRecent: (path: string) => void;
+  onClearRecents: () => void;
+  recents: RecentFile[];
   dragging: boolean;
   error: string | null;
 };
@@ -13,11 +20,14 @@ type Props = {
 const ORDER: DocKind[] = ["write", "sheets", "present"];
 
 /** Pantalla de inicio: crear un documento nuevo o abrir uno existente. */
-export default function Home({ onNew, onOpen, dragging, error }: Props) {
+export default function Home({ onNew, onOpen, onOpenRecent, onRemoveRecent, onClearRecents, recents, dragging, error }: Props) {
   return (
     <main className={`home ${dragging ? "dragging" : ""}`}>
       <section className="home-hero">
-        <h1 className="home-logo">WEPO</h1>
+        <h1 className="home-logo">
+          <img src={appIcon} alt="" width={52} height={52} />
+          WEPO
+        </h1>
         <p className="home-tagline">Write · Edit · Present · Open</p>
       </section>
 
@@ -49,6 +59,40 @@ export default function Home({ onNew, onOpen, dragging, error }: Props) {
         </div>
         {error && <p className="home-error">{error}</p>}
       </section>
+
+      {recents.length > 0 && (
+        <section className="home-section">
+          <div className="home-section-head">
+            <h2>Recientes</h2>
+            <button type="button" className="home-link" onClick={onClearRecents}>
+              Borrar lista
+            </button>
+          </div>
+          <ul className="home-recents">
+            {recents.map((file) => (
+              <li key={file.path} className={`kind-${file.kind}`}>
+                <button type="button" className="home-recent" onClick={() => onOpenRecent(file.path)} title={file.path}>
+                  <span className="home-recent-icon">
+                    <KindIcon kind={file.kind} size={18} />
+                  </span>
+                  <span className="home-recent-name">{file.name}</span>
+                  <span className="home-recent-folder">{folderLabel(file.path)}</span>
+                  <span className="home-recent-when">{whenLabel(file.time)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="home-recent-remove"
+                  aria-label={`Quitar ${file.name} de recientes`}
+                  title="Quitar de la lista"
+                  onClick={() => onRemoveRecent(file.path)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {dragging && (
         <div className="home-drop-overlay">

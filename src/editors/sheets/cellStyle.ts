@@ -49,3 +49,27 @@ export function cellCss(style: StyleView, numeric: boolean): CSSProperties {
   if (left) css.borderLeft = left;
   return css;
 }
+
+/** Íconos del formato condicional (nombres de IronCalc) dibujados con caracteres. */
+export const ICON_GLYPHS: Record<string, string> = {
+  ArrowUp: "▲",
+  ArrowRight: "▶",
+  ArrowDown: "▼",
+  ArrowAngleUp: "◥",
+  ArrowAngleDown: "◢",
+  Circle: "●",
+  TriangleUp: "▲",
+  TriangleDown: "▼",
+  TriangleUpFilled: "▲",
+  TriangleDownFilled: "▼",
+  FlatRectangle: "▬",
+  Rhombus: "◆",
+  Flag: "⚑",
+  Check: "✔",
+  Cross: "✖",
+  Exclamation: "!",
+  Star: "★",
+  Heart: "♥",
+  ThumbsUp: "👍",
+  ThumbsDown: "👎",
+};

@@ -16,7 +16,8 @@
         "width": 1200,
         "height": 800,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "label": "main"
       }
     ],
     "security": {
@@ -32,6 +33,65 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Productivity",
+    "copyright": "© 2026 Ricardo Rodríguez Arellano. Código abierto.",
+    "shortDescription": "Escribe, edita y presenta: hojas de cálculo, documentos y presentaciones para Mac.",
+    "longDescription": "WEPO (Write · Edit · Present · Open) es una suite de oficina de código abierto para macOS. WEPO Sheets abre y edita archivos .xlsx, .xls, .ods y .csv con fórmulas, formato, gráficas e imágenes.",
+    "fileAssociations": [
+      {
+        "ext": [
+          "xlsx",
+          "xlsm"
+        ],
+        "name": "Libro de Excel",
+        "description": "Libro de Excel",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.openxmlformats.spreadsheetml.sheet",
+          "org.openxmlformats.spreadsheetml.sheet.macroenabled"
+        ]
+      },
+      {
+        "ext": [
+          "xls"
+        ],
+        "name": "Libro de Excel 97-2004",
+        "description": "Libro de Excel 97-2004",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "com.microsoft.excel.xls"
+        ]
+      },
+      {
+        "ext": [
+          "ods"
+        ],
+        "name": "Hoja de cálculo OpenDocument",
+        "description": "Hoja de cálculo OpenDocument",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "org.oasis-open.opendocument.spreadsheet"
+        ]
+      },
+      {
+        "ext": [
+          "csv"
+        ],
+        "name": "Valores separados por comas",
+        "description": "Valores separados por comas",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "public.comma-separated-values-text"
+        ]
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

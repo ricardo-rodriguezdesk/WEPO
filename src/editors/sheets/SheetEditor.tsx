@@ -24,12 +24,17 @@ import FormatBar, { Separator, ToolButton } from "./FormatBar";
 import FindBar from "./FindBar";
 import FilterMenu from "./FilterMenu";
 import SheetTabs from "./SheetTabs";
-import { cellCss } from "./cellStyle";
+import { ICON_GLYPHS, cellCss } from "./cellStyle";
 import FormulaInput from "./FormulaInput";
 import ConditionalFormatDialog from "./ConditionalFormatDialog";
 import ValidationDialog from "./ValidationDialog";
 import DrawingLayer from "./DrawingLayer";
 import ChartPanel, { CHART_TYPES } from "./ChartPanel";
+import PrintDialog from "./PrintDialog";
+import PrintSheet, { usedRange } from "./PrintSheet";
+import type { PrintJob, PrintOptions } from "./PrintSheet";
+import { invoke } from "@tauri-apps/api/core";
+import { onCommand, runCommand } from "../../lib/commands";
 import { lineHeight, textWidth, wrappedLines } from "./measure";
 import FormulaAssist from "./FormulaAssist";
 import type { FunctionInfo } from "./functions";
@@ -41,29 +46,6 @@ import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDT
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
-/** Íconos del formato condicional (nombres de IronCalc) dibujados con caracteres. */
-const ICON_GLYPHS: Record<string, string> = {
-  ArrowUp: "▲",
-  ArrowRight: "▶",
-  ArrowDown: "▼",
-  ArrowAngleUp: "◥",
-  ArrowAngleDown: "◢",
-  Circle: "●",
-  TriangleUp: "▲",
-  TriangleDown: "▼",
-  TriangleUpFilled: "▲",
-  TriangleDownFilled: "▼",
-  FlatRectangle: "▬",
-  Rhombus: "◆",
-  Flag: "⚑",
-  Check: "✔",
-  Cross: "✖",
-  Exclamation: "!",
-  Star: "★",
-  Heart: "♥",
-  ThumbsUp: "👍",
-  ThumbsDown: "👎",
-};
 
 const MIN_ROWS = 100;
 const MIN_COLS = 26;
@@ -75,6 +57,8 @@ type Props = {
   onHome: () => void;
   onOpen: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  /** Se guardó en esta ruta (para la lista de recientes). */
+  onSaved: (path: string) => void;
 };
 
 /**
@@ -118,7 +102,7 @@ type Filter = { region: Range; col: number; keep: string[] };
 
 /** WEPO Sheets: hoja de cálculo editable con fórmulas, formato y herramientas de datos. */
 export default function SheetEditor(props: Props) {
-  const { initialView, onHome, onOpen, onDirtyChange } = props;
+  const { initialView, onHome, onOpen, onDirtyChange, onSaved } = props;
 
   const [view, setView] = useState(initialView);
   const [path, setPath] = useState(props.path);
@@ -136,7 +120,8 @@ export default function SheetEditor(props: Props) {
   const [assistDismissed, setAssistDismissed] = useState(false);
   const [pointing, setPointing] = useState<Pointing | null>(null);
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
-  const [dialog, setDialog] = useState<"conditional" | "validation" | null>(null);
+  const [dialog, setDialog] = useState<"conditional" | "validation" | "print" | null>(null);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
   const [listOpen, setListOpen] = useState(false);
   // Gráfica o imagen seleccionada, y si su panel de edición está abierto.
   const [selectedDrawing, setSelectedDrawing] = useState<number | null>(null);
@@ -921,6 +906,7 @@ export default function SheetEditor(props: Props) {
     setFileName(fileNameOf(target));
     setDirty(false);
     onDirtyChange(false);
+    onSaved(target);
     const csvNote =
       extensionOf(target) === "csv" && view.sheet_names.length > 1
         ? " (el CSV solo contiene la hoja actual)"
@@ -957,23 +943,71 @@ export default function SheetEditor(props: Props) {
     await run(() => saveTo(finalPath));
   }
 
-  // ⌘S, ⌘⇧S y ⌘F funcionan desde cualquier parte de la ventana.
-  const windowKeys = useRef({ saveDocument, setFindOpen });
-  windowKeys.current = { saveDocument, setFindOpen };
+  // ───────────── imprimir ─────────────
+
+  async function startPrint(options: PrintOptions) {
+    setDialog(null);
+    await commit();
+    // Una selección de filas o columnas completas se recorta hasta donde hay datos.
+    const range = options.area === "selection" ? clampToData(rows, selection) : usedRange(view, colAxis, rowAxis);
+    if (!range) {
+      showStatus({ text: "La hoja está vacía: no hay nada que imprimir.", error: true });
+      return;
+    }
+    // Las imágenes se cargan antes, para que ya estén en el papel.
+    const images: Record<number, string> = {};
+    await Promise.all(
+      view.drawings
+        .filter((d) => d.type === "image")
+        .map((d) =>
+          sheetApi
+            .imageData(d.id)
+            .then((url) => (images[d.id] = url))
+            .catch(() => {}),
+        ),
+    );
+    setPrintJob({ ...options, range, images });
+  }
+
+  // Cuando la hoja para imprimir ya está dibujada, se abre el diálogo de macOS.
   useEffect(() => {
+    if (!printJob) return;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        invoke("print_window").catch(() => window.print());
+      }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [printJob]);
+
+  // Si la hoja cambia, la versión para imprimir ya no sirve.
+  useEffect(() => setPrintJob(null), [view]);
+
+  // Órdenes que llegan del menú de la app o de los atajos (⌘S, ⌘⇧S, ⌘F, ⌘P).
+  const commands = useRef({ saveDocument, setFindOpen, setDialog });
+  commands.current = { saveDocument, setFindOpen, setDialog };
+  useEffect(() => {
+    const stop = onCommand((command) => {
+      const c = commands.current;
+      if (command === "save") c.saveDocument(false);
+      else if (command === "save-as") c.saveDocument(true);
+      else if (command === "find") c.setFindOpen(true);
+      else if (command === "print") c.setDialog("print");
+    });
     function onKey(e: globalThis.KeyboardEvent) {
       if (!e.metaKey) return;
       const key = e.key.toLowerCase();
-      if (key === "s") {
+      const command = key === "s" ? (e.shiftKey ? "save-as" : "save") : key === "f" ? "find" : key === "p" ? "print" : null;
+      if (command) {
         e.preventDefault();
-        windowKeys.current.saveDocument(e.shiftKey);
-      } else if (key === "f") {
-        e.preventDefault();
-        windowKeys.current.setFindOpen(true);
+        runCommand(command);
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      stop();
+      window.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   // ───────────── teclado ─────────────
@@ -1436,6 +1470,12 @@ export default function SheetEditor(props: Props) {
       <button className="btn btn-icon" onClick={() => setFindOpen((v) => !v)} title="Buscar y reemplazar (⌘F)" aria-label="Buscar">
         ⌕
       </button>
+      <button className="btn btn-icon" onClick={() => setDialog("print")} title="Imprimir o exportar a PDF (⌘P)" aria-label="Imprimir">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+          <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
+          <rect x="7" y="14" width="10" height="7" rx="1" />
+        </svg>
+      </button>
       <button className="btn" onClick={() => saveDocument()} title="Guardar (⌘S)">
         Guardar
       </button>
@@ -1876,6 +1916,23 @@ export default function SheetEditor(props: Props) {
             focusGrid();
           }}
         />
+      )}
+      {dialog === "print" && (
+        <PrintDialog
+          selectionLabel={
+            selection.r1 === selection.r2 && selection.c1 === selection.c2
+              ? cellName({ r: selection.r1, c: selection.c1 })
+              : `${cellName({ r: selection.r1, c: selection.c1 })}:${cellName({ r: selection.r2, c: selection.c2 })}`
+          }
+          onPrint={startPrint}
+          onClose={() => {
+            setDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {printJob && (
+        <PrintSheet job={printJob} view={view} cols={colAxis} rows={rowAxis} merged={merged} decorations={decorations} />
       )}
       {dialog === "validation" && (
         <ValidationDialog
