@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TextLayer } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { AnnotationMode, TextLayer } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFPageProxy, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
@@ -8,14 +8,16 @@ import ContextMenu from "../../components/ContextMenu";
 import type { MenuItem } from "../../components/ContextMenu";
 import ZoomControl from "../sheets/ZoomControl";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import { Separator, ToolButton } from "../sheets/FormatBar";
+import { ColorButton, Popover, Separator, ToolButton } from "../sheets/FormatBar";
 import { loadPdf, readPdf } from "../../lib/pdf";
 import { fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
-import type { PageRef, Source } from "./pdfEdit";
+import type { Annotation, FormValues, PageRef, Source } from "./pdfEdit";
 import { pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
+import type { FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
 import "./PdfViewer.css";
 
@@ -33,15 +35,20 @@ type Props = {
 const CSS_PER_PT = 96 / 72;
 const PAGE_GAP = 16;
 
-/** Herramientas de anotación que llegarán en el siguiente paso. */
-const FUTURE_TOOLS: { id: string; label: string; icon: string[] }[] = [
-  { id: "highlight", label: "Resaltar texto", icon: ["M9 11l-4 4v3h3l4-4", "M9 11l5-5 4 4-5 5", "M9 11l4 4"] },
-  { id: "text", label: "Agregar texto", icon: ["M5 6V4h14v2", "M12 4v16", "M9 20h6"] },
+/** Herramientas para anotar: con ellas se dibuja encima de las páginas. */
+const TOOLS: { id: Tool; label: string; icon: string[] }[] = [
+  { id: "select", label: "Seleccionar y mover", icon: ["M5 3l14 8-6 2-2 6z"] },
+  { id: "highlight", label: "Resaltar (elige el texto o arrastra un recuadro)", icon: ["M9 11l-4 4v3h3l4-4", "M9 11l5-5 4 4-5 5", "M9 11l4 4"] },
+  { id: "text", label: "Agregar texto (clic donde va)", icon: ["M5 6V4h14v2", "M12 4v16", "M9 20h6"] },
   { id: "draw", label: "Dibujar a mano", icon: ["M4 20c3-1 4-4 7-7s6-4 7-7", "M15 4l5 5"] },
-  { id: "note", label: "Nota o comentario", icon: ["M4 5h16v11H9l-5 4z"] },
-  { id: "sign", label: "Firmar", icon: ["M3 17c2-4 4-9 6-9s-1 9 1 9 3-5 5-5 1 4 3 4h3", "M3 21h18"] },
-  { id: "form", label: "Rellenar formulario", icon: ["M4 4h16v16H4z", "M8 9h8M8 13h8M8 17h4"] },
+  { id: "note", label: "Nota adhesiva (clic donde va)", icon: ["M4 5h16v11H9l-5 4z"] },
+  { id: "sign", label: "Firmar (clic donde va la firma)", icon: ["M3 17c2-4 4-9 6-9s-1 9 1 9 3-5 5-5 1 4 3 4h3", "M3 21h18"] },
 ];
+
+const HIGHLIGHTS = ["#FFE14D", "#7EE787", "#FF9ECF", "#7CC4FF", "#FFB366"];
+
+/** Lo que se puede deshacer: las páginas, las anotaciones y los campos del formulario. */
+type Snapshot = { pages: PageRef[]; annotations: Annotation[]; form: FormValues };
 
 /** WEPO PDF: ver un PDF y editar sus páginas (ordenar, girar, quitar, combinar con otro PDF). */
 export default function PdfViewer({ data, path: initialPath, fileName: initialName, onHome, onOpen, onDirtyChange, onSaved }: Props) {
@@ -49,7 +56,19 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   const [pages, setPagesState] = useState<PageRef[]>([]);
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
-  const history = useRef<{ past: PageRef[][]; future: PageRef[][] }>({ past: [], future: [] });
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
+  const [form, setForm] = useState<FormValues>({});
+  const formRef = useRef(form);
+  formRef.current = form;
+  const [fields, setFields] = useState<Record<string, FormField[]>>({});
+  const [tool, setTool] = useState<Tool>("select");
+  const [toolStyle, setToolStyle] = useState<ToolStyle>({ highlight: HIGHLIGHTS[0], ink: "#C42B45", inkWidth: 2, textColor: "#1D1D1F", textSize: 14 });
+  const [selectedAnnot, setSelectedAnnot] = useState<string | null>(null);
+  const [signature, setSignature] = useState(loadSignature);
+  const [signDialog, setSignDialog] = useState(false);
+  const history = useRef<{ past: Snapshot[]; future: Snapshot[] }>({ past: [], future: [] });
   const [error, setError] = useState<string | null>(null);
   const [needsPassword, setNeedsPassword] = useState<"ask" | "wrong" | null>(null);
   const [password, setPassword] = useState("");
@@ -78,7 +97,17 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
         setNeedsPassword(null);
         setLocked(Boolean(pass));
         setSources([source]);
-        setPagesState(await pagesOf(source));
+        const list = await pagesOf(source);
+        setPagesState(list);
+        // Campos de formulario (solo los del PDF original).
+        const found: Record<string, FormField[]> = {};
+        for (const p of list) {
+          const page = await doc.getPage(p.index + 1);
+          const items = (await page.getAnnotations({ intent: "display" })) as Record<string, unknown>[];
+          const widgets = items.filter((a) => a.subtype === "Widget" && a.fieldName && a.fieldType && !a.pushButton && !a.hidden).map(widgetField).filter(Boolean) as FormField[];
+          if (widgets.length) found[p.id] = widgets;
+        }
+        setFields(found);
       } catch (e) {
         const name = (e as { name?: string })?.name;
         if (name === "PasswordException") setNeedsPassword(pass ? "wrong" : "ask");
@@ -154,34 +183,84 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
   // ───────────── editar páginas (con deshacer) ─────────────
 
-  function commit(next: PageRef[]) {
+  const snapshot = (): Snapshot => ({ pages: pagesRef.current, annotations: annotationsRef.current, form: formRef.current });
+
+  function restore(s: Snapshot) {
+    setPagesState(s.pages);
+    setAnnotations(s.annotations);
+    setForm(s.form);
+    setDirty(true);
+    onDirtyChange(true);
+  }
+
+  /** Cambia el documento y lo anota para deshacer (`record` = false: cambio en curso, sin anotar). */
+  function change(next: Partial<Snapshot>, record = true, before?: Snapshot) {
     if (locked) {
       setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no editarlo." });
       return;
     }
-    history.current.past.push(pagesRef.current);
-    history.current.future = [];
-    setPagesState(next);
+    if (record) {
+      history.current.past.push(before ?? snapshot());
+      history.current.future = [];
+    }
+    if (next.pages) setPagesState(next.pages);
+    if (next.annotations) (annotationsRef.current = next.annotations), setAnnotations(next.annotations);
+    if (next.form) (formRef.current = next.form), setForm(next.form);
     setDirty(true);
     onDirtyChange(true);
+  }
+
+  function commit(next: PageRef[]) {
+    change({ pages: next });
   }
 
   function undo() {
     const prev = history.current.past.pop();
     if (!prev) return;
-    history.current.future.push(pagesRef.current);
-    setPagesState(prev);
-    setDirty(true);
-    onDirtyChange(true);
+    history.current.future.push(snapshot());
+    restore(prev);
   }
 
   function redo() {
     const next = history.current.future.pop();
     if (!next) return;
-    history.current.past.push(pagesRef.current);
-    setPagesState(next);
-    setDirty(true);
-    onDirtyChange(true);
+    history.current.past.push(snapshot());
+    restore(next);
+  }
+
+  // ───────────── anotaciones ─────────────
+
+  /** Estado antes de un arrastre (para deshacerlo completo). */
+  const dragStart = useRef<Snapshot | null>(null);
+
+  function addAnnotation(a: Annotation) {
+    change({ annotations: [...annotationsRef.current, a] });
+    setSelectedAnnot(a.id);
+  }
+
+  function updateAnnotation(a: Annotation, record = true) {
+    if (!record && !dragStart.current) dragStart.current = snapshot();
+    const next = annotationsRef.current.map((x) => (x.id === a.id ? a : x));
+    if (record) {
+      const before = dragStart.current ?? undefined;
+      dragStart.current = null;
+      change({ annotations: next }, true, before);
+    } else change({ annotations: next }, false);
+  }
+
+  function deleteAnnotation(id: string) {
+    change({ annotations: annotationsRef.current.filter((a) => a.id !== id) });
+    setSelectedAnnot(null);
+  }
+
+  function chooseTool(t: Tool) {
+    if (locked) {
+      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no editarlo." });
+      return;
+    }
+    if (t === "sign" && !signature) setSignDialog(true);
+    setTool(t);
+    setSelectedAnnot(null);
   }
 
   /** Después de qué página se insertan otras: la última elegida en las miniaturas, o la que se ve. */
@@ -252,7 +331,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
   async function saveTo(target: string, only?: PageRef[]) {
     try {
-      const bytes = await savePdf(sources, only ?? pagesRef.current, []);
+      const bytes = await savePdf(sources, only ?? pagesRef.current, annotationsRef.current, formRef.current);
       let binary = "";
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       await invoke("file_write", { path: target, data: btoa(binary) });
@@ -297,9 +376,6 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
     return () => clearTimeout(timer);
   }, [status]);
 
-  function future(label: string) {
-    setStatus({ text: `«${label}» llega en el siguiente paso de WEPO PDF.` });
-  }
 
   // ───────────── miniaturas: elegir, arrastrar y menú ─────────────
 
@@ -342,8 +418,8 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
   // ───────────── atajos ─────────────
 
-  const actions = useRef({ setZoom, zoom: zoom ?? 1, goTo, current, saveDocument, undo, redo, remove, selected });
-  actions.current = { setZoom, zoom: zoom ?? 1, goTo, current, saveDocument, undo, redo, remove, selected };
+  const actions = useRef({ setZoom, zoom: zoom ?? 1, goTo, current, saveDocument, undo, redo, remove, selected, selectedAnnot, deleteAnnotation });
+  actions.current = { setZoom, zoom: zoom ?? 1, goTo, current, saveDocument, undo, redo, remove, selected, selectedAnnot, deleteAnnotation };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = actions.current;
@@ -375,7 +451,9 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       else if (e.key === "ArrowLeft" || (e.key === "PageUp" && e.altKey)) (e.preventDefault(), c.goTo(c.current - 1));
       else if (e.key === "Home" && !e.shiftKey) (e.preventDefault(), c.goTo(1));
       else if (e.key === "End" && !e.shiftKey) (e.preventDefault(), c.goTo(Number.MAX_SAFE_INTEGER));
+      else if ((e.key === "Delete" || e.key === "Backspace") && c.selectedAnnot) (e.preventDefault(), c.deleteAnnotation(c.selectedAnnot));
       else if ((e.key === "Delete" || e.key === "Backspace") && c.selected.size) (e.preventDefault(), c.remove());
+      else if (e.key === "Escape") (setTool("select"), setSelectedAnnot(null));
     }
     window.addEventListener("keydown", onKey);
     return () => {
@@ -483,16 +561,79 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
         </ToolButton>
         <Separator />
         <span className="pdf-future-label">Anotar:</span>
-        {FUTURE_TOOLS.map((t) => (
-          <button key={t.id} type="button" className="fb-button pdf-future" title={`${t.label} (próximamente)`} aria-label={`${t.label} (próximamente)`} onClick={() => future(t.label)}>
+        {TOOLS.map((t) => (
+          <ToolButton key={t.id} label={t.label} pressed={tool === t.id} onClick={() => chooseTool(t.id)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               {t.icon.map((d) => (
                 <path key={d} d={d} />
               ))}
             </svg>
-          </button>
+          </ToolButton>
         ))}
-        <span className="pdf-soon">Próximamente</span>
+        {tool === "highlight" && (
+          <span className="pdf-swatches" role="radiogroup" aria-label="Color del resaltado">
+            {HIGHLIGHTS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={toolStyle.highlight === c ? "on" : ""}
+                style={{ background: c }}
+                aria-label={c}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setToolStyle({ ...toolStyle, highlight: c })}
+              />
+            ))}
+          </span>
+        )}
+        {tool === "draw" && (
+          <>
+            <ColorButton label="Color del trazo" current={toolStyle.ink} emptyLabel="Rojo" onPick={(c) => setToolStyle({ ...toolStyle, ink: c || "#C42B45" })} icon={<span className="fb-letter">✎</span>} />
+            <select className="fb-select" aria-label="Grosor del trazo" value={toolStyle.inkWidth} onChange={(e) => setToolStyle({ ...toolStyle, inkWidth: Number(e.target.value) })}>
+              {[1, 2, 3, 5, 8].map((w) => (
+                <option key={w} value={w}>
+                  {w} pt
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {tool === "text" && (
+          <>
+            <ColorButton label="Color de texto" current={toolStyle.textColor} emptyLabel="Negro" onPick={(c) => setToolStyle({ ...toolStyle, textColor: c || "#1D1D1F" })} icon={<span className="fb-letter">A</span>} />
+            <select className="fb-select" aria-label="Tamaño del texto" value={toolStyle.textSize} onChange={(e) => setToolStyle({ ...toolStyle, textSize: Number(e.target.value) })}>
+              {[8, 10, 12, 14, 18, 24, 32].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {tool === "sign" && signature && (
+          <Popover
+            button={(toggle, open) => (
+              <button type="button" className={`fb-button pdf-sign-btn${open ? " pressed" : ""}`} onClick={toggle} title="Tu firma">
+                <img src={signature.src} alt="Tu firma" />
+              </button>
+            )}
+          >
+            {(close) => (
+              <div className="pdf-sign-menu">
+                <img src={signature.src} alt="Tu firma" />
+                <button type="button" className="btn" onClick={() => (close(), setSignDialog(true))}>
+                  Cambiar firma…
+                </button>
+              </div>
+            )}
+          </Popover>
+        )}
+        {selectedAnnot && (
+          <ToolButton label="Borrar anotación (⌫)" onClick={() => deleteAnnotation(selectedAnnot)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </ToolButton>
+        )}
       </div>
 
       {locked && (
@@ -533,7 +674,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
           </nav>
         )}
 
-        <div className="pdf-scroller" ref={scroller} onScroll={onScroll}>
+        <div className={`pdf-scroller tool-${tool}`} ref={scroller} onScroll={onScroll}>
           {error && <div className="pdf-message error">{error}</div>}
           {needsPassword && (
             <form
@@ -555,7 +696,24 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
           {ready && zoom !== null && (
             <div className="pdf-pages" style={{ paddingTop: PAGE_GAP }}>
               {pages.map((p) => (
-                <PageView key={p.id} page={p} source={docs.get(p.source)!} scale={scale} root={scroller} />
+                <PageView key={p.id} page={p} source={docs.get(p.source)!} scale={scale} root={scroller} forms={Boolean(fields[p.id])}>
+                  <AnnotationLayer
+                    page={p}
+                    scale={scale}
+                    tool={tool}
+                    style={toolStyle}
+                    annotations={annotations.filter((a) => a.page === p.id)}
+                    selected={selectedAnnot}
+                    fields={fields[p.id] ?? []}
+                    form={form}
+                    signature={signature}
+                    onAdd={addAnnotation}
+                    onChange={updateAnnotation}
+                    onSelect={setSelectedAnnot}
+                    onForm={(name, value) => change({ form: { ...formRef.current, [name]: value } })}
+                    onNeedSignature={() => setSignDialog(true)}
+                  />
+                </PageView>
               ))}
             </div>
           )}
@@ -573,8 +731,38 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
         <ZoomControl zoom={zoom ?? 1} onChange={setZoom} />
       </footer>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {signDialog && (
+        <SignatureDialog
+          onDone={(sig) => {
+            setSignature(sig);
+            setSignDialog(false);
+            setTool("sign");
+            setStatus({ text: "Haz clic en la página donde va la firma" });
+          }}
+          onClose={() => {
+            setSignDialog(false);
+            if (!signature) setTool("select");
+          }}
+        />
+      )}
     </div>
   );
+}
+
+/** Un campo de formulario de pdf.js en el formato del editor. */
+function widgetField(a: Record<string, unknown>): FormField | null {
+  const [x1, y1, x2, y2] = a.rect as number[];
+  const rect: FormField["rect"] = [Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)];
+  const base = { name: String(a.fieldName), rect, readOnly: Boolean(a.readOnly) };
+  if (a.fieldType === "Tx") return { ...base, type: "text", value: String(a.fieldValue ?? ""), multiline: Boolean(a.multiLine) };
+  if (a.fieldType === "Btn" && a.checkBox) return { ...base, type: "checkbox", value: a.fieldValue && a.fieldValue !== "Off" ? true : false, exportValue: String(a.exportValue ?? "Yes") };
+  if (a.fieldType === "Btn" && a.radioButton) return { ...base, type: "radio", value: String(a.fieldValue ?? ""), exportValue: String(a.buttonValue ?? "") };
+  if (a.fieldType === "Ch") {
+    const options = ((a.options as { displayValue?: string; exportValue?: string }[]) ?? []).map((o) => String(o.displayValue ?? o.exportValue ?? ""));
+    const value = Array.isArray(a.fieldValue) ? String(a.fieldValue[0] ?? "") : String(a.fieldValue ?? "");
+    return { ...base, type: "choice", value, options };
+  }
+  return null;
 }
 
 /** "Carta", "A4"… según el tamaño de la página (con un margen de error de unos milímetros). */
@@ -594,7 +782,21 @@ function paperName({ width, height }: { width: number; height: number }): string
 }
 
 /** Una página: se dibuja solo cuando está cerca de la vista (los PDF largos no se dibujan enteros). */
-function PageView({ page, source, scale, root }: { page: PageRef; source: Source; scale: number; root: React.RefObject<HTMLDivElement | null> }) {
+function PageView({
+  page,
+  source,
+  scale,
+  root,
+  forms,
+  children,
+}: {
+  page: PageRef;
+  source: Source;
+  scale: number;
+  root: React.RefObject<HTMLDivElement | null>;
+  forms: boolean;
+  children?: React.ReactNode;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const text = useRef<HTMLDivElement>(null);
@@ -626,7 +828,8 @@ function PageView({ page, source, scale, root }: { page: PageRef; source: Source
       const c = canvas.current;
       c.width = Math.floor(viewport.width * ratio);
       c.height = Math.floor(viewport.height * ratio);
-      task = p.render({ canvas: c, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined });
+      // Con formulario, los campos los dibuja WEPO encima (así se pueden escribir).
+      task = p.render({ canvas: c, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined, annotationMode: forms ? AnnotationMode.ENABLE_FORMS : AnnotationMode.ENABLE });
       try {
         await task.promise;
       } catch {
@@ -642,7 +845,7 @@ function PageView({ page, source, scale, root }: { page: PageRef; source: Source
       task?.cancel();
       layer?.cancel();
     };
-  }, [visible, source, page.index, scale, rotation]);
+  }, [visible, source, page.index, scale, rotation, forms]);
 
   return (
     <div
@@ -653,6 +856,7 @@ function PageView({ page, source, scale, root }: { page: PageRef; source: Source
     >
       <canvas ref={canvas} style={{ width, height }} aria-label={`Página ${page.index + 1}`} />
       <div ref={text} className="textLayer" />
+      {visible && children}
     </div>
   );
 }

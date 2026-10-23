@@ -2,6 +2,15 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
+## Próxima versión (sin publicar)
+
+### WEPO PDF: edición
+- Ordenar páginas arrastrando las miniaturas, girarlas, quitarlas y elegir varias a la vez.
+- Combinar: agregar las páginas de otro PDF donde quieras, y guardar páginas elegidas como un PDF nuevo.
+- Resaltar texto (o un recuadro en un escaneo), agregar texto, dibujar a mano, notas adhesivas y firmar (dibujando o escribiendo tu nombre).
+- Rellenar formularios PDF (texto, casillas y listas).
+- Todo se puede deshacer y se guarda en el PDF: se ve igual en Vista Previa, Acrobat o el navegador.
+
 ## 0.2.0
 
 La suite completa: ya están los cuatro editores.

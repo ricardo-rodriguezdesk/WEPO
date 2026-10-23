@@ -34,9 +34,11 @@ export type PageRef = {
   baseRotation: number;
   /** Giro que se le agregó en WEPO (0, 90, 180 o 270). */
   rotation: number;
-  /** Tamaño sin girar, en puntos. */
+  /** Tamaño sin girar, en puntos, y dónde empieza la página (esquina inferior izquierda). */
   width: number;
   height: number;
+  x0: number;
+  y0: number;
 };
 
 // ───────────── anotaciones (lo que se dibuja encima) ─────────────
@@ -64,7 +66,7 @@ export async function pagesOf(source: Source): Promise<PageRef[]> {
   for (let i = 0; i < source.doc.numPages; i++) {
     const page = await source.doc.getPage(i + 1);
     const view = page.view; // [x1, y1, x2, y2]
-    out.push({ id: pid(), source: source.id, index: i, baseRotation: page.rotate, rotation: 0, width: view[2] - view[0], height: view[3] - view[1] });
+    out.push({ id: pid(), source: source.id, index: i, baseRotation: page.rotate, rotation: 0, width: view[2] - view[0], height: view[3] - view[1], x0: view[0], y0: view[1] });
   }
   return out;
 }
@@ -105,7 +107,8 @@ async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocume
       const lines = latin(a.text).split("\n");
       lines.forEach((line, i) => {
         // El texto se escribe derecho tal como se ve, aunque la página esté girada.
-        const dy = (i + 1) * a.size * 1.2;
+        // (x, y) es la esquina de arriba a la izquierda del texto; cada línea baja 1.2 veces el tamaño.
+        const dy = (i * 1.2 + 0.95) * a.size;
         const [ox, oy] = rotation === 90 ? [dy, 0] : rotation === 180 ? [0, dy] : rotation === 270 ? [-dy, 0] : [0, -dy];
         page.drawText(line, { x: a.x + ox, y: a.y + oy, size: a.size, font: f, color: hexColor(a.color), rotate: degrees(rotation) });
       });
@@ -224,4 +227,55 @@ function fillForm(doc: PDFDocument, values: FormValues) {
   } catch {
     // Sin fuentes para dibujar los valores, el lector de PDF los dibuja al abrir.
   }
+}
+
+// ───────────── coordenadas: PDF ↔ pantalla ─────────────
+// En el PDF el origen está abajo a la izquierda y la página puede estar girada;
+// en la pantalla, arriba a la izquierda. `s` son píxeles por punto.
+
+export function toView(p: PageRef, s: number, x: number, y: number): [number, number] {
+  const x1 = p.x0;
+  const y1 = p.y0;
+  const x2 = p.x0 + p.width;
+  const y2 = p.y0 + p.height;
+  switch ((p.baseRotation + p.rotation) % 360) {
+    case 90:
+      return [s * (y - y1), s * (x - x1)];
+    case 180:
+      return [s * (x2 - x), s * (y - y1)];
+    case 270:
+      return [s * (y2 - y), s * (x2 - x)];
+    default:
+      return [s * (x - x1), s * (y2 - y)];
+  }
+}
+
+export function toPdf(p: PageRef, s: number, vx: number, vy: number): [number, number] {
+  const x1 = p.x0;
+  const y1 = p.y0;
+  const x2 = p.x0 + p.width;
+  const y2 = p.y0 + p.height;
+  switch ((p.baseRotation + p.rotation) % 360) {
+    case 90:
+      return [vy / s + x1, vx / s + y1];
+    case 180:
+      return [x2 - vx / s, vy / s + y1];
+    case 270:
+      return [x2 - vy / s, y2 - vx / s];
+    default:
+      return [vx / s + x1, y2 - vy / s];
+  }
+}
+
+/** Un rectángulo de la pantalla (x, y, ancho, alto) en puntos del PDF: [x, y, ancho, alto] con y abajo. */
+export function rectToPdf(p: PageRef, s: number, vx: number, vy: number, vw: number, vh: number): [number, number, number, number] {
+  const [ax, ay] = toPdf(p, s, vx, vy);
+  const [bx, by] = toPdf(p, s, vx + vw, vy + vh);
+  return [Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay)];
+}
+
+export function rectToView(p: PageRef, s: number, [x, y, w, h]: [number, number, number, number]): { left: number; top: number; width: number; height: number } {
+  const [ax, ay] = toView(p, s, x, y);
+  const [bx, by] = toView(p, s, x + w, y + h);
+  return { left: Math.min(ax, bx), top: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) };
 }
