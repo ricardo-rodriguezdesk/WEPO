@@ -38,5 +38,6 @@ export function kindFromPath(path: string): DocKind | null {
 }
 
 export function fileNameOf(path: string): string {
-  return path.split("/").pop() ?? path;
+  // En Windows las carpetas se separan con "\\".
+  return path.split(/[\\/]/).pop() ?? path;
 }

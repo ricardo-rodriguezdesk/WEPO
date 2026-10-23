@@ -20,7 +20,7 @@
   --present: #d9572b;
   --present-soft: #fcebe4;
 
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
   font-size: 13px;
   color: var(--text);
   background: var(--bg);

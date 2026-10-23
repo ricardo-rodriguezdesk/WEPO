@@ -13,6 +13,7 @@ import type { SheetView } from "./lib/spreadsheet";
 import { sheetApi } from "./lib/spreadsheet";
 import type { Command } from "./lib/commands";
 import { onCommand, runCommand } from "./lib/commands";
+import { hasModifier } from "./lib/platform";
 import { addRecent, clearRecents, loadRecents, removeRecent } from "./lib/recents";
 import "./App.css";
 
@@ -122,13 +123,16 @@ export default function App() {
       // guardar, imprimir y buscar los atiende el editor abierto.
     });
     const stopMenu = listen<string>("menu", (event) => runCommand(event.payload as Command));
-    // ⌘O y ⌘N también desde el teclado (en macOS además los atiende el menú).
+    // ⌘O, ⌘N y ⌘Q también desde el teclado (Ctrl en Windows; en macOS además los atiende el menú).
     function onKey(e: KeyboardEvent) {
-      if (!e.metaKey || e.shiftKey || e.altKey) return;
+      if (!hasModifier(e) || e.shiftKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === "o" || key === "n") {
         e.preventDefault();
         runCommand(key === "o" ? "open" : "new-sheet");
+      } else if (key === "q") {
+        e.preventDefault();
+        runCommand("quit");
       }
     }
     window.addEventListener("keydown", onKey);

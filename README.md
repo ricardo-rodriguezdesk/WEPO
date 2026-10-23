@@ -85,6 +85,14 @@ También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`gi
 
 **Abrir archivos con WEPO desde Finder:** WEPO se registra para .xlsx, .xlsm, .xls, .ods y .csv. Haz clic derecho en un archivo → **Abrir con** → WEPO. Para que siempre se abran con WEPO: clic derecho → **Obtener información** → **Abrir con:** WEPO → **Cambiar todo…**
 
+## Windows
+
+WEPO también funciona en Windows 10 y 11. En Windows los atajos usan **Ctrl** en lugar de **⌘** (Ctrl+S, Ctrl+C, Ctrl+Z…).
+
+- **Instalador:** en **Releases** del repositorio, descarga el archivo `x64-setup.exe` y ábrelo. Si aparece «Windows protegió tu PC», elige **Más información** → **Ejecutar de todas formas** (la app aún no está firmada).
+- **Desde el código:** instala [Git](https://git-scm.com/download/win), [Node.js LTS](https://nodejs.org/), [Rust](https://rustup.rs/) y las [Build Tools de Visual Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/) con «Desarrollo para el escritorio con C++». Luego, en la carpeta del proyecto: `npm install` y `npm run tauri dev`.
+- **Crear el instalador en Windows:** `npm run tauri build`. Queda en `src-tauri\target\release\bundle\nsis\` (.exe) y `bundle\msi\` (.msi).
+
 ## Atajos de WEPO Sheets
 
 | Acción | Atajo |

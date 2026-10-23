@@ -4,7 +4,7 @@
 import type { ChartView, SeriesView } from "../../lib/spreadsheet";
 
 const SLICE_COLORS = ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000", "#5B9BD5", "#70AD47", "#264478", "#9E480E", "#636363", "#997300"];
-const FONT = '-apple-system, "Helvetica Neue", Arial, sans-serif';
+const FONT = '-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif';
 const numberFormat = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 2 });
 const compactFormat = new Intl.NumberFormat("es-MX", { notation: "compact", maximumFractionDigits: 1 });
 

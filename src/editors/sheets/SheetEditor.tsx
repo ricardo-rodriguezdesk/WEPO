@@ -35,6 +35,7 @@ import PrintSheet, { usedRange } from "./PrintSheet";
 import type { PrintJob, PrintOptions } from "./PrintSheet";
 import { invoke } from "@tauri-apps/api/core";
 import { onCommand, runCommand } from "../../lib/commands";
+import { hasModifier, keys } from "../../lib/platform";
 import { lineHeight, textWidth, wrappedLines } from "./measure";
 import FormulaAssist from "./FormulaAssist";
 import type { FunctionInfo } from "./functions";
@@ -1075,7 +1076,7 @@ export default function SheetEditor(props: Props) {
       else if (command === "zoom-reset") c.setZoom(1);
     });
     function onKey(e: globalThis.KeyboardEvent) {
-      if (!e.metaKey) return;
+      if (!hasModifier(e)) return;
       const key = e.key.toLowerCase();
       const command =
         key === "s" ? (e.shiftKey ? "save-as" : "save")
@@ -1289,9 +1290,9 @@ export default function SheetEditor(props: Props) {
 
   function menuItems(kind: Menu["kind"]): MenuItem[] {
     const clipboard: MenuItem[] = [
-      { label: "Cortar", shortcut: "⌘X", action: () => copySelection(true) },
-      { label: "Copiar", shortcut: "⌘C", action: () => copySelection(false) },
-      { label: "Pegar", shortcut: "⌘V", action: pasteFromSystem },
+      { label: "Cortar", shortcut: keys("⌘X"), action: () => copySelection(true) },
+      { label: "Copiar", shortcut: keys("⌘C"), action: () => copySelection(false) },
+      { label: "Pegar", shortcut: keys("⌘V"), action: pasteFromSystem },
     ];
     const rowsCount = wholeRows ? rowSpan : 1;
     const colsCount = wholeCols ? colSpan : 1;
@@ -1548,22 +1549,22 @@ export default function SheetEditor(props: Props) {
 
   const toolbarActions = (
     <div className="toolbar-group">
-      <button className="btn btn-icon" onClick={undo} title="Deshacer (⌘Z)" aria-label="Deshacer">
+      <button className="btn btn-icon" onClick={undo} title={keys("Deshacer (⌘Z)")} aria-label="Deshacer">
         ↶
       </button>
-      <button className="btn btn-icon" onClick={redo} title="Rehacer (⌘⇧Z)" aria-label="Rehacer">
+      <button className="btn btn-icon" onClick={redo} title={keys("Rehacer (⌘⇧Z)")} aria-label="Rehacer">
         ↷
       </button>
-      <button className="btn btn-icon" onClick={() => setFindOpen((v) => !v)} title="Buscar y reemplazar (⌘F)" aria-label="Buscar">
+      <button className="btn btn-icon" onClick={() => setFindOpen((v) => !v)} title={keys("Buscar y reemplazar (⌘F)")} aria-label="Buscar">
         ⌕
       </button>
-      <button className="btn btn-icon" onClick={() => setDialog("print")} title="Imprimir o exportar a PDF (⌘P)" aria-label="Imprimir">
+      <button className="btn btn-icon" onClick={() => setDialog("print")} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
           <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
           <rect x="7" y="14" width="10" height="7" rx="1" />
         </svg>
       </button>
-      <button className="btn" onClick={() => saveDocument()} title="Guardar (⌘S)">
+      <button className="btn" onClick={() => saveDocument()} title={keys("Guardar (⌘S)")}>
         Guardar
       </button>
     </div>

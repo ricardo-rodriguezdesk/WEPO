@@ -1,6 +1,7 @@
 import { useState } from "react";
 import ContextMenu from "../../components/ContextMenu";
 import { MAX_ZOOM, MIN_ZOOM, stepZoom } from "./layout";
+import { keys } from "../../lib/platform";
 
 // Como en Excel, la mitad izquierda del control va de 25 % a 100 % y la derecha de 100 % a 400 %.
 function toSlider(zoom: number): number {
@@ -27,7 +28,7 @@ export default function ZoomControl({ zoom, onChange }: Props) {
         type="button"
         className="zoom-step"
         aria-label="Alejar"
-        title="Alejar (⌘−)"
+        title={keys("Alejar (⌘−)")}
         disabled={zoom <= MIN_ZOOM}
         onClick={() => onChange(stepZoom(zoom, -1))}
       >
@@ -49,7 +50,7 @@ export default function ZoomControl({ zoom, onChange }: Props) {
         type="button"
         className="zoom-step"
         aria-label="Acercar"
-        title="Acercar (⌘+)"
+        title={keys("Acercar (⌘+)")}
         disabled={zoom >= MAX_ZOOM}
         onClick={() => onChange(stepZoom(zoom, 1))}
       >
@@ -58,7 +59,7 @@ export default function ZoomControl({ zoom, onChange }: Props) {
       <button
         type="button"
         className="zoom-percent"
-        title="Elegir el zoom (⌘0 para 100 %)"
+        title={keys("Elegir el zoom (⌘0 para 100 %)")}
         onClick={(e) => {
           const box = e.currentTarget.getBoundingClientRect();
           setMenu({ x: box.left, y: box.top - 4 });
@@ -73,7 +74,7 @@ export default function ZoomControl({ zoom, onChange }: Props) {
           onClose={() => setMenu(null)}
           items={PRESETS.map((z) => ({
             label: `${Math.round(z * 100)} %${Math.abs(z - zoom) < 0.001 ? "  ✓" : ""}`,
-            shortcut: z === 1 ? "⌘0" : undefined,
+            shortcut: z === 1 ? keys("⌘0") : undefined,
             action: () => onChange(z),
           }))}
         />

@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 import type { BorderView, StyleView } from "../../lib/spreadsheet";
 
 /** Si la fuente del archivo no está instalada en la Mac, se usa la del sistema. */
-const FALLBACK_FONTS = '-apple-system, "Helvetica Neue", Arial, sans-serif';
+const FALLBACK_FONTS = '-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
 const BORDER_CSS: Record<string, string> = {
   thin: "1px solid",

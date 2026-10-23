@@ -55,6 +55,7 @@ export function whenLabel(time: number): string {
 
 /** Carpeta del archivo, abreviando la carpeta personal con "~". */
 export function folderLabel(path: string): string {
-  const folder = path.slice(0, Math.max(0, path.lastIndexOf("/")));
-  return folder.replace(/^\/Users\/[^/]+/, "~") || "/";
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const folder = path.slice(0, Math.max(0, cut));
+  return folder.replace(/^\/Users\/[^/]+/, "~").replace(/^[A-Za-z]:\\Users\\[^\\]+/, "~") || "/";
 }

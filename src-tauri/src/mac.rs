@@ -1,5 +1,5 @@
-//! Integración con macOS: barra de menús en español, archivos abiertos desde
-//! Finder (doble clic o "Abrir con…") e impresión.
+//! Integración con el sistema: barra de menús en español, archivos abiertos
+//! desde Finder o el Explorador de Windows (doble clic o "Abrir con…") e impresión.
 
 use std::sync::Mutex;
 
@@ -21,17 +21,6 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         }
     };
 
-    let app_menu = SubmenuBuilder::new(app, "WEPO")
-        .item(&PredefinedMenuItem::about(app, Some("Acerca de WEPO"), None)?)
-        .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Ocultar WEPO"))?)
-        .item(&PredefinedMenuItem::hide_others(app, Some("Ocultar otros"))?)
-        .item(&PredefinedMenuItem::show_all(app, Some("Mostrar todo"))?)
-        .separator()
-        // Salir propio (no el nativo) para avisar si hay cambios sin guardar.
-        .item(&item("quit", "Salir de WEPO", Some("CmdOrCtrl+Q"))?)
-        .build()?;
-
     let file = SubmenuBuilder::new(app, "Archivo")
         .item(&item("new-sheet", "Nueva hoja de cálculo", Some("CmdOrCtrl+N"))?)
         .item(&item("open", "Abrir…", Some("CmdOrCtrl+O"))?)
@@ -41,21 +30,7 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .item(&item("print", "Imprimir o exportar a PDF…", Some("CmdOrCtrl+P"))?)
         .separator()
-        .item(&item("home", "Ir al inicio", None)?)
-        .item(&PredefinedMenuItem::close_window(app, Some("Cerrar ventana"))?)
-        .build()?;
-
-    let edit = SubmenuBuilder::new(app, "Edición")
-        .item(&PredefinedMenuItem::undo(app, Some("Deshacer"))?)
-        .item(&PredefinedMenuItem::redo(app, Some("Rehacer"))?)
-        .separator()
-        .item(&PredefinedMenuItem::cut(app, Some("Cortar"))?)
-        .item(&PredefinedMenuItem::copy(app, Some("Copiar"))?)
-        .item(&PredefinedMenuItem::paste(app, Some("Pegar"))?)
-        .item(&PredefinedMenuItem::select_all(app, Some("Seleccionar todo"))?)
-        .separator()
-        .item(&item("find", "Buscar y reemplazar…", Some("CmdOrCtrl+F"))?)
-        .build()?;
+        .item(&item("home", "Ir al inicio", None)?);
 
     let view = SubmenuBuilder::new(app, "Visualización")
         .item(&item("zoom-in", "Acercar", Some("CmdOrCtrl+="))?)
@@ -63,13 +38,57 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("zoom-reset", "Tamaño real (100 %)", Some("CmdOrCtrl+0"))?)
         .build()?;
 
-    let window = SubmenuBuilder::new(app, "Ventana")
-        .item(&PredefinedMenuItem::minimize(app, Some("Minimizar"))?)
-        .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
-        .item(&PredefinedMenuItem::fullscreen(app, Some("Pantalla completa"))?)
-        .build()?;
+    // En Mac: menú de la app, edición nativa y menú Ventana, como cualquier app de macOS.
+    #[cfg(target_os = "macos")]
+    {
+        let app_menu = SubmenuBuilder::new(app, "WEPO")
+            .item(&PredefinedMenuItem::about(app, Some("Acerca de WEPO"), None)?)
+            .separator()
+            .item(&PredefinedMenuItem::hide(app, Some("Ocultar WEPO"))?)
+            .item(&PredefinedMenuItem::hide_others(app, Some("Ocultar otros"))?)
+            .item(&PredefinedMenuItem::show_all(app, Some("Mostrar todo"))?)
+            .separator()
+            // Salir propio (no el nativo) para avisar si hay cambios sin guardar.
+            .item(&item("quit", "Salir de WEPO", Some("CmdOrCtrl+Q"))?)
+            .build()?;
+        let file = file
+            .item(&PredefinedMenuItem::close_window(app, Some("Cerrar ventana"))?)
+            .build()?;
+        let edit = SubmenuBuilder::new(app, "Edición")
+            .item(&PredefinedMenuItem::undo(app, Some("Deshacer"))?)
+            .item(&PredefinedMenuItem::redo(app, Some("Rehacer"))?)
+            .separator()
+            .item(&PredefinedMenuItem::cut(app, Some("Cortar"))?)
+            .item(&PredefinedMenuItem::copy(app, Some("Copiar"))?)
+            .item(&PredefinedMenuItem::paste(app, Some("Pegar"))?)
+            .item(&PredefinedMenuItem::select_all(app, Some("Seleccionar todo"))?)
+            .separator()
+            .item(&item("find", "Buscar y reemplazar…", Some("CmdOrCtrl+F"))?)
+            .build()?;
+        let window = SubmenuBuilder::new(app, "Ventana")
+            .item(&PredefinedMenuItem::minimize(app, Some("Minimizar"))?)
+            .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
+            .item(&PredefinedMenuItem::fullscreen(app, Some("Pantalla completa"))?)
+            .build()?;
+        MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &window]).build()
+    }
 
-    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &window]).build()
+    // En Windows y Linux: menú dentro de la ventana. Copiar, pegar y deshacer los
+    // atiende la propia hoja (Ctrl+C, Ctrl+V, Ctrl+Z), así que no se repiten aquí.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let file = file
+            .separator()
+            .item(&item("quit", "Salir", Some("Ctrl+Q"))?)
+            .build()?;
+        let edit = SubmenuBuilder::new(app, "Edición")
+            .item(&item("find", "Buscar y reemplazar…", Some("Ctrl+F"))?)
+            .build()?;
+        let help = SubmenuBuilder::new(app, "Ayuda")
+            .item(&PredefinedMenuItem::about(app, Some("Acerca de WEPO"), None)?)
+            .build()?;
+        MenuBuilder::new(app).items(&[&file, &edit, &view, &help]).build()
+    }
 }
 
 /// Una opción del menú: la interfaz decide qué hacer.

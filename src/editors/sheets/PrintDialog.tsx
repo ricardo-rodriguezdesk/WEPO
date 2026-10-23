@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Dialog from "../../components/Dialog";
 import type { PrintOptions } from "./PrintSheet";
+import { isMac } from "../../lib/platform";
 
 const KEY = "wepo.print";
 
@@ -85,7 +86,11 @@ export default function PrintDialog({ selectionLabel, onPrint, onClose }: Props)
             Encabezados de filas y columnas
           </label>
         </fieldset>
-        <p className="hint">Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión.</p>
+        <p className="hint">
+          {isMac
+            ? "Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión."
+            : "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."}
+        </p>
       </div>
     </Dialog>
   );

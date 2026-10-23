@@ -1,4 +1,5 @@
-# Crea el instalador .dmg de WEPO para Mac (Apple Silicon e Intel).
+# Crea los instaladores de WEPO: .dmg para Mac (Apple Silicon e Intel) y
+# .exe / .msi para Windows.
 #
 # Se ejecuta al subir una etiqueta de versión:
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -18,7 +19,7 @@ permissions:
   contents: write
 
 jobs:
-  macos:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -27,8 +28,11 @@ jobs:
             label: Apple Silicon
           - target: x86_64-apple-darwin
             label: Intel
-    name: macOS (${{ matrix.label }})
-    runs-on: macos-latest
+          - target: x86_64-pc-windows-msvc
+            label: Windows
+            os: windows-latest
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,10 +59,12 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: WEPO v__VERSION__
           releaseBody: |
-            Descarga el .dmg que corresponde a tu Mac:
-            - **aarch64**: Mac con chip Apple (M1, M2, M3, M4…)
-            - **x64**: Mac con procesador Intel
+            **Mac** — descarga el .dmg de tu Mac:
+            - **aarch64.dmg**: Mac con chip Apple (M1, M2, M3, M4…)
+            - **x64.dmg**: Mac con procesador Intel
 
             WEPO todavía no está firmado por Apple. La primera vez, haz clic derecho sobre la app → **Abrir** → **Abrir**.
+
+            **Windows** — descarga **x64-setup.exe** y ábrelo. Si aparece «Windows protegió tu PC», haz clic en **Más información** → **Ejecutar de todas formas** (la app aún no está firmada).
           releaseDraft: true
           prerelease: false

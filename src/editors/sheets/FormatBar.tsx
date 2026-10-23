@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { BorderKind, StyleView } from "../../lib/spreadsheet";
 import { fontFamily } from "./cellStyle";
+import { keys } from "../../lib/platform";
 import "./FormatBar.css";
 
 type Props = {
@@ -118,13 +119,13 @@ export default function FormatBar({ style, onStyle, onBorder, onDone, children }
 
       <Separator />
 
-      <ToolButton label="Negrita (⌘B)" pressed={style.b} onClick={() => toggle("font.b", style.b)}>
+      <ToolButton label={keys("Negrita (⌘B)")} pressed={style.b} onClick={() => toggle("font.b", style.b)}>
         <b>B</b>
       </ToolButton>
-      <ToolButton label="Cursiva (⌘I)" pressed={style.i} onClick={() => toggle("font.i", style.i)}>
+      <ToolButton label={keys("Cursiva (⌘I)")} pressed={style.i} onClick={() => toggle("font.i", style.i)}>
         <i style={{ fontFamily: "Georgia, serif" }}>I</i>
       </ToolButton>
-      <ToolButton label="Subrayado (⌘U)" pressed={style.u} onClick={() => toggle("font.u", style.u)}>
+      <ToolButton label={keys("Subrayado (⌘U)")} pressed={style.u} onClick={() => toggle("font.u", style.u)}>
         <u>U</u>
       </ToolButton>
       <ToolButton label="Tachado" pressed={style.strike} onClick={() => toggle("font.strike", style.strike)}>
