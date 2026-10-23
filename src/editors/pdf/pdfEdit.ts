@@ -12,6 +12,7 @@ import {
   PDFNumber,
   PDFOptionList,
   PDFRadioGroup,
+  PDFHexString,
   PDFString,
   PDFTextField,
   StandardFonts,
@@ -91,12 +92,37 @@ function dataUrlBytes(src: string): { bytes: Uint8Array; png: boolean } | null {
   return { bytes, png: m[1] === "png" };
 }
 
+/** Texto de una nota: con acentos y ñ se escribe en Unicode (si no, se verían mal en otros lectores). */
+function PDFText(text: string) {
+  return /^[\x20-\x7e\n\r\t]*$/.test(text) ? PDFString.of(text) : PDFHexString.fromText(text);
+}
+
 /** Las fuentes estándar de PDF solo traen el alfabeto latino: lo demás se cambia por "?". */
 function latin(text: string): string {
   return text.replace(/[^ -~ -ÿ\n]/g, "?");
 }
 
+/**
+ * Encierra lo que ya dibuja la página entre q…Q. Así lo que se agrega encima no
+ * hereda transformaciones que el contenido original deja sin cerrar (pasa con
+ * PDFs de algunos programas) y los resaltados quedan justo sobre el texto.
+ */
+function isolateContent(page: PDFPage, out: PDFDocument) {
+  page.node.normalize();
+  const start = out.context.register(out.context.stream("q\n"));
+  const end = out.context.register(out.context.stream("\nQ\n"));
+  page.node.wrapContentStreams(start, end);
+}
+
+/** Dibujo del ícono de nota (un globo amarillo de 20 × 20) para que todo lector la muestre igual. */
+const NOTE_ICON = [
+  "1 0.824 0.2 rg 0.54 0.43 0 RG 1 w 1 j",
+  "2 19 m 18 19 l 18 7 l 9 7 l 3.5 2 l 4.5 7 l 2 7 l h B",
+  "0.54 0.43 0 RG 0.8 w 5 15 m 15 15 l S 5 11.5 m 12 11.5 l S",
+].join("\n");
+
 async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocument, font: () => Promise<PDFFont>, rotation: number) {
+  if (list.some((a) => a.kind !== "note")) isolateContent(page, out);
   for (const a of list) {
     if (a.kind === "highlight") {
       for (const [x, y, w, h] of a.rects) {
@@ -125,15 +151,19 @@ async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocume
       page.drawImage(image, { x: a.x, y: a.y, width: a.w, height: a.h });
     } else if (a.kind === "note") {
       // Nota adhesiva de verdad (anotación de texto): se abre en cualquier lector de PDF.
+      const icon = out.context.register(out.context.stream(NOTE_ICON, { Type: "XObject", Subtype: "Form", BBox: [0, 0, 20, 20] }));
       const annot = out.context.obj({
         Type: "Annot",
         Subtype: "Text",
         Rect: [a.x, a.y - 20, a.x + 20, a.y],
-        Contents: PDFString.of(a.text),
+        Contents: PDFText(a.text),
         Name: "Comment",
         Open: false,
         C: [1, 0.82, 0.2],
-        F: PDFNumber.of(4),
+        // Imprimir (4) y sin girar con la página (16): el ícono queda derecho.
+        F: PDFNumber.of(20),
+        AP: { N: icon },
+        M: PDFString.fromDate(new Date()),
       });
       const ref = out.context.register(annot);
       const annots = page.node.lookup(PDFName.of("Annots"));

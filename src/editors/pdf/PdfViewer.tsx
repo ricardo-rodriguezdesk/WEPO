@@ -16,8 +16,9 @@ import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import type { Annotation, FormValues, PageRef, Source } from "./pdfEdit";
 import { pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import { bindTextLayer } from "./textSelection";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
-import type { FormField, Tool, ToolStyle } from "./Annotations";
+import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
 import "./PdfViewer.css";
 
@@ -63,6 +64,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   const formRef = useRef(form);
   formRef.current = form;
   const [fields, setFields] = useState<Record<string, FormField[]>>({});
+  const [fileNotes, setFileNotes] = useState<Record<string, FileNote[]>>({});
   const [tool, setTool] = useState<Tool>("select");
   const [toolStyle, setToolStyle] = useState<ToolStyle>({ highlight: HIGHLIGHTS[0], ink: "#C42B45", inkWidth: 2, textColor: "#1D1D1F", textSize: 14 });
   const [selectedAnnot, setSelectedAnnot] = useState<string | null>(null);
@@ -108,6 +110,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
           if (widgets.length) found[p.id] = widgets;
         }
         setFields(found);
+        setFileNotes(await notesOf(source, list));
       } catch (e) {
         const name = (e as { name?: string })?.name;
         if (name === "PasswordException") setNeedsPassword(pass ? "wrong" : "ask");
@@ -316,6 +319,8 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       const doc = await loadPdf(bytes);
       const source: Source = { id: pid("s"), name: fileNameOf(file), data: bytes, doc };
       const added = await pagesOf(source);
+      const notes = await notesOf(source, added);
+      setFileNotes((known) => ({ ...known, ...notes }));
       setSources((list) => [...list, source]);
       const list = [...pagesRef.current];
       list.splice(after + 1, 0, ...added);
@@ -674,7 +679,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
           </nav>
         )}
 
-        <div className={`pdf-scroller tool-${tool}`} ref={scroller} onScroll={onScroll}>
+        <div className={`pdf-scroller tool-${tool}`} ref={scroller} onScroll={onScroll} style={{ ["--pdf-highlight" as string]: toolStyle.highlight }}>
           {error && <div className="pdf-message error">{error}</div>}
           {needsPassword && (
             <form
@@ -705,6 +710,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
                     annotations={annotations.filter((a) => a.page === p.id)}
                     selected={selectedAnnot}
                     fields={fields[p.id] ?? []}
+                    fileNotes={fileNotes[p.id]}
                     form={form}
                     signature={signature}
                     onAdd={addAnnotation}
@@ -765,6 +771,28 @@ function widgetField(a: Record<string, unknown>): FormField | null {
   return null;
 }
 
+/** Las notas adhesivas que ya trae un PDF, por página. */
+async function notesOf(source: Source, pages: PageRef[]): Promise<Record<string, FileNote[]>> {
+  const out: Record<string, FileNote[]> = {};
+  for (const p of pages) {
+    try {
+      const page = await source.doc.getPage(p.index + 1);
+      const items = (await page.getAnnotations({ intent: "display" })) as Record<string, unknown>[];
+      const notes = items
+        .filter((a) => a.subtype === "Text" && !a.hidden)
+        .map((a, i): FileNote => {
+          const [x1, y1, x2, y2] = a.rect as number[];
+          const str = (o: unknown) => String((o as { str?: string } | undefined)?.str ?? "");
+          return { id: `${p.id}-n${i}`, rect: [x1, y1, x2 - x1, y2 - y1], text: str(a.contentsObj), author: str(a.titleObj), drawn: Boolean(a.hasAppearance) };
+        });
+      if (notes.length) out[p.id] = notes;
+    } catch {
+      // Sin notas legibles en esta página.
+    }
+  }
+  return out;
+}
+
 /** "Carta", "A4"… según el tamaño de la página (con un margen de error de unos milímetros). */
 function paperName({ width, height }: { width: number; height: number }): string {
   const [w, h] = [Math.min(width, height), Math.max(width, height)];
@@ -818,6 +846,7 @@ function PageView({
     if (!visible) return;
     let task: RenderTask | null = null;
     let layer: TextLayer | null = null;
+    let unbind: (() => void) | null = null;
     let cancelled = false;
     (async () => {
       const p: PDFPageProxy = await source.doc.getPage(page.index + 1);
@@ -839,11 +868,19 @@ function PageView({
       text.current.replaceChildren();
       layer = new TextLayer({ textContentSource: p.streamTextContent(), container: text.current, viewport });
       await layer.render().catch(() => {});
+      if (cancelled || !text.current) return;
+      // La capa de texto mide la página sin girar (luego el CSS la gira). Se fija en
+      // píxeles: la fórmula de pdf.js depende de variables de su propio visor.
+      const flat = p.getViewport({ scale, rotation: 0 });
+      text.current.style.width = `${flat.width}px`;
+      text.current.style.height = `${flat.height}px`;
+      unbind = bindTextLayer(text.current);
     })();
     return () => {
       cancelled = true;
       task?.cancel();
       layer?.cancel();
+      unbind?.();
     };
   }, [visible, source, page.index, scale, rotation, forms]);
 

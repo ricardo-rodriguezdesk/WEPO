@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Dialog from "../../components/Dialog";
 import type { Annotation, FormValues, Ink, PageRef } from "./pdfEdit";
-import { pid, rectToPdf, rectToView, toPdf, toView } from "./pdfEdit";
+import { pid, rectToPdf, rectToView, shownSize, toPdf, toView } from "./pdfEdit";
+import { selectedTextRects } from "./textSelection";
 
 export type Tool = "select" | "highlight" | "text" | "draw" | "note" | "sign";
 
@@ -19,6 +20,9 @@ export type FormField = {
   readOnly?: boolean;
 };
 
+/** Nota que ya venía en el archivo (de Vista Previa, Acrobat o una versión anterior). */
+export type FileNote = { id: string; rect: [number, number, number, number]; text: string; author: string; drawn: boolean };
+
 export type ToolStyle = { highlight: string; ink: string; inkWidth: number; textColor: string; textSize: number };
 
 type Props = {
@@ -30,6 +34,8 @@ type Props = {
   annotations: Annotation[];
   selected: string | null;
   fields: FormField[];
+  /** Notas que ya traía el PDF: se ven y se leen. */
+  fileNotes?: FileNote[];
   form: FormValues;
   /** Firma lista para colocar con un clic (herramienta Firmar). */
   signature: { src: string; ratio: number } | null;
@@ -171,12 +177,11 @@ export default function AnnotationLayer(props: Props) {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !layer.current) return;
       const pageEl = layer.current.parentElement!;
+      const textEl = pageEl.querySelector<HTMLElement>(".textLayer");
       const range = sel.getRangeAt(0);
-      if (!pageEl.contains(range.commonAncestorContainer)) return;
+      if (!textEl || !pageEl.contains(range.commonAncestorContainer)) return;
       const base = pageEl.getBoundingClientRect();
-      const rects = Array.from(range.getClientRects())
-        .filter((r) => r.width > 1 && r.height > 1)
-        .map((r) => rectToPdf(page, s, r.left - base.left, r.top - base.top, r.width, r.height));
+      const rects = selectedTextRects(range, textEl).map((r) => rectToPdf(page, s, r.left - base.left, r.top - base.top, r.width, r.height));
       sel.removeAllRanges();
       if (rects.length) props.onAdd({ id: pid("a"), page: page.id, kind: "highlight", rects: mergeLines(rects), color: props.style.highlight });
     }
@@ -184,8 +189,10 @@ export default function AnnotationLayer(props: Props) {
     return () => document.removeEventListener("pointerup", onUp);
   }, [tool, page, s, props.style.highlight]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const W = layer.current?.clientWidth ?? 0;
-  const H = layer.current?.clientHeight ?? 0;
+  // Del tamaño de la página (no del que tenía la capa antes de girarla).
+  const shown = shownSize(page);
+  const W = shown.width * s;
+  const H = shown.height * s;
   const capture = tool === "draw" || tool === "text" || tool === "note" || tool === "sign";
 
   return (
@@ -312,6 +319,37 @@ export default function AnnotationLayer(props: Props) {
           );
         }
         return null;
+      })}
+
+      {(props.fileNotes ?? []).map((n) => {
+        const v = rectToView(page, s, n.rect);
+        const box = n.drawn ? v : { left: v.left, top: v.top, width: 18, height: 18 };
+        return (
+          <div key={n.id} className="pdf-file-note" style={box}>
+            <button
+              type="button"
+              className={`pdf-annot-note${n.drawn ? " over" : ""}`}
+              title={n.text || "Nota"}
+              aria-label={`Nota: ${n.text}`}
+              onClick={() => setOpenNote(openNote === n.id ? null : n.id)}
+            >
+              {!n.drawn && (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#FFD233" stroke="#8a6d00" strokeWidth="1.5" aria-hidden>
+                  <path d="M4 4h16v12H10l-6 4z" />
+                </svg>
+              )}
+            </button>
+            {openNote === n.id && (
+              <div className="pdf-note-popup" style={{ top: box.height + 4 }} onPointerDown={(e) => e.stopPropagation()}>
+                {n.author && <span className="pdf-note-author">{n.author}</span>}
+                <p className="pdf-note-text">{n.text || "(nota vacía)"}</p>
+                <button type="button" className="btn" onClick={() => setOpenNote(null)}>
+                  Cerrar
+                </button>
+              </div>
+            )}
+          </div>
+        );
       })}
 
       {props.fields.map((f, i) => {

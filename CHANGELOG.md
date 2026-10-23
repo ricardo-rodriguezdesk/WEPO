@@ -11,6 +11,14 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Rellenar formularios PDF (texto, casillas y listas).
 - Todo se puede deshacer y se guarda en el PDF: se ve igual en Vista Previa, Acrobat o el navegador.
 
+### Arreglos en WEPO PDF
+- Doble clic o arrastrar sobre el texto ya no resalta toda la página (pasaba en Mac).
+- La selección normal ahora es azul; ya no se confunde con un resaltado.
+- Al girar una página, los resaltados y dibujos se quedan sobre el texto.
+- Con la página girada, lo que eliges con el mouse coincide con el texto que ves (antes el resaltado caía en otro lugar).
+- Las notas adhesivas se leen bien en modo oscuro, se ven en cualquier lector de PDF y, al volver a abrir el archivo en WEPO, se pueden leer.
+- Los resaltados quedan exactos también en PDFs hechos por programas que dejan el dibujo desplazado.
+
 ### Seguridad
 - pdf.js actualizado a la 6.4.299: corrige una falla que permitía ejecutar código al abrir un PDF malicioso (CVE-2026-16633).
 

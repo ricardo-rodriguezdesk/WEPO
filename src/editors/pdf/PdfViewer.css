@@ -128,7 +128,7 @@
 }
 .textLayer .markedContent { display: contents; }
 .textLayer span[role="img"] { user-select: none; cursor: default; }
-.textLayer ::selection { background: color-mix(in srgb, var(--kind-accent) 30%, transparent); }
+.textLayer ::selection { background: rgba(0, 110, 255, 0.28); background: color-mix(in srgb, AccentColor 40%, transparent); color: transparent; }
 .textLayer br::selection { background: transparent; }
 .textLayer .endOfContent {
   display: block;
@@ -138,6 +138,11 @@
   cursor: default;
   user-select: none;
 }
+.textLayer.selecting .endOfContent { top: 0; }
+/* pdf.js arma la capa de texto sin girar y la gira con CSS, igual que la página. */
+.textLayer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.textLayer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.textLayer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 
 /* Paso 26: elegir, arrastrar y ordenar páginas */
 .pdf-thumb.chosen canvas { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kind-accent) 45%, transparent); }
@@ -152,7 +157,7 @@
 .pdf-annot-layer.tool-text { cursor: text; }
 .pdf-annot-layer.tool-note, .pdf-annot-layer.tool-sign { cursor: copy; }
 .pdf-scroller.tool-highlight .textLayer { cursor: text; }
-.pdf-scroller.tool-highlight .textLayer ::selection { background: rgba(255, 225, 77, 0.55); }
+.pdf-scroller.tool-highlight .textLayer ::selection { background: color-mix(in srgb, var(--pdf-highlight, #ffd84d) 55%, transparent); }
 .pdf-scroller.tool-highlight .pdf-page { cursor: crosshair; }
 .pdf-annot-svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .pdf-annot-svg g { pointer-events: visiblePainted; cursor: move; }
@@ -197,7 +202,12 @@
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
-.pdf-note-popup .textarea { min-height: 80px; font: inherit; font-size: 13px; background: #fffdf0; }
+.pdf-note-popup .textarea { min-height: 80px; font: inherit; font-size: 13px; background: #fffdf0; color: #1d1d1f; color-scheme: light; }
+.pdf-note-popup .textarea::placeholder { color: #8a7d4a; }
+.pdf-note-popup .pdf-note-text { margin: 0; max-height: 200px; overflow: auto; white-space: pre-wrap; font-size: 13px; color: #1d1d1f; }
+.pdf-note-popup .pdf-note-author { font-size: 11px; font-weight: 600; color: #6b5c1f; }
+.pdf-file-note { position: absolute; pointer-events: auto; }
+.pdf-file-note > .pdf-annot-note.over { width: 100%; height: 100%; }
 .pdf-note-popup .btn { align-self: flex-end; padding: 2px 10px; font-size: 12px; }
 .pdf-annot-image { position: absolute; pointer-events: auto; cursor: move; }
 .pdf-annot-image img { display: block; width: 100%; height: 100%; pointer-events: none; }
