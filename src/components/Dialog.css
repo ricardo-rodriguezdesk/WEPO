@@ -66,3 +66,9 @@
   font-weight: 600;
   color: var(--muted);
 }
+
+.link-form { display: grid; gap: 12px; }
+.sort-levels { display: grid; gap: 8px; }
+.sort-level { display: grid; grid-template-columns: 82px 1fr 1fr 30px; gap: 8px; align-items: center; }
+.sort-level-label { font-size: 12px; color: var(--muted); }
+.sort-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 12px; flex-wrap: wrap; }

@@ -38,12 +38,14 @@ src/                      Interfaz (React + TypeScript)
 src-tauri/                Núcleo nativo (Rust)
 ├── src/lib.rs            Comandos que la interfaz puede llamar
 ├── src/mac.rs            Menú de la app, archivos abiertos desde Finder e impresión
+├── src/recovery.rs       Copia de recuperación de lo que no se ha guardado
 ├── src/sheets.rs         Hojas de cálculo: abrir, editar, calcular, copiar/pegar, deshacer y guardar
 ├── src/sheets/
 │   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
 │   ├── data.rs           Ordenar, filtrar, buscar y reemplazar
 │   ├── conditional.rs    Formato condicional (reglas, barras de datos, íconos)
 │   ├── validation.rs     Listas desplegables
+│   ├── annotations.rs    Notas, vínculos, pegado especial y resumen de la selección
 │   └── drawings.rs       Gráficas e imágenes
 ├── src/xlsx_extras.rs    Partes del .xlsx que el motor no maneja (se leen y escriben aparte)
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
@@ -141,6 +143,10 @@ WEPO también funciona en Linux (Ubuntu 22.04 o más nuevo, Debian, Fedora y sim
 | Deshacer / rehacer | ⌘Z / ⌘⇧Z |
 | Guardar / guardar como | ⌘S / ⌘⇧S |
 | Imprimir o exportar a PDF | ⌘P |
+| Pegar solo valores | ⌘⇧V (y en el clic derecho: solo formato, transpuesto) |
+| Copiar formato | Botón de la brocha (doble clic para aplicarlo varias veces; Esc para terminar) |
+| Insertar o editar una nota | ⇧F2, o clic derecho → Insertar nota |
+| Insertar o editar un vínculo | ⌘K; ⌘ + clic en la celda para abrirlo |
 | Acercar / alejar / 100 % | ⌘+ / ⌘− / ⌘0, pellizcar en el trackpad, o el control de zoom junto a las pestañas |
 | Nueva hoja de cálculo / abrir archivo | ⌘N / ⌘O |
 | Salir de WEPO | ⌘Q (avisa si hay cambios sin guardar) |
@@ -168,6 +174,10 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg
 - [x] WEPO Sheets: zoom de la hoja de 25 % a 400 %
+- [x] WEPO Sheets: suma, promedio y recuento de la selección; copiar formato y pegado especial
+- [x] WEPO Sheets: notas e hipervínculos que se leen y guardan en .xlsx
+- [x] WEPO Sheets: ordenar por varias columnas y filtros combinados en varias columnas
+- [x] WEPO Sheets: autoguardado y recuperación si la app se cierra de golpe
 
 ## Licencia
 

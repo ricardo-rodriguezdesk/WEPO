@@ -27,6 +27,18 @@ pub struct RawValidation {
 pub struct SheetExtras {
     pub validations: Vec<RawValidation>,
     pub drawings: Vec<RawDrawing>,
+    pub notes: Vec<RawNote>,
+}
+
+/// Nota de una celda, lista para escribirla (fila y columna desde 0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawNote {
+    /// "B3"
+    pub cell_ref: String,
+    pub row: i32,
+    pub col: i32,
+    pub text: String,
+    pub author: String,
 }
 
 /// Posición de un dibujo como la guarda Excel: celda (desde 0) y
@@ -316,10 +328,14 @@ pub fn read_drawings(path: &str) -> Result<(Vec<(String, Vec<RawDrawing>)>, bool
                 drawings.push(RawDrawing { anchor, content });
             }
         }
-        // Comentarios u otros dibujos "heredados" (VML) que no conservamos.
-        if !sheet_rels.values().all(|(kind, _)| matches!(kind.as_str(), "drawing" | "hyperlink" | "printerSettings")) {
-            unsupported |= sheet_rels.values().any(|(kind, _)| matches!(kind.as_str(), "vmlDrawing" | "table" | "pivotTable" | "comments"));
-        }
+        // Tablas, tablas dinámicas u otros dibujos "heredados" (VML) que no
+        // conservamos. El VML que acompaña a las notas sí: WEPO lo vuelve a escribir.
+        let has_notes = sheet_rels.values().any(|(kind, _)| kind == "comments");
+        unsupported |= sheet_rels.values().any(|(kind, _)| match kind.as_str() {
+            "table" | "pivotTable" => true,
+            "vmlDrawing" => !has_notes,
+            _ => false,
+        });
         if !drawings.is_empty() {
             result.push((name, drawings));
         }
@@ -628,6 +644,54 @@ fn validations_xml(validations: &[RawValidation]) -> String {
     format!(r#"<dataValidations count="{}">{items}</dataValidations>"#, validations.len())
 }
 
+/// Etiquetas que van después de <legacyDrawing> (el VML de las notas) en una hoja.
+const AFTER_LEGACY_DRAWING: &[&str] = &[
+    "<legacyDrawingHF", "<drawingHF", "<picture", "<oleObjects", "<controls", "<webPublishItems",
+    "<tableParts", "<extLst", "</worksheet>",
+];
+
+const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+/// Las notas en el formato de Excel: el texto (commentsN.xml) y el cuadro amarillo
+/// que se ve al pasar el mouse, que Excel todavía dibuja con VML (vmlDrawingN.vml).
+fn notes_xml(notes: &[RawNote], n: usize) -> (String, String) {
+    let mut authors: Vec<&str> = Vec::new();
+    let mut list = String::new();
+    let mut shapes = String::new();
+    for (i, note) in notes.iter().enumerate() {
+        let author = match authors.iter().position(|a| *a == note.author) {
+            Some(p) => p,
+            None => {
+                authors.push(&note.author);
+                authors.len() - 1
+            }
+        };
+        list.push_str(&format!(
+            r#"<comment ref="{}" authorId="{author}"><text><r><t xml:space="preserve">{}</t></r></text></comment>"#,
+            note.cell_ref,
+            escape(&note.text)
+        ));
+        let (r, c) = (note.row, note.col);
+        shapes.push_str(&format!(
+            r##"<v:shape id="_x0000_s{id}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:144pt;height:72pt;z-index:{z};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{c1}, 15, {r0}, 10, {c2}, 15, {r2}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{r}</x:Row><x:Column>{c}</x:Column></x:ClientData></v:shape>"##,
+            id = 1024 * n + i + 1,
+            z = i + 1,
+            c1 = c + 1,
+            r0 = r.max(1) - 1,
+            c2 = c + 3,
+            r2 = r + 3,
+        ));
+    }
+    let authors: String = authors.iter().map(|a| format!("<author>{}</author>", escape(a))).collect();
+    let comments = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{NS_MAIN}"><authors>{authors}</authors><commentList>{list}</commentList></comments>"#
+    );
+    let vml = format!(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="{n}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>{shapes}</xml>"#
+    );
+    (comments, vml)
+}
+
 /// Etiquetas que van después de <drawing> en una hoja.
 const AFTER_DRAWING: &[&str] = &[
     "<legacyDrawing", "<legacyDrawingHF", "<drawingHF", "<picture", "<oleObjects", "<controls",
@@ -816,13 +880,13 @@ fn chart_xml(chart: &RawChart) -> String {
 
 /// Agrega nuestras partes al .xlsx que acaba de escribir IronCalc.
 pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), String> {
-    if sheets.iter().all(|(_, extras)| extras.validations.is_empty() && extras.drawings.is_empty()) {
+    if sheets.iter().all(|(_, e)| e.validations.is_empty() && e.drawings.is_empty() && e.notes.is_empty()) {
         return Ok(());
     }
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let mut entries = read_zip(&bytes)?;
     let paths = sheet_paths(&entries)?;
-    let (mut drawing_n, mut chart_n, mut image_n) = (0, 0, 0);
+    let (mut drawing_n, mut chart_n, mut image_n, mut notes_n) = (0, 0, 0, 0);
 
     for (name, extras) in sheets {
         let Some((_, sheet_path)) = paths.iter().find(|(n, _)| n == name) else { continue };
@@ -881,6 +945,20 @@ pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), 
             let file = drawing_path.rsplit('/').next().unwrap_or_default();
             let rid = add_relationship(&mut entries, &sheet_path, "drawing", &format!("../drawings/{file}"));
             xml = insert_before_first(&xml, &format!(r#"<drawing xmlns:r="{NS_R}" r:id="{rid}"/>"#), AFTER_DRAWING);
+        }
+
+        if !extras.notes.is_empty() && !xml.contains("<legacyDrawing ") {
+            notes_n += 1;
+            let (comments, vml) = notes_xml(&extras.notes, notes_n);
+            let comments_path = format!("xl/comments{notes_n}.xml");
+            let vml_path = format!("xl/drawings/vmlDrawing{notes_n}.vml");
+            set_entry(&mut entries, &comments_path, comments.into_bytes());
+            set_entry(&mut entries, &vml_path, vml.into_bytes());
+            add_content_type(&mut entries, Some(&comments_path), None, "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml");
+            add_content_type(&mut entries, None, Some(("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing")), "");
+            add_relationship(&mut entries, &sheet_path, "comments", &format!("../comments{notes_n}.xml"));
+            let rid = add_relationship(&mut entries, &sheet_path, "vmlDrawing", &format!("../drawings/vmlDrawing{notes_n}.vml"));
+            xml = insert_before_first(&xml, &format!(r#"<legacyDrawing xmlns:r="{NS_R}" r:id="{rid}"/>"#), AFTER_LEGACY_DRAWING);
         }
         let index = entries.iter().position(|(n, _)| *n == sheet_path).unwrap_or(index);
         entries[index].1 = xml.into_bytes();

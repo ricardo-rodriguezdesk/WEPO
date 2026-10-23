@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{Rect, SheetDocument};
 
+/// Filtro de una columna (desde 1): los valores, tal como se ven, que se quedan.
+#[derive(Deserialize, Clone, Debug)]
+pub struct ColumnFilter {
+    pub col: i32,
+    pub keep: Vec<String>,
+}
+
 /// Columna por la que se ordena (desde 1) y en qué sentido.
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub struct SortKey {
@@ -151,16 +158,24 @@ impl SheetDocument {
 
     // ───────────── filtrar ─────────────
 
-    /// Oculta las filas de datos (debajo del encabezado de `rect`) cuyo valor
-    /// en `col` no está en `keep`, y muestra las demás.
-    pub fn filter(&mut self, sheet: u32, rect: Rect, col: i32, keep: &[String]) -> Result<(), String> {
+    /// Oculta las filas de datos (debajo del encabezado de `rect`) que no
+    /// pasan todos los filtros, y muestra las demás. Cada filtro dice qué
+    /// valores (tal como se ven) se quedan en su columna.
+    pub fn filter(&mut self, sheet: u32, rect: Rect, filters: &[ColumnFilter]) -> Result<(), String> {
         let area = rect.area(sheet);
         let (first, last) = (area.row + 1, area.row + area.height - 1);
         let model = self.model.get_model();
         let mut hidden = Vec::new();
         for row in first..=last {
-            let text = model.get_formatted_cell_value(sheet, row, col)?;
-            hidden.push((row, !keep.contains(&text)));
+            let mut hide = false;
+            for f in filters {
+                let text = model.get_formatted_cell_value(sheet, row, f.col)?;
+                if !f.keep.contains(&text) {
+                    hide = true;
+                    break;
+                }
+            }
+            hidden.push((row, hide));
         }
         // Agrupamos filas seguidas con el mismo estado para hacer menos pasos.
         self.transaction(|doc, steps| {

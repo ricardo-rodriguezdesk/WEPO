@@ -210,8 +210,9 @@ impl SheetDocument {
                 None => sheets.push((name, SheetExtras { validations: vec![raw], ..Default::default() })),
             }
         }
-        // Gráficas e imágenes (ver drawings.rs).
+        // Gráficas e imágenes (ver drawings.rs) y notas (ver annotations.rs).
         self.drawings_for_xlsx(&mut sheets);
+        self.notes_for_xlsx(&mut sheets);
         sheets
     }
 }

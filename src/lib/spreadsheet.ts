@@ -56,7 +56,24 @@ export type SheetView = {
   validations: ValidationView[];
   /** Gráficas e imágenes de la hoja, en píxeles desde la esquina de A1. */
   drawings: DrawingView[];
+  /** Notas de las celdas (filas y columnas desde 1). */
+  notes: NoteView[];
+  /** Hipervínculos (filas y columnas desde 1). */
+  links: LinkView[];
 };
+
+export type NoteView = { row: number; col: number; text: string; author: string };
+
+/** `target`: URL, mailto:… o, si `internal`, una celda como "Hoja2!A1". */
+export type LinkView = { row: number; col: number; target: string; internal: boolean; dynamic: boolean };
+
+/** Resumen de la selección para la barra de estado. */
+export type SelectionStats = { count: number; numbers: number; sum: number; min: number | null; max: number | null };
+
+export type PasteMode = "values" | "formats" | "transpose";
+
+/** Filtro de una columna (desde 0): valores que se quedan visibles. */
+export type ColumnFilter = { col: number; keep: string[] };
 
 export type ChartType = "column" | "bar" | "line" | "area" | "pie" | "doughnut" | "scatter";
 
@@ -177,6 +194,28 @@ export const sheetApi = {
 
   paste: (sheet: number, row: number, col: number, text: string) =>
     invoke<SheetView>("sheet_paste", { sheet, row: row + 1, col: col + 1, text }),
+  /** Pega lo último copiado en WEPO: solo valores, solo formato o transpuesto. */
+  pasteSpecial: (sheet: number, row: number, col: number, mode: PasteMode) =>
+    invoke<SheetView>("sheet_paste_special", { sheet, row: row + 1, col: col + 1, mode }),
+  /** Copiar formato: el de `source` pasa a `target`. */
+  pasteFormat: (sheet: number, source: Range, target: Range) =>
+    invoke<SheetView>("sheet_paste_format", {
+      sheet,
+      ...rect(source),
+      toRow1: target.r1 + 1,
+      toCol1: target.c1 + 1,
+      toRow2: target.r2 + 1,
+      toCol2: target.c2 + 1,
+    }),
+
+  // Notas, vínculos y barra de estado
+  /** Escribe la nota de una celda; con texto vacío la borra. */
+  setNote: (sheet: number, row: number, col: number, text: string) =>
+    invoke<SheetView>("sheet_note", { sheet, row: row + 1, col: col + 1, text }),
+  /** Pone un vínculo (URL, correo o "Hoja2!A1"); con `target` null lo quita. */
+  setLink: (sheet: number, row: number, col: number, target: string | null, label?: string) =>
+    invoke<SheetView>("sheet_link", { sheet, row: row + 1, col: col + 1, target, label: label ?? null }),
+  stats: (sheet: number, range: Range) => invoke<SelectionStats>("sheet_stats", { sheet, ...rect(range) }),
 
   // Filas y columnas (índices desde 0 en la interfaz)
   insertRows: (sheet: number, row: number, count: number) =>
@@ -217,9 +256,13 @@ export const sheetApi = {
       keys: keys.map((k) => ({ col: k.col + 1, ascending: k.ascending })),
       header,
     }),
-  /** Deja visibles solo las filas cuyo valor en `col` está en `keep`; `null` quita el filtro. */
-  filter: (sheet: number, range: Range, col: number, keep: string[] | null) =>
-    invoke<SheetView>("sheet_filter", { sheet, ...rect(range), col: col + 1, keep }),
+  /** Deja visibles solo las filas que pasan todos los filtros; sin filtros, muestra todas. */
+  filter: (sheet: number, range: Range, filters: ColumnFilter[]) =>
+    invoke<SheetView>("sheet_filter", {
+      sheet,
+      ...rect(range),
+      filters: filters.map((f) => ({ col: f.col + 1, keep: f.keep })),
+    }),
   find: async (sheet: number, query: string, options: FindOptions): Promise<FindMatch[]> => {
     const found = await invoke<FindMatch[]>("sheet_find", { sheet, query, ...options });
     return found.map((m) => ({ sheet: m.sheet, row: m.row - 1, col: m.col - 1 }));

@@ -203,7 +203,13 @@ export function Separator() {
 }
 
 /** Los botones no se quedan con el foco: así se puede seguir escribiendo en la hoja. */
-export function ToolButton(props: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
+export function ToolButton(props: {
+  label: string;
+  pressed?: boolean;
+  onClick: () => void;
+  onDoubleClick?: () => void;
+  children: ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -213,6 +219,7 @@ export function ToolButton(props: { label: string; pressed?: boolean; onClick: (
       aria-pressed={props.pressed}
       onMouseDown={(e) => e.preventDefault()}
       onClick={props.onClick}
+      onDoubleClick={props.onDoubleClick}
     >
       {props.children}
     </button>

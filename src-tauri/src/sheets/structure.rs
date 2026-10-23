@@ -6,20 +6,26 @@ use super::{Rect, SheetDocument};
 impl SheetDocument {
     // ───────────── filas y columnas ─────────────
 
+    // Las notas se mueven junto con sus celdas (ver annotations.rs).
+
     pub fn insert_rows(&mut self, sheet: u32, row: i32, count: i32) -> Result<(), String> {
-        self.step(|m| m.insert_rows(sheet, row, count.max(1)))
+        let count = count.max(1);
+        self.step_moving_notes(sheet, false, row, count, |m| m.insert_rows(sheet, row, count))
     }
 
     pub fn delete_rows(&mut self, sheet: u32, row: i32, count: i32) -> Result<(), String> {
-        self.step(|m| m.delete_rows(sheet, row, count.max(1)))
+        let count = count.max(1);
+        self.step_moving_notes(sheet, false, row, -count, |m| m.delete_rows(sheet, row, count))
     }
 
     pub fn insert_columns(&mut self, sheet: u32, col: i32, count: i32) -> Result<(), String> {
-        self.step(|m| m.insert_columns(sheet, col, count.max(1)))
+        let count = count.max(1);
+        self.step_moving_notes(sheet, true, col, count, |m| m.insert_columns(sheet, col, count))
     }
 
     pub fn delete_columns(&mut self, sheet: u32, col: i32, count: i32) -> Result<(), String> {
-        self.step(|m| m.delete_columns(sheet, col, count.max(1)))
+        let count = count.max(1);
+        self.step_moving_notes(sheet, true, col, -count, |m| m.delete_columns(sheet, col, count))
     }
 
     pub fn set_rows_hidden(&mut self, sheet: u32, row1: i32, row2: i32, hidden: bool) -> Result<(), String> {

@@ -4,6 +4,7 @@ import KindIcon from "../components/KindIcon";
 import appIcon from "../assets/wepo-icon.png";
 import type { RecentFile } from "../lib/recents";
 import { folderLabel, whenLabel } from "../lib/recents";
+import type { RecoveryInfo } from "../lib/recovery";
 import "./Home.css";
 
 type Props = {
@@ -13,6 +14,9 @@ type Props = {
   onRemoveRecent: (path: string) => void;
   onClearRecents: () => void;
   recents: RecentFile[];
+  recovery: RecoveryInfo | null;
+  onRecover: (info: RecoveryInfo) => void;
+  onDiscardRecovery: () => void;
   dragging: boolean;
   error: string | null;
 };
@@ -20,7 +24,8 @@ type Props = {
 const ORDER: DocKind[] = ["write", "sheets", "present"];
 
 /** Pantalla de inicio: crear un documento nuevo o abrir uno existente. */
-export default function Home({ onNew, onOpen, onOpenRecent, onRemoveRecent, onClearRecents, recents, dragging, error }: Props) {
+export default function Home(props: Props) {
+  const { onNew, onOpen, onOpenRecent, onRemoveRecent, onClearRecents, recents, recovery, dragging, error } = props;
   return (
     <main className={`home ${dragging ? "dragging" : ""}`}>
       <section className="home-hero">
@@ -30,6 +35,24 @@ export default function Home({ onNew, onOpen, onOpenRecent, onRemoveRecent, onCl
         </h1>
         <p className="home-tagline">Write · Edit · Present · Open</p>
       </section>
+
+      {recovery && (
+        <section className="home-recovery" role="alert">
+          <div>
+            <b>WEPO se cerró sin guardar «{recovery.name}».</b>
+            <span>
+              Hay una copia de {whenLabel(recovery.time * 1000)}
+              {recovery.original ? ` (el original está en ${folderLabel(recovery.original)})` : ""}.
+            </span>
+          </div>
+          <button className="btn" onClick={props.onDiscardRecovery}>
+            Descartar
+          </button>
+          <button className="btn btn-primary" onClick={() => props.onRecover(recovery)}>
+            Recuperar
+          </button>
+        </section>
+      )}
 
       <section className="home-section">
         <h2>Crear</h2>

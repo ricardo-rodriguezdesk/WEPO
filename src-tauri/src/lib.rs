@@ -3,6 +3,7 @@
 // funciones a la interfaz como comandos de Tauri.
 
 mod mac;
+mod recovery;
 mod sheet_format;
 mod sheets;
 mod xlsx_extras;
@@ -11,12 +12,12 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use sheets::drawings::{ChartType, DrawingPatch};
-use sheets::{FindMatch, ListSource, Rect, SheetDocument, SheetView, SortKey};
+use sheets::{ColumnFilter, FindMatch, ListSource, PasteMode, Rect, SelectionStats, SheetDocument, SheetView, SortKey};
 use tauri::State;
 
 /// Hoja de cálculo abierta actualmente (WEPO abre un documento a la vez).
 #[derive(Default)]
-struct OpenSheet(Mutex<Option<SheetDocument>>);
+pub struct OpenSheet(pub Mutex<Option<SheetDocument>>);
 
 /// Ejecuta `action` sobre el libro abierto y devuelve la hoja `sheet` actualizada.
 fn with_sheet(
@@ -242,10 +243,9 @@ fn sheet_sort(
     with_sheet(&state, sheet, |doc| doc.sort(sheet, rect, &keys, header))
 }
 
-/// Filtra las filas debajo del encabezado: solo quedan visibles las que en
-/// `col` tienen alguno de los valores de `keep`. Sin `keep`, quita el filtro.
+/// Filtra las filas debajo del encabezado: solo quedan visibles las que pasan
+/// todos los filtros (uno por columna). Sin filtros, se muestran todas.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 fn sheet_filter(
     state: State<OpenSheet>,
     sheet: u32,
@@ -253,14 +253,73 @@ fn sheet_filter(
     col1: i32,
     row2: i32,
     col2: i32,
-    col: i32,
-    keep: Option<Vec<String>>,
+    filters: Vec<ColumnFilter>,
 ) -> Result<SheetView, String> {
     let rect = Rect { row1, col1, row2, col2 };
-    with_sheet(&state, sheet, |doc| match &keep {
-        Some(keep) => doc.filter(sheet, rect, col, keep),
-        None => doc.clear_filter(sheet, rect),
+    with_sheet(&state, sheet, |doc| {
+        if filters.is_empty() {
+            doc.clear_filter(sheet, rect)
+        } else {
+            doc.filter(sheet, rect, &filters)
+        }
     })
+}
+
+// ───────────── notas, vínculos y pegado especial ─────────────
+
+/// Escribe la nota de una celda; con texto vacío, la borra.
+#[tauri::command]
+fn sheet_note(state: State<OpenSheet>, sheet: u32, row: i32, col: i32, text: String) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.set_note(sheet, row, col, &text))
+}
+
+/// Pone un vínculo en la celda (sin `target`, lo quita).
+#[tauri::command]
+fn sheet_link(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row: i32,
+    col: i32,
+    target: Option<String>,
+    label: Option<String>,
+) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| match &target {
+        Some(target) => doc.set_link(sheet, row, col, target, label.as_deref()),
+        None => doc.delete_link(sheet, row, col),
+    })
+}
+
+/// Suma, promedio y recuento de la selección (para la barra de estado).
+#[tauri::command]
+fn sheet_stats(state: State<OpenSheet>, sheet: u32, row1: i32, col1: i32, row2: i32, col2: i32) -> Result<SelectionStats, String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.stats(sheet, Rect { row1, col1, row2, col2 })
+}
+
+#[tauri::command]
+fn sheet_paste_special(state: State<OpenSheet>, sheet: u32, row: i32, col: i32, mode: PasteMode) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.paste_special(sheet, row, col, mode))
+}
+
+/// Copiar formato (la brocha): el formato de `source` pasa a `target`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_paste_format(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    to_row1: i32,
+    to_col1: i32,
+    to_row2: i32,
+    to_col2: i32,
+) -> Result<SheetView, String> {
+    let source = Rect { row1, col1, row2, col2 };
+    let target = Rect { row1: to_row1, col1: to_col1, row2: to_row2, col2: to_col2 };
+    with_sheet(&state, sheet, |doc| doc.paste_styles_from(sheet, source, target))
 }
 
 /// `case`: distinguir mayúsculas; `whole`: celda completa; `all`: todas las hojas.
@@ -537,6 +596,14 @@ pub fn run() {
             mac::take_opened_files,
             mac::print_window,
             mac::quit_app,
+            sheet_note,
+            sheet_link,
+            sheet_stats,
+            sheet_paste_special,
+            sheet_paste_format,
+            recovery::recovery_save,
+            recovery::recovery_info,
+            recovery::recovery_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error al iniciar WEPO")

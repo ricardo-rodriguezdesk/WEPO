@@ -15,6 +15,8 @@ import type { Command } from "./lib/commands";
 import { onCommand, runCommand } from "./lib/commands";
 import { hasModifier } from "./lib/platform";
 import { addRecent, clearRecents, loadRecents, removeRecent } from "./lib/recents";
+import type { RecoveryInfo } from "./lib/recovery";
+import { recoveryApi } from "./lib/recovery";
 import "./App.css";
 
 /** Documento abierto actualmente. `id` cambia con cada apertura para reiniciar el editor. */
@@ -24,6 +26,8 @@ type OpenDocument = {
   fileName: string;
   path: string | null;
   sheet?: SheetView;
+  /** Viene de la copia de recuperación: empieza con cambios sin guardar. */
+  recovered?: boolean;
 };
 
 export default function App() {
@@ -31,18 +35,39 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [recents, setRecents] = useState(loadRecents);
+  // Copia que quedó de un documento sin guardar (si WEPO se cerró de golpe).
+  const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
+  useEffect(() => {
+    recoveryApi.info().then(setRecovery);
+  }, []);
   const nextId = useRef(1);
   const dirty = useRef(false); // el editor avisa si hay cambios sin guardar
 
   /** Pregunta antes de cerrar un documento con cambios sin guardar. */
   async function confirmDiscard(): Promise<boolean> {
     if (!dirty.current) return true;
-    return ask("Tienes cambios sin guardar. ¿Quieres descartarlos?", {
+    const discard = await ask("Tienes cambios sin guardar. ¿Quieres descartarlos?", {
       title: "WEPO",
       kind: "warning",
       okLabel: "Descartar",
       cancelLabel: "Cancelar",
     });
+    // Si se descartan a propósito, la copia de recuperación ya no sirve.
+    if (discard) await recoveryApi.clear();
+    return discard;
+  }
+
+  async function recover(info: RecoveryInfo) {
+    if (!(await confirmDiscard())) return;
+    try {
+      const sheet = await sheetApi.open(info.path);
+      const base = info.name.replace(/\.[^.]+$/, "") || "Sin título";
+      show({ id: nextId.current++, kind: "sheets", fileName: `${base} (recuperado)`, path: null, sheet, recovered: true });
+      dirty.current = true;
+      setRecovery(null);
+    } catch (e) {
+      show(null, `No se pudo recuperar el documento: ${e}`);
+    }
   }
 
   function show(next: OpenDocument | null, message: string | null = null) {
@@ -197,6 +222,12 @@ export default function App() {
           setRecents([]);
         }}
         recents={recents}
+        recovery={recovery}
+        onRecover={recover}
+        onDiscardRecovery={() => {
+          recoveryApi.clear();
+          setRecovery(null);
+        }}
         dragging={dragging}
         error={error}
       />
@@ -213,6 +244,7 @@ export default function App() {
         path={doc.path}
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
+        recovered={doc.recovered}
         {...common}
       />
     );

@@ -22,13 +22,15 @@ use serde::Serialize;
 
 use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 
+mod annotations;
 mod conditional;
 mod data;
 pub mod drawings;
 mod structure;
 mod validation;
 
-pub use data::{FindMatch, SortKey};
+pub use annotations::{LinkView, NoteView, PasteMode, SelectionStats};
+pub use data::{ColumnFilter, FindMatch, SortKey};
 pub use validation::{ListSource, ValidationView};
 
 const LOCALE: &str = "en";
@@ -62,6 +64,8 @@ enum Step {
     Engine(usize),
     /// Un cambio en lo que WEPO guarda por su cuenta: se guarda cómo estaba antes.
     Extras(Extras),
+    /// Las dos cosas a la vez (p. ej. insertar filas mueve también las notas).
+    Both(usize, Extras),
 }
 
 /// Lo que WEPO maneja fuera del motor y escribe en el .xlsx por su cuenta.
@@ -70,6 +74,8 @@ pub struct Extras {
     pub validations: Vec<validation::Validation>,
     /// Gráficas e imágenes.
     pub drawings: Vec<drawings::Drawing>,
+    /// Notas de las celdas.
+    pub notes: Vec<annotations::Note>,
 }
 
 struct InternalClipboard {
@@ -177,6 +183,10 @@ pub struct SheetView {
     pub validations: Vec<ValidationView>,
     /// Gráficas e imágenes de la hoja.
     pub drawings: Vec<drawings::DrawingView>,
+    /// Notas de las celdas (filas y columnas desde 1).
+    pub notes: Vec<NoteView>,
+    /// Hipervínculos de las celdas (filas y columnas desde 1).
+    pub links: Vec<LinkView>,
 }
 
 /// 1 → A, 26 → Z, 27 → AA.
@@ -241,6 +251,7 @@ impl SheetDocument {
                 // Las listas desplegables, gráficas e imágenes no las lee IronCalc: las leemos nosotros.
                 doc.load_validations(path);
                 doc.load_drawings(path);
+                doc.load_notes();
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -445,6 +456,8 @@ impl SheetDocument {
             decorations,
             validations: self.validation_views(sheet)?,
             drawings: self.drawing_views(sheet),
+            notes: self.note_views(sheet),
+            links: self.link_views(sheet),
         })
     }
 
@@ -551,6 +564,12 @@ impl SheetDocument {
                 Step::Engine(steps)
             }
             Step::Extras(before) => Step::Extras(std::mem::replace(&mut self.extras, before)),
+            Step::Both(steps, before) => {
+                for _ in 0..steps {
+                    self.model.undo()?;
+                }
+                Step::Both(steps, std::mem::replace(&mut self.extras, before))
+            }
         };
         self.future.push(reverse);
         Ok(())
@@ -566,6 +585,12 @@ impl SheetDocument {
                 Step::Engine(steps)
             }
             Step::Extras(after) => Step::Extras(std::mem::replace(&mut self.extras, after)),
+            Step::Both(steps, after) => {
+                for _ in 0..steps {
+                    self.model.redo()?;
+                }
+                Step::Both(steps, std::mem::replace(&mut self.extras, after))
+            }
         };
         self.history.push(reverse);
         Ok(())
@@ -1099,8 +1124,16 @@ mod tests {
         doc.redo().unwrap();
 
         // Filtrar deja visibles solo Kiwi y Uva (filas 2 y 5).
-        doc.filter(0, rect(1, 1, 5, 3), 1, &["Kiwi".into(), "Uva".into()]).unwrap();
+        doc.filter(0, rect(1, 1, 5, 3), &[ColumnFilter { col: 1, keep: vec!["Kiwi".into(), "Uva".into()] }]).unwrap();
         assert_eq!(doc.view(0).unwrap().hidden_rows, vec![3, 4]);
+        // Con un segundo filtro en la columna B, solo queda Uva.
+        let uva = text(&doc, 5, 2);
+        let both = [
+            ColumnFilter { col: 1, keep: vec!["Kiwi".into(), "Uva".into()] },
+            ColumnFilter { col: 2, keep: vec![uva] },
+        ];
+        doc.filter(0, rect(1, 1, 5, 3), &both).unwrap();
+        assert_eq!(doc.view(0).unwrap().hidden_rows, vec![2, 3, 4]);
         doc.clear_filter(0, rect(1, 1, 5, 3)).unwrap();
         assert!(doc.view(0).unwrap().hidden_rows.is_empty());
 
