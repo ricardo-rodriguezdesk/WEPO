@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Dialog from "../../components/Dialog";
 import type { PrintOptions } from "./PrintSheet";
-import { isMac } from "../../lib/platform";
+import { isMac, isWindows } from "../../lib/platform";
 
 const KEY = "wepo.print";
 
@@ -89,7 +89,9 @@ export default function PrintDialog({ selectionLabel, onPrint, onClose }: Props)
         <p className="hint">
           {isMac
             ? "Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión."
-            : "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."}
+            : isWindows
+              ? "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."
+              : "Para crear un PDF, elige «Imprimir a un archivo» (formato PDF) en el diálogo de impresión."}
         </p>
       </div>
     </Dialog>

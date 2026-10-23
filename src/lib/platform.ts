@@ -1,6 +1,7 @@
-// Diferencias entre Mac y Windows/Linux para atajos y textos.
+// Diferencias entre Mac, Windows y Linux para atajos y textos.
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+export const isWindows = /Win/.test(navigator.platform || navigator.userAgent);
 
 /** La tecla de los atajos: ⌘ en Mac, Ctrl en Windows y Linux. */
 export function hasModifier(e: { metaKey: boolean; ctrlKey: boolean }): boolean {

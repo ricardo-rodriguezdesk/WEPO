@@ -93,6 +93,24 @@ WEPO también funciona en Windows 10 y 11. En Windows los atajos usan **Ctrl** e
 - **Desde el código:** instala [Git](https://git-scm.com/download/win), [Node.js LTS](https://nodejs.org/), [Rust](https://rustup.rs/) y las [Build Tools de Visual Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/) con «Desarrollo para el escritorio con C++». Luego, en la carpeta del proyecto: `npm install` y `npm run tauri dev`.
 - **Crear el instalador en Windows:** `npm run tauri build`. Queda en `src-tauri\target\release\bundle\nsis\` (.exe) y `bundle\msi\` (.msi).
 
+## Linux
+
+WEPO también funciona en Linux (Ubuntu 22.04 o más nuevo, Debian, Fedora y similares). Los atajos usan **Ctrl**, como en Windows.
+
+- **Instalador:** en **Releases** hay tres formatos:
+  - `.AppImage`, para casi cualquier distribución: `chmod +x WEPO_*.AppImage` y ábrelo.
+  - `.deb`, para Ubuntu, Debian o Mint: `sudo apt install ./WEPO_*.deb`.
+  - `.rpm`, para Fedora u openSUSE: `sudo dnf install ./WEPO-*.rpm`.
+- **Desde el código** (Ubuntu/Debian):
+  ```bash
+  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential curl git
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
+  # Node.js LTS desde https://nodejs.org o con tu gestor de paquetes
+  git clone https://github.com/ricardo-rodriguezdesk/WEPO.git && cd WEPO
+  npm install
+  npm run tauri dev
+  ```
+
 ## Atajos de WEPO Sheets
 
 | Acción | Atajo |

@@ -1,5 +1,5 @@
-# Crea los instaladores de WEPO: .dmg para Mac (Apple Silicon e Intel) y
-# .exe / .msi para Windows.
+# Crea los instaladores de WEPO: .dmg para Mac (Apple Silicon e Intel),
+# .exe / .msi para Windows y .AppImage / .deb / .rpm para Linux.
 #
 # Se ejecuta al subir una etiqueta de versión:
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -31,10 +31,20 @@ jobs:
           - target: x86_64-pc-windows-msvc
             label: Windows
             os: windows-latest
+          # Ubuntu 22.04 para que el AppImage funcione también en distribuciones más viejas.
+          - target: x86_64-unknown-linux-gnu
+            label: Linux
+            os: ubuntu-22.04
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os || 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Dependencias de Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
 
       - uses: actions/setup-node@v4
         with:
@@ -66,5 +76,10 @@ jobs:
             WEPO todavía no está firmado por Apple. La primera vez, haz clic derecho sobre la app → **Abrir** → **Abrir**.
 
             **Windows** — descarga **x64-setup.exe** y ábrelo. Si aparece «Windows protegió tu PC», haz clic en **Más información** → **Ejecutar de todas formas** (la app aún no está firmada).
+
+            **Linux** — elige uno:
+            - **.AppImage**: funciona en casi cualquier distribución. Dale permiso de ejecución (`chmod +x WEPO_*.AppImage`) y ábrelo.
+            - **.deb**: Ubuntu, Debian, Linux Mint, Pop!_OS (`sudo apt install ./WEPO_*.deb`).
+            - **.rpm**: Fedora, openSUSE (`sudo dnf install ./WEPO-*.rpm`).
           releaseDraft: true
           prerelease: false
