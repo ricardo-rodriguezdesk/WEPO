@@ -144,12 +144,14 @@ class SlideWriter {
     const border = el.border ? `<a:solidFill><a:srgbClr val="${hex(el.border)}"/></a:solidFill>` : "<a:noFill/>";
     const edge = (tag: string) => `<a:${tag} w="12700">${border}</a:${tag}>`;
     const rows = el.rows
-      .map((row) => {
+      .map((row, ri) => {
         const cells = row.cells
           .map((c) => {
+            // El encabezado se ve con letra blanca y negrita en WEPO; se escribe así para PowerPoint.
+            const text = el.header && ri === 0 ? mapHeader(c.text) : c.text;
             const attrs = [c.span && c.span > 1 ? `gridSpan="${c.span}"` : "", c.rowSpan && c.rowSpan > 1 ? `rowSpan="${c.rowSpan}"` : "", c.merged === "h" ? `hMerge="1"` : c.merged === "v" ? `vMerge="1"` : ""].filter(Boolean).join(" ");
             const fill = c.fill ? `<a:solidFill><a:srgbClr val="${hex(c.fill)}"/></a:solidFill>` : "<a:noFill/>";
-            return `<a:tc${attrs ? ` ${attrs}` : ""}>${bodyXml(c.text, this.links, "a:txBody")}<a:tcPr>${edge("lnL")}${edge("lnR")}${edge("lnT")}${edge("lnB")}${fill}</a:tcPr></a:tc>`;
+            return `<a:tc${attrs ? ` ${attrs}` : ""}>${bodyXml(text, this.links, "a:txBody")}<a:tcPr>${edge("lnL")}${edge("lnR")}${edge("lnT")}${edge("lnB")}${fill}</a:tcPr></a:tc>`;
           })
           .join("");
         return `<a:tr h="${emu(row.h)}">${cells}</a:tr>`;
@@ -162,6 +164,10 @@ class SlideWriter {
   element(el: SlideElement): string {
     return el.kind === "shape" ? this.shape(el) : el.kind === "image" ? this.image(el) : this.table(el);
   }
+}
+
+function mapHeader(text: TextBody): TextBody {
+  return { ...text, paras: text.paras.map((p) => ({ ...p, runs: p.runs.map((r) => ({ ...r, color: r.color ?? "#FFFFFF", bold: r.bold ?? true })) })) };
 }
 
 const GROUP = `<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>`;

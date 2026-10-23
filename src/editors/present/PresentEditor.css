@@ -186,3 +186,39 @@
 .present-footer .sheet-status { margin-left: auto; }
 .present-footer .present-fit { margin-left: auto; padding: 2px 10px; font-size: 12px; }
 .present-footer .sheet-status + .present-fit { margin-left: 12px; }
+
+/* ───────────── Paso 23: varios elementos, girar, tablas y menús ───────────── */
+.present-rot-stem { position: absolute; transform: translateX(-50%); background: var(--kind-accent); pointer-events: none; }
+.present-handle.h-rot { cursor: grab; background: var(--kind-accent); }
+.present-marquee { position: absolute; border: 1px solid var(--kind-accent); background: color-mix(in srgb, var(--kind-accent) 12%, transparent); pointer-events: none; }
+.slide-table td.slide-cell-active { box-shadow: inset 0 0 0 2px var(--kind-accent); }
+.slide-table td.slide-cell-editing .ProseMirror { outline: none; min-height: 1em; cursor: text; -webkit-user-select: text; user-select: text; }
+.present-main-slide .slide-table td { cursor: cell; }
+
+.present-slide-menu, .present-arrange { display: flex; flex-direction: column; gap: 6px; min-width: 300px; }
+.present-menu-title { margin: 4px 2px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.present-menu-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.present-layouts button.current { border-color: var(--kind-accent); }
+.present-menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.present-menu-grid.two { grid-template-columns: repeat(2, 1fr); }
+.present-menu-grid button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.present-menu-grid button:hover:not(:disabled) { border-color: var(--kind-accent); color: var(--kind-accent); }
+.present-menu-grid button:disabled { opacity: 0.45; cursor: default; }
+.present-table-tools { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--border); }
+.present-table-picker { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.present-table-grid { display: grid; grid-template-columns: repeat(8, 18px); gap: 3px; }
+.present-table-grid button { width: 18px; height: 18px; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; }
+.present-table-grid button.on { background: color-mix(in srgb, var(--kind-accent) 35%, transparent); border-color: var(--kind-accent); }

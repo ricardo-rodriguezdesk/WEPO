@@ -131,7 +131,9 @@ function ShapeView({ el, deck, hints, textSlot }: { el: ShapeElement; deck: Deck
   );
 }
 
-function TableView({ el, deck }: { el: TableElement; deck: Deck }) {
+type CellRef = { r: number; c: number };
+
+function TableView({ el, deck, active, editing, slot }: { el: TableElement; deck: Deck; active?: CellRef | null; editing?: CellRef | null; slot?: ReactNode }) {
   const border = el.border ? `1px solid ${el.border}` : "none";
   return (
     <table className="slide-table" style={{ width: el.w, fontFamily: fontStack(deck.theme.fonts.minor), color: deck.theme.text }}>
@@ -143,13 +145,31 @@ function TableView({ el, deck }: { el: TableElement; deck: Deck }) {
       <tbody>
         {el.rows.map((row, ri) => (
           <tr key={ri} style={{ height: row.h }}>
-            {row.cells.map((cell, ci) =>
-              cell.merged ? null : (
-                <td key={ci} colSpan={cell.span} rowSpan={cell.rowSpan} style={{ background: cell.fill ?? undefined, border, fontSize: `${cell.text.defaultSize ?? 18}pt` }}>
-                  <TextContent text={cell.text} />
+            {row.cells.map((cell, ci) => {
+              if (cell.merged) return null;
+              const isEditing = editing?.r === ri && editing.c === ci;
+              const isActive = active?.r === ri && active.c === ci;
+              // La fila de encabezado: letra blanca y en negrita, salvo que el texto diga otra cosa.
+              const header = el.header && ri === 0;
+              return (
+                <td
+                  key={ci}
+                  data-cell={`${ri},${ci}`}
+                  className={`${isActive ? "slide-cell-active" : ""}${isEditing ? " slide-cell-editing" : ""}`}
+                  colSpan={cell.span}
+                  rowSpan={cell.rowSpan}
+                  style={{
+                    background: cell.fill ?? undefined,
+                    border,
+                    fontSize: `${cell.text.defaultSize ?? 18}pt`,
+                    color: header ? "#FFFFFF" : undefined,
+                    fontWeight: header ? 700 : undefined,
+                  }}
+                >
+                  {isEditing && slot ? slot : <TextContent text={cell.text} />}
                 </td>
-              ),
-            )}
+              );
+            })}
           </tr>
         ))}
       </tbody>
@@ -172,6 +192,9 @@ type Props = {
   /** Cuadro cuyo texto se está editando: se dibuja con `editingSlot` en vez del texto. */
   editingId?: string | null;
   editingSlot?: ReactNode;
+  /** Celda elegida y celda que se está escribiendo de una tabla (con su editor). */
+  activeCell?: { id: string; r: number; c: number } | null;
+  editingCell?: { id: string; r: number; c: number } | null;
   /** Para que el editor sepa en qué elemento se hizo clic. */
   interactive?: boolean;
   className?: string;
@@ -179,7 +202,7 @@ type Props = {
 };
 
 /** Una diapositiva dibujada con HTML y SVG, del tamaño que se pida. */
-export default function SlideView({ slide, deck, scale, hints = false, editingId, editingSlot, interactive = false, className, children }: Props) {
+export default function SlideView({ slide, deck, scale, hints = false, editingId, editingSlot, activeCell, editingCell, interactive = false, className, children }: Props) {
   const background = slide.background ?? deck.theme.background;
   return (
     <div className={`slide-frame ${className ?? ""}`} style={{ width: deck.width * scale, height: deck.height * scale }}>
@@ -202,7 +225,15 @@ export default function SlideView({ slide, deck, scale, hints = false, editingId
           >
             {el.kind === "shape" && <ShapeView el={el} deck={deck} hints={hints} textSlot={el.id === editingId ? editingSlot : undefined} />}
             {el.kind === "image" && <img src={(el as ImageElement).src} alt="" draggable={false} />}
-            {el.kind === "table" && <TableView el={el} deck={deck} />}
+            {el.kind === "table" && (
+              <TableView
+                el={el}
+                deck={deck}
+                active={activeCell?.id === el.id ? activeCell : null}
+                editing={editingCell?.id === el.id ? editingCell : null}
+                slot={editingCell?.id === el.id ? editingSlot : undefined}
+              />
+            )}
           </div>
         ))}
         {children}

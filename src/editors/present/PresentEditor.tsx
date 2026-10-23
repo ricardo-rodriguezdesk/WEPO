@@ -13,8 +13,8 @@ import type { MenuItem } from "../../components/ContextMenu";
 import { AlignIcon, ColorButton, FONTS, Popover, Separator, ToolButton } from "../sheets/FormatBar";
 import ZoomControl from "../sheets/ZoomControl";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import type { Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TextBody } from "./model";
-import { LAYOUTS, THEMES, cloneElement, cloneSlide, newSlide, placeholderHint, slideTitle, uid } from "./model";
+import type { Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody } from "./model";
+import { LAYOUTS, THEMES, cloneElement, cloneSlide, isEmptyText, layoutElements, newSlide, placeholderHint, slideTitle, uid } from "./model";
 import { SHAPES, isLine, shapePath } from "./geometry";
 import SlideView, { textDefaults } from "./SlideView";
 import { SlideParagraph, allRuns, fromEditor, mapParas, mapRuns, toEditor } from "./slideText";
@@ -42,8 +42,28 @@ const HISTORY_LIMIT = 100;
 const SNAP = 6;
 
 type Drag =
-  | { kind: "move"; id: string; startX: number; startY: number; orig: SlideElement; snapshot: Deck; moved: boolean }
-  | { kind: "resize"; id: string; handle: string; startX: number; startY: number; orig: SlideElement; snapshot: Deck; moved: boolean };
+  | { kind: "move"; ids: string[]; startX: number; startY: number; origs: SlideElement[]; snapshot: Deck; moved: boolean }
+  | { kind: "resize"; id: string; handle: string; startX: number; startY: number; orig: SlideElement; snapshot: Deck; moved: boolean }
+  | { kind: "rotate"; id: string; startX: number; startY: number; orig: SlideElement; snapshot: Deck; moved: boolean }
+  | { kind: "marquee"; startX: number; startY: number; x0: number; y0: number; base: string[]; snapshot: Deck; moved: boolean };
+
+function updateCell(t: TableElement, r: number, c: number, fn: (cell: TableElement["rows"][number]["cells"][number]) => TableElement["rows"][number]["cells"][number]): TableElement {
+  return { ...t, rows: t.rows.map((row, ri) => (ri !== r ? row : { ...row, cells: row.cells.map((x, ci) => (ci === c ? fn(x) : x)) })) };
+}
+
+/** El color de acento muy claro (para las filas alternas de una tabla nueva). */
+function lighten(hex: string): string {
+  const n = hex.replace("#", "");
+  const mix = (i: number) => Math.round(parseInt(n.slice(i, i + 2), 16) * 0.15 + 255 * 0.85).toString(16).padStart(2, "0");
+  return `#${mix(0)}${mix(2)}${mix(4)}`.toUpperCase();
+}
+
+/** Caja que encierra varios elementos. */
+function bounds(els: SlideElement[]) {
+  const x = Math.min(...els.map((e) => e.x));
+  const y = Math.min(...els.map((e) => e.y));
+  return { x, y, w: Math.max(...els.map((e) => e.x + e.w)) - x, h: Math.max(...els.map((e) => e.y + e.h)) - y };
+}
 
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
@@ -55,9 +75,19 @@ export default function PresentEditor(props: Props) {
   deckRef.current = deck;
   const history = useRef<{ past: Deck[]; future: Deck[] }>({ past: [], future: [] });
   const [current, setCurrent] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string[]>([]);
+  const selected = selection.length === 1 ? selection[0] : null;
+  const setSelected = (id: string | null) => setSelection(id ? [id] : []);
+  /** Celda elegida de una tabla, y la que se está escribiendo. */
+  const [cell, setCell] = useState<{ r: number; c: number } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ id: string; r: number; c: number } | null>(null);
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [textEditor, setTextEditor] = useState<Editor | null>(null);
+  const textEditorRef = useRef<Editor | null>(null);
+  textEditorRef.current = textEditor;
+  /** Letras que se escribieron justo después del doble clic, antes de que el editor estuviera listo. */
+  const pendingText = useRef("");
   const [path, setPath] = useState(props.path);
   const [fileName, setFileName] = useState(props.fileName);
   const [dirty, setDirty] = useState(Boolean(props.recovered));
@@ -72,12 +102,13 @@ export default function PresentEditor(props: Props) {
   const [protectedPath] = useState(initial.unsupported.length ? props.path : null);
   const [notice, setNotice] = useState(initial.unsupported.length > 0);
   const drag = useRef<Drag | null>(null);
-  const clipboard = useRef<SlideElement | null>(null);
+  const clipboard = useRef<SlideElement[]>([]);
   const stage = useRef<HTMLDivElement>(null);
 
   const slide = deck.slides[Math.min(current, deck.slides.length - 1)];
   const scale = zoom ?? fit;
   const selectedEl = slide.elements.find((e) => e.id === selected) ?? null;
+  const selectedEls = slide.elements.filter((e) => selection.includes(e.id));
 
   // ───────────── cambios e historial ─────────────
 
@@ -158,6 +189,8 @@ export default function PresentEditor(props: Props) {
     setCurrent(i);
     setSelected(null);
     setEditing(null);
+    setEditingCell(null);
+    setCell(null);
   }
 
   function addSlide(layout: LayoutId = slide.layout === "title" ? "titleContent" : slide.layout) {
@@ -267,39 +300,103 @@ export default function PresentEditor(props: Props) {
   }
 
   function deleteSelected() {
-    if (!selected) return;
-    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: s.elements.filter((e) => e.id !== selected) })));
-    setSelected(null);
+    if (!selection.length) return;
+    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: s.elements.filter((e) => !selection.includes(e.id)) })));
+    setSelection([]);
     setEditing(null);
   }
 
+  function pasteElements(list: SlideElement[]) {
+    const copies = list.map((el) => {
+      const copy = cloneElement(el, 20, 20);
+      if (copy.kind === "shape") delete copy.placeholder;
+      return copy;
+    });
+    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: [...s.elements, ...copies] })));
+    setSelection(copies.map((c) => c.id));
+    return copies;
+  }
+
   function duplicateSelected() {
-    if (!selectedEl) return;
-    const copy = cloneElement(selectedEl, 20, 20);
-    if (copy.kind === "shape") delete copy.placeholder;
-    addElement(copy);
+    if (selectedEls.length) pasteElements(selectedEls);
   }
 
   function reorder(direction: "front" | "back" | "forward" | "backward") {
-    if (!selected) return;
+    if (!selection.length) return;
     commit(
       withSlide(deckRef.current, current, (s) => {
+        const moving = s.elements.filter((e) => selection.includes(e.id));
+        const rest = s.elements.filter((e) => !selection.includes(e.id));
+        if (direction === "front") return { ...s, elements: [...rest, ...moving] };
+        if (direction === "back") return { ...s, elements: [...moving, ...rest] };
+        // Un paso: se mueve cada uno respecto al vecino.
         const list = [...s.elements];
-        const i = list.findIndex((e) => e.id === selected);
-        const [el] = list.splice(i, 1);
-        const to = direction === "front" ? list.length : direction === "back" ? 0 : direction === "forward" ? Math.min(list.length, i + 1) : Math.max(0, i - 1);
-        list.splice(to, 0, el);
+        const order = direction === "forward" ? [...list.keys()].reverse() : [...list.keys()];
+        for (const i of order) {
+          if (!selection.includes(list[i].id)) continue;
+          const j = direction === "forward" ? i + 1 : i - 1;
+          if (j < 0 || j >= list.length || selection.includes(list[j].id)) continue;
+          [list[i], list[j]] = [list[j], list[i]];
+        }
         return { ...s, elements: list };
       }),
     );
   }
 
   function nudge(dx: number, dy: number) {
-    if (!selected) return;
-    updateElement(selected, (e) => ({ ...e, x: e.x + dx, y: e.y + dy }));
+    if (!selection.length) return;
+    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: s.elements.map((e) => (selection.includes(e.id) ? { ...e, x: e.x + dx, y: e.y + dy } : e)) })));
   }
 
-  // ───────────── arrastrar y cambiar tamaño ─────────────
+  /** Alinear: un elemento respecto a la diapositiva; varios, entre ellos. */
+  function align(kind: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") {
+    if (!selectedEls.length) return;
+    const d = deckRef.current;
+    const b = selectedEls.length === 1 ? { x: 0, y: 0, w: d.width, h: d.height } : bounds(selectedEls);
+    commit(
+      withSlide(d, current, (s) => ({
+        ...s,
+        elements: s.elements.map((e) => {
+          if (!selection.includes(e.id)) return e;
+          if (kind === "left") return { ...e, x: b.x };
+          if (kind === "hcenter") return { ...e, x: b.x + b.w / 2 - e.w / 2 };
+          if (kind === "right") return { ...e, x: b.x + b.w - e.w };
+          if (kind === "top") return { ...e, y: b.y };
+          if (kind === "vcenter") return { ...e, y: b.y + b.h / 2 - e.h / 2 };
+          return { ...e, y: b.y + b.h - e.h };
+        }),
+      })),
+    );
+  }
+
+  /** Repartir: el mismo espacio entre tres o más elementos. */
+  function distribute(axis: "x" | "y") {
+    if (selectedEls.length < 3) {
+      setStatus({ text: "Selecciona tres o más elementos para repartirlos" });
+      return;
+    }
+    const size = axis === "x" ? "w" : "h";
+    const sorted = [...selectedEls].sort((a, b) => a[axis] - b[axis]);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const used = sorted.reduce((n, e) => n + e[size], 0);
+    const gap = (last[axis] + last[size] - first[axis] - used) / (sorted.length - 1);
+    const positions = new Map<string, number>();
+    let pos = first[axis];
+    for (const e of sorted) {
+      positions.set(e.id, pos);
+      pos += e[size] + gap;
+    }
+    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: s.elements.map((e) => (positions.has(e.id) ? { ...e, [axis]: positions.get(e.id)! } : e)) })));
+  }
+
+  // ───────────── arrastrar, cambiar tamaño, girar y seleccionar con un recuadro ─────────────
+
+  function slidePoint(clientX: number, clientY: number) {
+    const rect = stage.current?.querySelector(".present-main-slide .slide")?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale };
+  }
 
   function onSlidePointerDown(e: ReactPointerEvent) {
     if (e.button !== 0) return;
@@ -307,19 +404,43 @@ export default function PresentEditor(props: Props) {
     const handle = target.closest("[data-handle]") as HTMLElement | null;
     const elNode = target.closest("[data-el]") as HTMLElement | null;
     const id = handle ? selected : (elNode?.dataset.el ?? null);
-    // Dentro del cuadro que se está escribiendo, el clic es para el texto.
+    // Dentro del cuadro (o la celda) que se está escribiendo, el clic es para el texto.
     if (editing && id === editing && !handle) return;
+    if (editingCell && id === editingCell.id && target.closest(".slide-cell-editing")) return;
     if (editing) setEditing(null);
+    if (editingCell) setEditingCell(null);
+    const snapshot = deckRef.current;
     if (!id) {
-      setSelected(null);
+      // Recuadro de selección sobre la diapositiva vacía.
+      const p = slidePoint(e.clientX, e.clientY);
+      const base = e.shiftKey ? selection : [];
+      if (!e.shiftKey) setSelection([]);
+      setCell(null);
+      drag.current = { kind: "marquee", startX: e.clientX, startY: e.clientY, x0: p.x, y0: p.y, base, snapshot, moved: false };
       return;
     }
     const el = slide.elements.find((x) => x.id === id);
     if (!el) return;
     e.preventDefault();
-    setSelected(id);
-    const start = { startX: e.clientX, startY: e.clientY, orig: structuredClone(el), snapshot: deckRef.current, moved: false };
-    drag.current = handle ? { kind: "resize", id, handle: handle.dataset.handle!, ...start } : { kind: "move", id, ...start };
+    const cellNode = target.closest("[data-cell]") as HTMLElement | null;
+    if (el.kind === "table" && cellNode) {
+      const [r, c] = cellNode.dataset.cell!.split(",").map(Number);
+      setCell({ r, c });
+    } else setCell(null);
+    if (e.shiftKey && !handle) {
+      setSelection(selection.includes(id) ? selection.filter((x) => x !== id) : [...selection, id]);
+      return;
+    }
+    const ids = selection.includes(id) ? selection : [id];
+    if (!selection.includes(id)) setSelection([id]);
+    if (handle?.dataset.handle === "rot") {
+      drag.current = { kind: "rotate", id, startX: e.clientX, startY: e.clientY, orig: structuredClone(el), snapshot, moved: false };
+    } else if (handle) {
+      drag.current = { kind: "resize", id, handle: handle.dataset.handle!, startX: e.clientX, startY: e.clientY, orig: structuredClone(el), snapshot, moved: false };
+    } else {
+      const origs = slide.elements.filter((x) => ids.includes(x.id)).map((x) => structuredClone(x));
+      drag.current = { kind: "move", ids, startX: e.clientX, startY: e.clientY, origs, snapshot, moved: false };
+    }
   }
 
   useEffect(() => {
@@ -330,16 +451,23 @@ export default function PresentEditor(props: Props) {
       const dy = (e.clientY - g.startY) / scale;
       if (!g.moved && Math.abs(dx) * scale < 3 && Math.abs(dy) * scale < 3) return;
       g.moved = true;
-      const o = g.orig;
-      let next: SlideElement;
       const lines = { x: [] as number[], y: [] as number[] };
+      const d = deckRef.current;
+      if (g.kind === "marquee") {
+        const p = slidePoint(e.clientX, e.clientY);
+        const box = { x: Math.min(g.x0, p.x), y: Math.min(g.y0, p.y), w: Math.abs(p.x - g.x0), h: Math.abs(p.y - g.y0) };
+        setMarquee(box);
+        const inside = slide.elements.filter((el) => el.x < box.x + box.w && el.x + el.w > box.x && el.y < box.y + box.h && el.y + Math.max(el.h, 1) > box.y).map((el) => el.id);
+        setSelection([...new Set([...g.base, ...inside])]);
+        return;
+      }
       if (g.kind === "move") {
-        let x = o.x + dx;
-        let y = o.y + dy;
+        const b = bounds(g.origs);
+        let x = b.x + dx;
+        let y = b.y + dy;
         if (!e.altKey) {
           // Se pega a los bordes y al centro de la diapositiva y de los demás elementos.
-          const d = deckRef.current;
-          const others = slide.elements.filter((x) => x.id !== g.id);
+          const others = slide.elements.filter((t) => !g.ids.includes(t.id));
           const xs = [0, d.width / 2, d.width, ...others.flatMap((t) => [t.x, t.x + t.w / 2, t.x + t.w])];
           const ys = [0, d.height / 2, d.height, ...others.flatMap((t) => [t.y, t.y + t.h / 2, t.y + t.h])];
           const snap = (pos: number, size: number, targets: number[], out: number[]) => {
@@ -353,10 +481,28 @@ export default function PresentEditor(props: Props) {
             if (best) out.push(best.line);
             return best ? pos + best.delta : pos;
           };
-          x = snap(x, o.w, xs, lines.x);
-          y = snap(y, o.h, ys, lines.y);
+          x = snap(x, b.w, xs, lines.x);
+          y = snap(y, b.h, ys, lines.y);
         }
-        next = { ...o, x, y };
+        const mx = x - b.x;
+        const my = y - b.y;
+        const moved = new Map(g.origs.map((o) => [o.id, { ...o, x: o.x + mx, y: o.y + my }]));
+        setGuides(lines);
+        replace(withSlide(d, current, (s) => ({ ...s, elements: s.elements.map((el) => moved.get(el.id) ?? el) })));
+        return;
+      }
+      const o = g.orig;
+      let next: SlideElement;
+      if (g.kind === "rotate") {
+        const p = slidePoint(e.clientX, e.clientY);
+        const cx = o.x + o.w / 2;
+        const cy = o.y + o.h / 2;
+        let angle = (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI + 90;
+        // Con ⇧ gira de 15 en 15 grados; cerca de 0, 90, 180 y 270 se pega.
+        angle = e.shiftKey ? Math.round(angle / 15) * 15 : angle;
+        angle = ((angle % 360) + 360) % 360;
+        for (const right of [0, 90, 180, 270, 360]) if (Math.abs(angle - right) < 3) angle = right % 360;
+        next = { ...o, rot: angle ? Math.round(angle * 10) / 10 : undefined };
       } else {
         let { x, y, w, h } = o;
         const hd = g.handle;
@@ -380,19 +526,25 @@ export default function PresentEditor(props: Props) {
           }
         }
         if (!line) {
-          if (w < 8) (x = w < 0 ? x + w - 8 + (8 - w) : x), (w = 8);
-          if (h < 8) h = 8;
+          if (w < 8) (x = hd.includes("w") ? o.x + o.w - 8 : x), (w = 8);
+          if (h < 8) (y = hd.includes("n") ? o.y + o.h - 8 : y), (h = 8);
         }
         next = { ...o, x, y, w, h };
+        // Una tabla reparte el cambio entre sus columnas y filas.
+        if (o.kind === "table") {
+          const t = next as typeof o;
+          next = { ...t, cols: o.cols.map((c) => (c * w) / o.w), rows: o.rows.map((r) => ({ ...r, h: (r.h * h) / o.h })) };
+        }
       }
       setGuides(lines);
-      replace(withElement(deckRef.current, g.id, () => next));
+      replace(withElement(d, g.id, () => next));
     }
     function onUp() {
       const g = drag.current;
       drag.current = null;
       setGuides({ x: [], y: [] });
-      if (g?.moved) commit(deckRef.current, g.snapshot);
+      setMarquee(null);
+      if (g?.moved && g.kind !== "marquee") commit(deckRef.current, g.snapshot);
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -400,11 +552,19 @@ export default function PresentEditor(props: Props) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [scale, slide, commit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scale, slide, commit, current]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onSlideDoubleClick(e: React.MouseEvent) {
     const elNode = (e.target as HTMLElement).closest("[data-el]") as HTMLElement | null;
     const el = slide.elements.find((x) => x.id === elNode?.dataset.el);
+    const cellNode = (e.target as HTMLElement).closest("[data-cell]") as HTMLElement | null;
+    if (el?.kind === "table" && cellNode) {
+      const [r, c] = cellNode.dataset.cell!.split(",").map(Number);
+      setSelected(el.id);
+      setCell({ r, c });
+      setEditingCell({ id: el.id, r, c });
+      return;
+    }
     if (!el || el.kind !== "shape" || isLine(el.geom)) return;
     if (!el.text) updateElement(el.id, (x) => ({ ...x, text: { paras: [{ runs: [], align: "center" }], anchor: "middle", defaultSize: 18 } }) as ShapeElement);
     setSelected(el.id);
@@ -414,17 +574,24 @@ export default function PresentEditor(props: Props) {
   // ───────────── texto ─────────────
 
   const editingEl = (editing ? slide.elements.find((e) => e.id === editing) : null) as ShapeElement | null;
+  const editingTable = (editingCell ? slide.elements.find((e) => e.id === editingCell.id) : null) as TableElement | null;
   const editSnapshot = useRef<Deck | null>(null);
+  const editKey = editing ?? (editingCell ? `${editingCell.id}:${editingCell.r}:${editingCell.c}` : null);
 
-  // Toda una sesión de escritura en un cuadro se deshace de una sola vez.
+  // Toda una sesión de escritura en un cuadro (o una celda) se deshace de una sola vez.
   useEffect(() => {
-    if (editing) editSnapshot.current = deckRef.current;
-    else if (editSnapshot.current) {
+    if (editSnapshot.current) {
       const before = editSnapshot.current;
       editSnapshot.current = null;
       if (before !== deckRef.current) commit(deckRef.current, before);
     }
-  }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (editKey) editSnapshot.current = deckRef.current;
+  }, [editKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onCellChange(id: string, r: number, c: number, text: TextBody) {
+    replace(withElement(deckRef.current, id, (e) => updateCell(e as TableElement, r, c, (x) => ({ ...x, text }))));
+    markDirty();
+  }
 
   function onTextChange(id: string, text: TextBody) {
     replace(withElement(deckRef.current, id, (e) => ({ ...e, text }) as SlideElement));
@@ -432,14 +599,142 @@ export default function PresentEditor(props: Props) {
   }
 
   /** Formato de letra: en el texto seleccionado (si se escribe) o en todo el cuadro. */
+  function formatText(fn: (t: TextBody) => TextBody) {
+    if (selectedEl?.kind === "shape" && selectedEl.text) updateElement(selectedEl.id, (e) => ({ ...e, text: fn((e as ShapeElement).text!) }) as SlideElement);
+    else if (selectedEl?.kind === "table") {
+      // Sin celda elegida, el formato va a toda la tabla.
+      updateElement(selectedEl.id, (e) => {
+        const t = e as TableElement;
+        return { ...t, rows: t.rows.map((row, ri) => ({ ...row, cells: row.cells.map((x, ci) => (!cell || (cell.r === ri && cell.c === ci) ? { ...x, text: fn(x.text) } : x)) })) };
+      });
+    }
+  }
+
   function formatRuns(fn: (r: Run) => Run, tiptap: (ed: Editor) => void) {
-    if (editing && textEditor) return tiptap(textEditor);
-    if (selectedEl?.kind === "shape" && selectedEl.text) updateElement(selectedEl.id, (e) => ({ ...e, text: mapRuns((e as ShapeElement).text!, fn) }) as SlideElement);
+    if ((editing || editingCell) && textEditor) return tiptap(textEditor);
+    formatText((t) => mapRuns(t, fn));
   }
 
   function formatParas(fn: (p: Para) => Para, tiptap: (ed: Editor) => void) {
-    if (editing && textEditor) return tiptap(textEditor);
-    if (selectedEl?.kind === "shape" && selectedEl.text) updateElement(selectedEl.id, (e) => ({ ...e, text: mapParas((e as ShapeElement).text!, fn) }) as SlideElement);
+    if ((editing || editingCell) && textEditor) return tiptap(textEditor);
+    formatText((t) => mapParas(t, fn));
+  }
+
+  // ───────────── tablas ─────────────
+
+  function insertTable(rows: number, cols: number) {
+    const d = deckRef.current;
+    const w = Math.min(d.width * 0.8, cols * 180);
+    const rowH = 44;
+    const emptyCell = () => ({ text: { paras: [{ runs: [] }], defaultSize: 18 } as TextBody, fill: null });
+    const table: TableElement = {
+      id: uid(),
+      kind: "table",
+      x: (d.width - w) / 2,
+      y: Math.max(40, (d.height - rows * rowH) / 2),
+      w,
+      h: rows * rowH,
+      cols: Array.from({ length: cols }, () => w / cols),
+      rows: Array.from({ length: rows }, (_, r) => ({ h: rowH, cells: Array.from({ length: cols }, () => ({ ...emptyCell(), fill: r === 0 ? d.theme.colors.accent1 : r % 2 ? lighten(d.theme.colors.accent1) : null })) })),
+      border: "#BFBFBF",
+      header: true,
+    };
+    addElement(table);
+    setCell({ r: 0, c: 0 });
+  }
+
+  function tableOp(op: "rowAbove" | "rowBelow" | "colLeft" | "colRight" | "deleteRow" | "deleteCol" | "toggleHeader") {
+    if (selectedEl?.kind !== "table") return;
+    const t = selectedEl;
+    if (op !== "toggleHeader" && t.rows.some((row) => row.cells.some((c) => c.merged || (c.span ?? 1) > 1 || (c.rowSpan ?? 1) > 1))) {
+      setStatus({ text: "Esta tabla tiene celdas combinadas: todavía no se pueden agregar ni quitar filas o columnas en ella" });
+      return;
+    }
+    const at = cell ?? { r: t.rows.length - 1, c: t.cols.length - 1 };
+    const blank = (fill: string | null = null) => ({ text: { paras: [{ runs: [] }], defaultSize: t.rows[0]?.cells[0]?.text.defaultSize ?? 18 } as TextBody, fill });
+    updateElement(t.id, (e) => {
+      const x = structuredClone(e as TableElement);
+      if (op === "toggleHeader") return { ...x, header: !x.header };
+      if (op === "rowAbove" || op === "rowBelow") {
+        const i = op === "rowAbove" ? at.r : at.r + 1;
+        const h = x.rows[at.r]?.h ?? 40;
+        x.rows.splice(i, 0, { h, cells: x.cols.map((_, ci) => blank(x.rows[at.r]?.cells[ci]?.fill && at.r !== 0 ? x.rows[at.r].cells[ci].fill : null)) });
+        x.h += h;
+      } else if (op === "colLeft" || op === "colRight") {
+        const i = op === "colLeft" ? at.c : at.c + 1;
+        const w = x.cols[at.c] ?? 120;
+        x.cols.splice(i, 0, w);
+        x.rows.forEach((row) => row.cells.splice(i, 0, blank(row.cells[at.c]?.fill ?? null)));
+        x.w += w;
+      } else if (op === "deleteRow" && x.rows.length > 1) {
+        x.h -= x.rows[at.r].h;
+        x.rows.splice(at.r, 1);
+      } else if (op === "deleteCol" && x.cols.length > 1) {
+        x.w -= x.cols[at.c];
+        x.cols.splice(at.c, 1);
+        x.rows.forEach((row) => row.cells.splice(at.c, 1));
+      }
+      return x;
+    });
+    if (op === "deleteRow" || op === "deleteCol") setCell(null);
+  }
+
+  function cellFill(color: string) {
+    if (selectedEl?.kind !== "table") return;
+    updateElement(selectedEl.id, (e) => {
+      const t = e as TableElement;
+      if (!cell) return { ...t, rows: t.rows.map((row) => ({ ...row, cells: row.cells.map((c) => ({ ...c, fill: color || null })) })) };
+      return updateCell(t, cell.r, cell.c, (c) => ({ ...c, fill: color || null }));
+    });
+  }
+
+  // ───────────── diseño, fondo y tamaño de la diapositiva ─────────────
+
+  /** Cambia el diseño: los cuadros del nuevo diseño toman el texto de los que había con el mismo papel. */
+  function applyLayout(layout: LayoutId) {
+    const d = deckRef.current;
+    commit(
+      withSlide(d, current, (s) => {
+        const fresh = layoutElements(layout, d.width, d.height);
+        const old = s.elements.filter((e): e is ShapeElement => e.kind === "shape" && Boolean(e.placeholder));
+        const used = new Set<string>();
+        for (const box of fresh) {
+          const match = old.find((o) => !used.has(o.id) && o.role === box.role);
+          if (match) {
+            used.add(match.id);
+            if (!isEmptyText(match.text)) box.text = { ...match.text!, anchor: box.text?.anchor, defaultSize: box.text?.defaultSize };
+          }
+        }
+        // Lo que no tenía lugar en el diseño nuevo se queda (si tiene texto) como cuadro normal.
+        const leftovers = s.elements.filter((e) => !(e.kind === "shape" && e.placeholder && (used.has(e.id) || isEmptyText(e.text))));
+        const kept = leftovers.map((e) => (e.kind === "shape" && e.placeholder ? { ...e, placeholder: undefined, role: undefined } : e));
+        return { ...s, layout, elements: [...fresh, ...kept] };
+      }),
+    );
+    setSelection([]);
+  }
+
+  async function backgroundImage() {
+    const file = await openDialog({ multiple: false, filters: [{ name: "Imágenes", extensions: ["png", "jpg", "jpeg", "gif"] }] });
+    if (!file) return;
+    try {
+      const src = await imageDataUrl(file);
+      commit(withSlide(deckRef.current, current, (s) => ({ ...s, backgroundImage: src })));
+    } catch (e) {
+      setStatus({ text: `No se pudo usar la imagen: ${e}`, error: true });
+    }
+  }
+
+  function setSlideSize(width: number, height: number) {
+    const d = deckRef.current;
+    if (d.width === width && d.height === height) return;
+    const kx = width / d.width;
+    const ky = height / d.height;
+    const scaleEl = (e: SlideElement): SlideElement => {
+      const moved = { ...e, x: e.x * kx, y: e.y * ky, w: e.w * kx, h: e.h * ky };
+      return e.kind === "table" ? { ...moved, cols: e.cols.map((c) => c * kx), rows: e.rows.map((r) => ({ ...r, h: r.h * ky })) } as TableElement : moved;
+    };
+    commit({ ...d, width, height, slides: d.slides.map((s) => ({ ...s, elements: s.elements.map(scaleEl) })) });
   }
 
   // ───────────── guardar ─────────────
@@ -486,8 +781,14 @@ export default function PresentEditor(props: Props) {
 
   // ───────────── atajos ─────────────
 
-  const actions = useRef({ saveDocument, undo, redo, deleteSelected, duplicateSelected, nudge, goTo, addSlide, current, selected, editing, selectedEl, scale });
-  actions.current = { saveDocument, undo, redo, deleteSelected, duplicateSelected, nudge, goTo, addSlide, current, selected, editing, selectedEl, scale };
+  const actions = useRef({ saveDocument, undo, redo, deleteSelected, duplicateSelected, nudge, goTo, addSlide, pasteElements, current, selected: selection.length > 0, editing, editingCell, selectedEl, selectedEls, scale });
+  actions.current = { saveDocument, undo, redo, deleteSelected, duplicateSelected, nudge, goTo, addSlide, pasteElements, current, selected: selection.length > 0, editing, editingCell, selectedEl, selectedEls, scale };
+  useEffect(() => {
+    if (textEditor && pendingText.current) {
+      textEditor.chain().focus("end").insertContent(pendingText.current).run();
+      pendingText.current = "";
+    }
+  }, [textEditor]);
   useEffect(() => {
     const stop = onCommand((command) => {
       const a = actions.current;
@@ -514,14 +815,16 @@ export default function PresentEditor(props: Props) {
         else if (key === "y") (e.preventDefault(), a.redo());
         else if (key === "d" && a.selected) (e.preventDefault(), a.duplicateSelected());
         else if (key === "m") (e.preventDefault(), a.addSlide());
-        else if (key === "c" && a.selectedEl) clipboard.current = structuredClone(a.selectedEl);
-        else if (key === "x" && a.selectedEl) (clipboard.current = structuredClone(a.selectedEl)), a.deleteSelected();
-        else if (key === "v" && clipboard.current) {
+        else if (key === "c" && a.selectedEls.length) clipboard.current = structuredClone(a.selectedEls);
+        else if (key === "x" && a.selectedEls.length) (clipboard.current = structuredClone(a.selectedEls)), a.deleteSelected();
+        else if (key === "v" && clipboard.current.length) {
           e.preventDefault();
-          const copy = cloneElement(clipboard.current, 20, 20);
-          if (copy.kind === "shape") delete copy.placeholder;
-          clipboard.current = copy;
-          actions.current && addElementRef.current(copy);
+          // Cada vez que se pega, la copia queda un poco más abajo.
+          clipboard.current = a.pasteElements(clipboard.current);
+        }
+        else if (key === "a") {
+          e.preventDefault();
+          setSelection(slideRef.current.elements.map((x) => x.id));
         }
         return;
       }
@@ -529,7 +832,14 @@ export default function PresentEditor(props: Props) {
         if (e.key === "Escape" && a.editing) (e.preventDefault(), setEditing(null));
         return;
       }
-      if (e.key === "Escape") setSelected(null);
+      if ((a.editing || a.editingCell) && !textEditorRef.current && e.key.length === 1) {
+        e.preventDefault();
+        pendingText.current += e.key;
+        return;
+      }
+      // Mientras se abre el editor de texto, las demás teclas no tocan la diapositiva.
+      if (a.editing || a.editingCell) return;
+      if (e.key === "Escape") setSelection([]);
       else if ((e.key === "Delete" || e.key === "Backspace") && a.selected) (e.preventDefault(), a.deleteSelected());
       else if (e.key.startsWith("Arrow") && a.selected) {
         e.preventDefault();
@@ -545,8 +855,8 @@ export default function PresentEditor(props: Props) {
       window.removeEventListener("keydown", onKey);
     };
   }, []);
-  const addElementRef = useRef(addElement);
-  addElementRef.current = addElement;
+  const slideRef = useRef(slide);
+  slideRef.current = slide;
 
   // ───────────── menú de las miniaturas ─────────────
 
@@ -595,7 +905,9 @@ export default function PresentEditor(props: Props) {
         deck={deck}
         slide={slide}
         selected={selectedEl}
-        editing={editing ? textEditor : null}
+        count={selection.length}
+        cell={cell}
+        editing={editing || editingCell ? textEditor : null}
         onAddSlide={addSlide}
         onTheme={(theme) => commit({ ...deckRef.current, theme })}
         onBackground={(color) => commit(withSlide(deckRef.current, current, (s) => ({ ...s, background: color || null, backgroundImage: color ? null : s.backgroundImage })))}
@@ -609,6 +921,15 @@ export default function PresentEditor(props: Props) {
         onReorder={reorder}
         onDuplicate={duplicateSelected}
         onDelete={deleteSelected}
+        onAlign={align}
+        onDistribute={distribute}
+        onTable={insertTable}
+        onTableOp={tableOp}
+        onCellFill={cellFill}
+        onLayout={applyLayout}
+        onBackgroundImage={backgroundImage}
+        onClearBackgroundImage={() => commit(withSlide(deckRef.current, current, (s) => ({ ...s, backgroundImage: null })))}
+        onSize={setSlideSize}
       />
 
       {notice && (
@@ -655,7 +976,7 @@ export default function PresentEditor(props: Props) {
         </nav>
 
         <div className="present-center">
-          <div className="present-stage" ref={stage} onPointerDown={(e) => e.target === e.currentTarget && (setSelected(null), setEditing(null))}>
+          <div className="present-stage" ref={stage} onPointerDown={(e) => e.target === e.currentTarget && (setSelection([]), setEditing(null), setEditingCell(null))}>
             <div className="present-main-slide" onPointerDown={onSlidePointerDown} onDoubleClick={onSlideDoubleClick}>
               <SlideView
                 slide={slide}
@@ -664,9 +985,26 @@ export default function PresentEditor(props: Props) {
                 hints
                 interactive
                 editingId={editing}
-                editingSlot={editingEl?.text ? <BoxEditor key={editingEl.id} el={editingEl} deck={deck} onChange={(t) => onTextChange(editingEl.id, t)} onEditor={setTextEditor} /> : null}
+                activeCell={selectedEl?.kind === "table" && cell ? { id: selectedEl.id, ...cell } : null}
+                editingCell={editingCell}
+                editingSlot={
+                  editingEl?.text ? (
+                    <TextBox key={editingEl.id} text={editingEl.text} hint={editingEl.role ? placeholderHint(editingEl.role) : "Escribe aquí"} onChange={(t) => onTextChange(editingEl.id, t)} onEditor={setTextEditor} />
+                  ) : editingCell && editingTable ? (
+                    <TextBox
+                      key={editKey!}
+                      text={editingTable.rows[editingCell.r].cells[editingCell.c].text}
+                      hint=""
+                      onChange={(t) => onCellChange(editingCell.id, editingCell.r, editingCell.c, t)}
+                      onEditor={setTextEditor}
+                    />
+                  ) : null
+                }
               >
-                {selectedEl && <SelectionBox el={selectedEl} scale={scale} editing={editing === selectedEl.id} />}
+                {selectedEls.map((el) => (
+                  <SelectionBox key={el.id} el={el} scale={scale} editing={editing === el.id || editingCell?.id === el.id} handles={selectedEls.length === 1} />
+                ))}
+                {marquee && <div className="present-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h, borderWidth: 1 / scale }} />}
                 {guides.x.map((x, i) => (
                   <div key={`x${i}`} className="present-guide vertical" style={{ left: x, width: 1 / scale }} />
                 ))}
@@ -714,19 +1052,21 @@ export default function PresentEditor(props: Props) {
 }
 
 /** Marco de selección con sus agarraderas (de tamaño fijo en la pantalla). */
-function SelectionBox({ el, scale, editing }: { el: SlideElement; scale: number; editing: boolean }) {
+function SelectionBox({ el, scale, editing, handles: withHandles }: { el: SlideElement; scale: number; editing: boolean; handles: boolean }) {
   const size = 9 / scale;
   const line = el.kind === "shape" && isLine(el.geom);
-  const handles = line ? ["nw", "se"] : HANDLES;
-  const pos = (h: string) => ({
+  const handles = !withHandles ? [] : line ? ["nw", "se"] : [...HANDLES, "rot"];
+  const pos = (h: string) =>
+    h === "rot" ? { left: el.w / 2 - size / 2, top: -size / 2 - 26 / scale } : {
     left: h.includes("w") ? -size / 2 : h.includes("e") ? el.w - size / 2 : el.w / 2 - size / 2,
     top: h.includes("n") ? -size / 2 : h.includes("s") ? el.h - size / 2 : el.h / 2 - size / 2,
-  });
+  };
   return (
     <div
       className={`present-selection${editing ? " editing" : ""}`}
       style={{ left: el.x, top: el.y, width: Math.max(el.w, 1), height: Math.max(el.h, 1), borderWidth: 1.5 / scale, transform: el.rot ? `rotate(${el.rot}deg)` : undefined }}
     >
+      {!editing && withHandles && !line && <span className="present-rot-stem" style={{ left: el.w / 2, top: -26 / scale, height: 26 / scale - size / 2, width: 1.5 / scale }} />}
       {!editing &&
         handles.map((h) => (
           <span key={h} className={`present-handle h-${h}`} data-handle={h} style={{ ...pos(h), width: size, height: size, borderWidth: 1.5 / scale }} />
@@ -735,10 +1075,9 @@ function SelectionBox({ el, scale, editing }: { el: SlideElement; scale: number;
   );
 }
 
-/** Editor de texto de un cuadro (mientras se escribe en él). */
-function BoxEditor({ el, onChange, onEditor }: { el: ShapeElement; deck: Deck; onChange: (t: TextBody) => void; onEditor: (e: Editor | null) => void }) {
-  const base = useRef(el.text!);
-  const hint = el.role ? placeholderHint(el.role) : "Escribe aquí";
+/** Editor de texto de un cuadro o una celda (mientras se escribe en él). */
+function TextBox({ text, hint, onChange, onEditor }: { text: TextBody; hint: string; onChange: (t: TextBody) => void; onEditor: (e: Editor | null) => void }) {
+  const base = useRef(text);
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: false, bulletList: false, orderedList: false, listItem: false, blockquote: false, codeBlock: false, horizontalRule: false, code: false, link: { openOnClick: false } }),
@@ -750,7 +1089,7 @@ function BoxEditor({ el, onChange, onEditor }: { el: ShapeElement; deck: Deck; o
       SlideParagraph,
       Placeholder.configure({ placeholder: hint }),
     ],
-    content: toEditor(el.text!),
+    content: toEditor(text),
     autofocus: "end",
     editorProps: { attributes: { class: "slide-editor", spellcheck: "true", lang: "es" } },
     onUpdate: ({ editor: e }) => onChange(fromEditor(e.getJSON(), base.current)),
@@ -768,8 +1107,20 @@ type BarProps = {
   deck: Deck;
   slide: Slide;
   selected: SlideElement | null;
+  /** Cuántos elementos hay seleccionados. */
+  count: number;
+  cell: { r: number; c: number } | null;
   editing: Editor | null;
   onAddSlide: (layout?: LayoutId) => void;
+  onAlign: (kind: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") => void;
+  onDistribute: (axis: "x" | "y") => void;
+  onTable: (rows: number, cols: number) => void;
+  onTableOp: (op: "rowAbove" | "rowBelow" | "colLeft" | "colRight" | "deleteRow" | "deleteCol" | "toggleHeader") => void;
+  onCellFill: (color: string) => void;
+  onLayout: (layout: LayoutId) => void;
+  onBackgroundImage: () => void;
+  onClearBackgroundImage: () => void;
+  onSize: (width: number, height: number) => void;
   onTheme: (theme: Deck["theme"]) => void;
   onBackground: (color: string) => void;
   onTextBox: () => void;
@@ -787,7 +1138,8 @@ type BarProps = {
 function PresentBar(props: BarProps) {
   const { deck, selected, editing } = props;
   const shape = selected?.kind === "shape" ? selected : null;
-  const textTarget = editing || (shape && !isLine(shape.geom) && shape.text) ? true : false;
+  const table = selected?.kind === "table" ? selected : null;
+  const textTarget = editing || (shape && !isLine(shape.geom) && shape.text) || table ? true : false;
   const defaults = textDefaults(shape, deck);
 
   // Estado del formato: del texto seleccionado (si se escribe) o de todo el cuadro.
@@ -808,7 +1160,7 @@ function PresentBar(props: BarProps) {
           }
         : null,
   });
-  const text = shape?.text;
+  const text = shape?.text ?? (table ? table.rows[props.cell?.r ?? 0]?.cells[props.cell?.c ?? 0]?.text : undefined);
   const firstRun = text?.paras.flatMap((p) => p.runs).find((r) => r.text);
   const state = live ?? {
     bold: allRuns(text, (r) => Boolean(r.bold)),
@@ -891,6 +1243,47 @@ function PresentBar(props: BarProps) {
           </svg>
         }
       />
+      <Popover
+        button={(toggleOpen, open) => (
+          <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Diapositiva: diseño, imagen de fondo y tamaño">
+            Diapositiva ▾
+          </button>
+        )}
+      >
+        {(close) => (
+          <div className="present-slide-menu">
+            <p className="present-menu-title">Cambiar el diseño</p>
+            <div className="present-layouts">
+              {LAYOUTS.map((l) => (
+                <button key={l.id} type="button" className={props.slide.layout === l.id ? "current" : ""} onClick={() => (props.onLayout(l.id), close())}>
+                  <LayoutPreview id={l.id} />
+                  <span>{l.name}</span>
+                </button>
+              ))}
+            </div>
+            <p className="present-menu-title">Fondo</p>
+            <div className="present-menu-row">
+              <button type="button" className="btn" onClick={() => (props.onBackgroundImage(), close())}>
+                Imagen de fondo…
+              </button>
+              {props.slide.backgroundImage && (
+                <button type="button" className="btn" onClick={() => (props.onClearBackgroundImage(), close())}>
+                  Quitar imagen
+                </button>
+              )}
+            </div>
+            <p className="present-menu-title">Tamaño de las diapositivas</p>
+            <div className="present-menu-row">
+              <button type="button" className={`btn${deck.width / deck.height > 1.5 ? " btn-primary" : ""}`} onClick={() => (props.onSize(1280, 720), close())}>
+                Panorámica 16:9
+              </button>
+              <button type="button" className={`btn${deck.width / deck.height < 1.5 ? " btn-primary" : ""}`} onClick={() => (props.onSize(960, 720), close())}>
+                Estándar 4:3
+              </button>
+            </div>
+          </div>
+        )}
+      </Popover>
       <Separator />
       <ToolButton label="Cuadro de texto" onClick={props.onTextBox}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
@@ -927,6 +1320,18 @@ function PresentBar(props: BarProps) {
           <path d="M21 17l-5-5-9 8" />
         </svg>
       </ToolButton>
+      <Popover
+        button={(toggleOpen, open) => (
+          <ToolButton label="Tabla" pressed={open} onClick={toggleOpen}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <rect x="3" y="4" width="18" height="16" rx="1.5" />
+              <path d="M3 9h18M3 14h18M9 4v16M15 4v16" />
+            </svg>
+          </ToolButton>
+        )}
+      >
+        {(close) => <TablePicker onPick={(r, c) => (props.onTable(r, c), close())} />}
+      </Popover>
 
       {textTarget && (
         <>
@@ -1030,9 +1435,23 @@ function PresentBar(props: BarProps) {
         </>
       )}
 
-      {selected && !editing && (
+      {props.count > 0 && !editing && (
         <>
           <Separator />
+          {table && (
+            <ColorButton
+              label="Color de la celda"
+              current={text ? (table.rows[props.cell?.r ?? 0]?.cells[props.cell?.c ?? 0]?.fill ?? null) : null}
+              emptyLabel="Sin color"
+              onPick={props.onCellFill}
+              icon={
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <rect x="4" y="4" width="16" height="16" rx="1.5" />
+                  <path d="M4 12h16M12 4v16" />
+                </svg>
+              }
+            />
+          )}
           {shape && !isLine(shape.geom) && (
             <ColorButton
               label="Relleno"
@@ -1082,6 +1501,60 @@ function PresentBar(props: BarProps) {
             </>
           )}
           <Separator />
+          <Popover
+            button={(toggleOpen, open) => (
+              <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Alinear, repartir y ordenar">
+                Organizar ▾
+              </button>
+            )}
+          >
+            {(close) => (
+              <div className="present-arrange">
+                <p className="present-menu-title">{props.count > 1 ? "Alinear entre sí" : "Alinear en la diapositiva"}</p>
+                <div className="present-menu-grid">
+                  {(
+                    [
+                      ["left", "Izquierda", ["M4 3v18", "M8 7h10v4H8z", "M8 14h6v4H8z"]],
+                      ["hcenter", "Centro", ["M12 3v18", "M6 7h12v4H6z", "M8 14h8v4H8z"]],
+                      ["right", "Derecha", ["M20 3v18", "M6 7h10v4H6z", "M10 14h6v4h-6z"]],
+                      ["top", "Arriba", ["M3 4h18", "M7 8v10h4V8z", "M14 8v6h4V8z"]],
+                      ["vcenter", "Medio", ["M3 12h18", "M7 6v12h4V6z", "M14 8v8h4V8z"]],
+                      ["bottom", "Abajo", ["M3 20h18", "M7 6v10h4V6z", "M14 10v6h4v-6z"]],
+                    ] as const
+                  ).map(([kind, label, d]) => (
+                    <button key={kind} type="button" onClick={() => (props.onAlign(kind), close())}>
+                      <AlignIcon lines={[...d]} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="present-menu-title">Repartir (3 o más)</p>
+                <div className="present-menu-grid two">
+                  <button type="button" disabled={props.count < 3} onClick={() => (props.onDistribute("x"), close())}>
+                    Horizontalmente
+                  </button>
+                  <button type="button" disabled={props.count < 3} onClick={() => (props.onDistribute("y"), close())}>
+                    Verticalmente
+                  </button>
+                </div>
+                <p className="present-menu-title">Ordenar</p>
+                <div className="present-menu-grid two">
+                  <button type="button" onClick={() => (props.onReorder("front"), close())}>
+                    Traer al frente
+                  </button>
+                  <button type="button" onClick={() => (props.onReorder("forward"), close())}>
+                    Traer adelante
+                  </button>
+                  <button type="button" onClick={() => (props.onReorder("back"), close())}>
+                    Enviar al fondo
+                  </button>
+                  <button type="button" onClick={() => (props.onReorder("backward"), close())}>
+                    Enviar atrás
+                  </button>
+                </div>
+              </div>
+            )}
+          </Popover>
           <ToolButton label="Traer al frente" onClick={() => props.onReorder("front")}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
               <rect x="3" y="3" width="11" height="11" rx="1" strokeDasharray="2 2" />
@@ -1107,6 +1580,52 @@ function PresentBar(props: BarProps) {
           </ToolButton>
         </>
       )}
+      {table && props.count === 1 && (
+        <div className="present-table-tools" role="group" aria-label="Tabla">
+          <span className="write-table-label">Tabla:</span>
+          {(
+            [
+              ["rowAbove", "+ Fila arriba"],
+              ["rowBelow", "+ Fila abajo"],
+              ["colLeft", "+ Columna izq."],
+              ["colRight", "+ Columna der."],
+              ["deleteRow", "− Fila"],
+              ["deleteCol", "− Columna"],
+              ["toggleHeader", table.header ? "Sin encabezado" : "Con encabezado"],
+            ] as const
+          ).map(([op, label]) => (
+            <button key={op} type="button" className="btn write-table-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => props.onTableOp(op)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Cuadrícula para elegir cuántas filas y columnas tiene la tabla nueva. */
+function TablePicker({ onPick }: { onPick: (rows: number, cols: number) => void }) {
+  const [hover, setHover] = useState({ r: 2, c: 3 });
+  return (
+    <div className="present-table-picker">
+      <div className="present-table-grid" onMouseLeave={() => setHover({ r: 2, c: 3 })}>
+        {Array.from({ length: 8 }, (_, r) =>
+          Array.from({ length: 8 }, (_, c) => (
+            <button
+              key={`${r}-${c}`}
+              type="button"
+              className={r <= hover.r && c <= hover.c ? "on" : ""}
+              aria-label={`${r + 1} × ${c + 1}`}
+              onMouseEnter={() => setHover({ r, c })}
+              onClick={() => onPick(r + 1, c + 1)}
+            />
+          )),
+        )}
+      </div>
+      <span>
+        {hover.r + 1} filas × {hover.c + 1} columnas
+      </span>
     </div>
   );
 }
