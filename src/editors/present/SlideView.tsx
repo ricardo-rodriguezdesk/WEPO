@@ -1,0 +1,212 @@
+import type { CSSProperties, ReactNode } from "react";
+import type { Deck, ImageElement, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody } from "./model";
+import { isEmptyText, placeholderHint } from "./model";
+import { isLine, shapePath } from "./geometry";
+
+/** Interlineado "sencillo" de PowerPoint en CSS. */
+const LINE = 1.2;
+
+export type TextDefaults = { font: string; color: string; size: number };
+
+/** Letra, color y tamaño que usa un cuadro cuando su texto no dice otra cosa. */
+export function textDefaults(el: ShapeElement | null, deck: Deck): TextDefaults {
+  const title = el?.role === "title";
+  return {
+    font: title ? deck.theme.fonts.major : deck.theme.fonts.minor,
+    color: title ? deck.theme.title : deck.theme.text,
+    size: el?.text?.defaultSize ?? 18,
+  };
+}
+
+export function fontStack(font: string): string {
+  return `"${font}", "Helvetica Neue", Arial, sans-serif`;
+}
+
+export function runStyle(run: Run): CSSProperties {
+  const style: CSSProperties = {};
+  if (run.bold) style.fontWeight = 700;
+  if (run.italic) style.fontStyle = "italic";
+  const deco = [run.underline ? "underline" : "", run.strike ? "line-through" : ""].filter(Boolean).join(" ");
+  if (deco) style.textDecoration = deco;
+  if (run.size) style.fontSize = `${run.size}pt`;
+  if (run.color) style.color = run.color;
+  if (run.font) style.fontFamily = fontStack(run.font);
+  return style;
+}
+
+export function paraStyle(p: Para): CSSProperties {
+  const style: CSSProperties = {};
+  if (p.align && p.align !== "left") style.textAlign = p.align;
+  if (p.spaceBefore !== undefined) style.marginTop = `${p.spaceBefore}pt`;
+  if (p.spaceAfter !== undefined) style.marginBottom = `${p.spaceAfter}pt`;
+  if (p.lineSpacing) style.lineHeight = String(Math.round(p.lineSpacing * LINE * 1000) / 1000);
+  // El tamaño del párrafo (se nota en los vacíos); igual que en el editor.
+  if (p.endSize) (style as Record<string, string>)["--end-size"] = `${p.endSize}pt`;
+  return style;
+}
+
+/** Texto de un cuadro, con el mismo marcado que usa el editor (así se ve igual al editar). */
+export function TextContent({ text, hint }: { text: TextBody; hint?: string | null }) {
+  if (hint && isEmptyText(text)) {
+    const p = text.paras[0];
+    return (
+      <p className="slide-hint" style={paraStyle(p ?? { runs: [] })} data-bullet={p?.bullet ?? undefined}>
+        {hint}
+      </p>
+    );
+  }
+  return (
+    <>
+      {text.paras.map((p, i) => (
+        <p key={i} style={paraStyle(p)} data-bullet={p.bullet ?? undefined} data-level={p.level || undefined}>
+          {p.runs.some((r) => r.text) ? (
+            p.runs.map((r, j) => {
+              const parts = r.text.split("\n");
+              const content = parts.flatMap((part, k) => (k ? [<br key={`b${k}`} />, part] : [part]));
+              return r.link ? (
+                <a key={j} href={r.link} style={runStyle(r)}>
+                  {content}
+                </a>
+              ) : (
+                <span key={j} style={runStyle(r)}>
+                  {content}
+                </span>
+              );
+            })
+          ) : (
+            <br />
+          )}
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** Caja de texto con sus márgenes internos y su alineación vertical. */
+export function textBoxStyle(el: ShapeElement, deck: Deck): CSSProperties {
+  const d = textDefaults(el, deck);
+  const [l, t, r, b] = el.text?.insets ?? [9.6, 4.8, 9.6, 4.8];
+  return {
+    padding: `${t}px ${r}px ${b}px ${l}px`,
+    justifyContent: el.text?.anchor === "middle" ? "center" : el.text?.anchor === "bottom" ? "flex-end" : "flex-start",
+    fontFamily: fontStack(d.font),
+    color: d.color,
+    fontSize: `${d.size}pt`,
+    lineHeight: el.role === "title" ? 0.9 * LINE : LINE,
+  };
+}
+
+function ShapeView({ el, deck, hints, textSlot }: { el: ShapeElement; deck: Deck; hints: boolean; textSlot?: ReactNode }) {
+  const { d, open } = shapePath(el.geom, el.w, el.h);
+  const line = el.line;
+  const strokeWidth = line?.width ?? 0;
+  const dash = line?.dash === "dash" ? `${strokeWidth * 4} ${strokeWidth * 3}` : line?.dash === "dot" ? `${strokeWidth} ${strokeWidth * 2}` : undefined;
+  const hint = hints && el.role ? placeholderHint(el.role) : null;
+  const showBorder = hints && el.role && isEmptyText(el.text) && !el.fill && !el.line;
+  return (
+    <>
+      {(el.fill || line) && (
+        <svg className="slide-shape-svg" width={el.w} height={el.h} viewBox={`0 0 ${el.w} ${el.h}`} overflow="visible" aria-hidden>
+          <path
+            d={d}
+            fill={open ? "none" : (el.fill ?? "none")}
+            stroke={line?.color ?? "none"}
+            strokeWidth={strokeWidth}
+            strokeDasharray={dash}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          {isLine(el.geom) && el.geom === "straightConnector1" && line && (
+            <polygon points={`${el.w},${el.h} ${el.w - 10},${el.h - 4} ${el.w - 4},${el.h - 10}`} fill={line.color} />
+          )}
+        </svg>
+      )}
+      {showBorder && <div className="slide-placeholder-border" />}
+      {(el.text || textSlot) && (
+        <div className="slide-text" style={textBoxStyle(el, deck)}>
+          {textSlot ?? (el.text && <TextContent text={el.text} hint={hint} />)}
+        </div>
+      )}
+    </>
+  );
+}
+
+function TableView({ el, deck }: { el: TableElement; deck: Deck }) {
+  const border = el.border ? `1px solid ${el.border}` : "none";
+  return (
+    <table className="slide-table" style={{ width: el.w, fontFamily: fontStack(deck.theme.fonts.minor), color: deck.theme.text }}>
+      <colgroup>
+        {el.cols.map((w, i) => (
+          <col key={i} style={{ width: w }} />
+        ))}
+      </colgroup>
+      <tbody>
+        {el.rows.map((row, ri) => (
+          <tr key={ri} style={{ height: row.h }}>
+            {row.cells.map((cell, ci) =>
+              cell.merged ? null : (
+                <td key={ci} colSpan={cell.span} rowSpan={cell.rowSpan} style={{ background: cell.fill ?? undefined, border, fontSize: `${cell.text.defaultSize ?? 18}pt` }}>
+                  <TextContent text={cell.text} />
+                </td>
+              ),
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+export function elementBoxStyle(el: SlideElement): CSSProperties {
+  const transforms = [el.rot ? `rotate(${el.rot}deg)` : "", el.flipH ? "scaleX(-1)" : "", el.flipV ? "scaleY(-1)" : ""].filter(Boolean).join(" ");
+  return { left: el.x, top: el.y, width: Math.max(el.w, 1), height: Math.max(el.h, 1), transform: transforms || undefined };
+}
+
+type Props = {
+  slide: Slide;
+  deck: Deck;
+  /** Escala con la que se ve (1 = tamaño real de la diapositiva). */
+  scale: number;
+  /** Textos grises de ejemplo en los cuadros vacíos (solo al editar). */
+  hints?: boolean;
+  /** Cuadro cuyo texto se está editando: se dibuja con `editingSlot` en vez del texto. */
+  editingId?: string | null;
+  editingSlot?: ReactNode;
+  /** Para que el editor sepa en qué elemento se hizo clic. */
+  interactive?: boolean;
+  className?: string;
+  children?: ReactNode;
+};
+
+/** Una diapositiva dibujada con HTML y SVG, del tamaño que se pida. */
+export default function SlideView({ slide, deck, scale, hints = false, editingId, editingSlot, interactive = false, className, children }: Props) {
+  const background = slide.background ?? deck.theme.background;
+  return (
+    <div className={`slide-frame ${className ?? ""}`} style={{ width: deck.width * scale, height: deck.height * scale }}>
+      <div
+        className="slide"
+        style={{
+          width: deck.width,
+          height: deck.height,
+          transform: `scale(${scale})`,
+          background: slide.backgroundImage ? `center / cover no-repeat url("${slide.backgroundImage}"), ${background}` : background,
+          color: deck.theme.text,
+        }}
+      >
+        {slide.elements.map((el) => (
+          <div
+            key={el.id}
+            className={`slide-el slide-${el.kind}${el.kind === "shape" && isLine(el.geom) ? " slide-line" : ""}`}
+            data-el={interactive ? el.id : undefined}
+            style={elementBoxStyle(el)}
+          >
+            {el.kind === "shape" && <ShapeView el={el} deck={deck} hints={hints} textSlot={el.id === editingId ? editingSlot : undefined} />}
+            {el.kind === "image" && <img src={(el as ImageElement).src} alt="" draggable={false} />}
+            {el.kind === "table" && <TableView el={el} deck={deck} />}
+          </div>
+        ))}
+        {children}
+      </div>
+    </div>
+  );
+}

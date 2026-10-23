@@ -12,7 +12,7 @@ WEPO es una suite de oficina ligera, nativa para macOS y de código abierto. Abr
 |---|---|---|
 | **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
-| **WEPO Present** | Presentaciones | .pptx, .odp |
+| **WEPO Present** | Presentaciones | .pptx |
 | **WEPO PDF** | Ver PDF (la edición llega después) | .pdf |
 
 ## Tecnología
@@ -34,6 +34,7 @@ src/                      Interfaz (React + TypeScript)
 ├── screens/Home.tsx      Pantalla de inicio: crear o abrir
 ├── editors/
 │   ├── sheets/           WEPO Sheets
+│   ├── present/          WEPO Present: editor, diapositivas y lector/escritor de .pptx
 │   ├── pdf/              WEPO PDF (visor)
 │   ├── write/            WEPO Write: editor, páginas (extensions.ts) y lector/escritor de .docx
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
@@ -205,7 +206,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: comentarios (con respuestas y resueltos) y control de cambios, compatibles con Word
 - [x] WEPO PDF: ver PDF con miniaturas, zoom, ir a una página, copiar texto y PDF con contraseña
 - [ ] WEPO PDF: editar (resaltar, agregar texto, firmar, formularios, ordenar páginas, combinar)
-- [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
+- [x] WEPO Present: abrir, editar y guardar .pptx (texto, formas, imágenes, tablas, notas del orador y temas)
+- [ ] WEPO Present: modo presentación
 - [x] App de Mac: menú en español, imprimir y exportar a PDF, archivos recientes, aviso de cambios sin guardar
 - [x] App de Mac: abrir archivos desde Finder, ícono propio e instalador .dmg
 - [x] WEPO Sheets: zoom de la hoja de 25 % a 400 %

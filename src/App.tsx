@@ -10,6 +10,9 @@ import WriteEditor from "./editors/write/WriteEditor";
 import type { WriteDocument } from "./editors/write/docx";
 import { emptyDocument, openWriteDocument } from "./lib/write";
 import { readPdf } from "./lib/pdf";
+import { emptyPresentation, openPresentation } from "./lib/present";
+import type { Deck } from "./editors/present/model";
+import PresentEditor from "./editors/present/PresentEditor";
 import PdfViewer from "./editors/pdf/PdfViewer";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
@@ -33,6 +36,7 @@ type OpenDocument = {
   sheet?: SheetView;
   write?: WriteDocument;
   pdf?: Uint8Array;
+  present?: Deck;
   /** Viene de la copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
 };
@@ -118,7 +122,8 @@ export default function App() {
     try {
       const sheet = kind === "sheets" ? await sheetApi.create() : undefined;
       const write = kind === "write" ? emptyDocument() : undefined;
-      show({ id: nextId.current++, kind, fileName: "Sin título", path: null, sheet, write });
+      const present = kind === "present" ? emptyPresentation() : undefined;
+      show({ id: nextId.current++, kind, fileName: "Sin título", path: null, sheet, write, present });
     } catch (e) {
       show(null, `No se pudo crear el documento: ${e}`);
     }
@@ -136,8 +141,9 @@ export default function App() {
       const sheet = kind === "sheets" ? await sheetApi.open(path) : undefined;
       const write = kind === "write" ? await openWriteDocument(path) : undefined;
       const pdf = kind === "pdf" ? await readPdf(path) : undefined;
-      show({ id: nextId.current++, kind, fileName: name, path, sheet, write, pdf });
-      if (kind !== "present") rememberRecent(path);
+      const present = kind === "present" ? await openPresentation(path) : undefined;
+      show({ id: nextId.current++, kind, fileName: name, path, sheet, write, pdf, present });
+      rememberRecent(path);
     } catch (e) {
       // Un reciente que ya no existe (se movió o se borró) sale de la lista.
       if (/no such file|not found|os error 2/i.test(String(e))) {
@@ -305,6 +311,19 @@ export default function App() {
       <WriteEditor
         key={doc.id}
         initial={doc.write}
+        path={doc.path}
+        recovered={doc.recovered}
+        onDirtyChange={(value) => (dirty.current = value)}
+        onSaved={rememberRecent}
+        {...common}
+      />
+    );
+  }
+  if (doc.kind === "present" && doc.present) {
+    return (
+      <PresentEditor
+        key={doc.id}
+        initial={doc.present}
         path={doc.path}
         recovered={doc.recovered}
         onDirtyChange={(value) => (dirty.current = value)}
