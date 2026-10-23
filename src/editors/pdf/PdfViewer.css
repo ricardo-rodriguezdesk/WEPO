@@ -138,3 +138,9 @@
   cursor: default;
   user-select: none;
 }
+
+/* Paso 26: elegir, arrastrar y ordenar páginas */
+.pdf-thumb.chosen canvas { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kind-accent) 45%, transparent); }
+.pdf-thumb.drop:hover { border-top-color: var(--kind-accent); }
+.pdf-thumb:focus-visible { outline: 2px solid var(--kind-accent); }
+.pdf-viewer .sheet-notice { padding: 6px 12px; }

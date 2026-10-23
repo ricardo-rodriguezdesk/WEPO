@@ -336,7 +336,7 @@ export default function App() {
     );
   }
   if (doc.kind === "pdf" && doc.pdf) {
-    return <PdfViewer key={doc.id} data={doc.pdf} path={doc.path} {...common} />;
+    return <PdfViewer key={doc.id} data={doc.pdf} path={doc.path} onDirtyChange={(value) => (dirty.current = value)} onSaved={rememberRecent} {...common} />;
   }
   return <ComingSoon key={doc.id} kind={doc.kind} {...common} />;
 }

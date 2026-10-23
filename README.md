@@ -25,7 +25,7 @@ La versión más reciente está en [**Releases**](../../releases): hay instalado
 | **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx |
-| **WEPO PDF** | Ver PDF (la edición llega después) | .pdf |
+| **WEPO PDF** | Ver y editar PDF | .pdf |
 
 ## Tecnología
 
@@ -34,7 +34,7 @@ La versión más reciente está en [**Releases**](../../releases): hay instalado
   - [IronCalc](https://github.com/ironcalc/ironcalc): motor de hojas de cálculo con fórmulas, deshacer/rehacer y lectura y escritura de .xlsx.
   - [calamine](https://github.com/tafia/calamine) y [csv](https://github.com/BurntSushi/rust-csv): lectura de .xls, .xlsb, .ods y .csv.
 - **React + TypeScript**: interfaz de cada editor.
-- **[pdf.js](https://mozilla.github.io/pdf.js/)**: dibuja los PDF en WEPO PDF.
+- **[pdf.js](https://mozilla.github.io/pdf.js/)** y **[pdf-lib](https://pdf-lib.js.org/)**: dibujan y editan los PDF en WEPO PDF.
 - **[TipTap](https://tiptap.dev/)** y **[JSZip](https://stuk.github.io/jszip/)**: editor de texto de WEPO Write y lectura y escritura de .docx.
 - **[TanStack Virtual](https://tanstack.com/virtual)**: la cuadrícula solo dibuja las celdas visibles, así que los archivos grandes se mantienen fluidos.
 
@@ -47,7 +47,7 @@ src/                      Interfaz (React + TypeScript)
 ├── editors/
 │   ├── sheets/           WEPO Sheets
 │   ├── present/          WEPO Present: editor, diapositivas y lector/escritor de .pptx
-│   ├── pdf/              WEPO PDF (visor)
+│   ├── pdf/              WEPO PDF: visor y edición (pdfEdit.ts guarda con pdf-lib)
 │   ├── write/            WEPO Write: editor, páginas (extensions.ts) y lector/escritor de .docx
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
 ├── components/           Piezas compartidas (barra superior, íconos)
@@ -237,7 +237,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: tablas con celdas combinadas, color de celda y ancho de columnas
 - [x] WEPO Write: comentarios (con respuestas y resueltos) y control de cambios, compatibles con Word
 - [x] WEPO PDF: ver PDF con miniaturas, zoom, ir a una página, copiar texto y PDF con contraseña
-- [ ] WEPO PDF: editar (resaltar, agregar texto, firmar, formularios, ordenar páginas, combinar)
+- [x] WEPO PDF: ordenar, girar y quitar páginas, combinar con otro PDF y guardar páginas como PDF nuevo
+- [ ] WEPO PDF: resaltar, agregar texto, dibujar, notas, firmar y rellenar formularios
 - [x] WEPO Present: abrir, editar y guardar .pptx (texto, formas, imágenes, tablas, notas del orador y temas)
 - [x] WEPO Present: tablas, seleccionar varios elementos, alinear y repartir, girar, cambiar el diseño, imagen de fondo y tamaño 16:9 o 4:3
 - [x] WEPO Present: modo presentación con vista del presentador (notas, siguiente diapositiva y tiempo), imprimir y exportar a PDF, autoguardado y recuperación
