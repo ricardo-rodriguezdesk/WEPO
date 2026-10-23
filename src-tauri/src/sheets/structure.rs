@@ -123,7 +123,11 @@ impl SheetDocument {
         if name.is_empty() {
             return Err("El nombre de la hoja no puede quedar vacío".into());
         }
-        self.step(|m| m.rename_sheet(sheet, name))
+        let old = self.sheet_names().get(sheet as usize).cloned().unwrap_or_default();
+        self.step(|m| m.rename_sheet(sheet, name))?;
+        // Las gráficas que usan esta hoja siguen apuntando a ella.
+        self.rename_in_charts(&old, name);
+        Ok(())
     }
 
     pub fn delete_sheet(&mut self, sheet: u32) -> Result<(), String> {

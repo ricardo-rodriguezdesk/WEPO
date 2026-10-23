@@ -207,9 +207,11 @@ impl SheetDocument {
             let raw = RawValidation { sqref: v.rect.to_a1(), formula1 };
             match sheets.iter_mut().find(|(n, _)| *n == name) {
                 Some((_, extras)) => extras.validations.push(raw),
-                None => sheets.push((name, SheetExtras { validations: vec![raw] })),
+                None => sheets.push((name, SheetExtras { validations: vec![raw], ..Default::default() })),
             }
         }
+        // Gráficas e imágenes (ver drawings.rs).
+        self.drawings_for_xlsx(&mut sheets);
         sheets
     }
 }

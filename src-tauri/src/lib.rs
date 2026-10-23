@@ -9,6 +9,7 @@ mod xlsx_extras;
 use std::sync::Mutex;
 
 use serde::Serialize;
+use sheets::drawings::{ChartType, DrawingPatch};
 use sheets::{FindMatch, ListSource, Rect, SheetDocument, SheetView, SortKey};
 use tauri::State;
 
@@ -360,6 +361,59 @@ fn sheet_validation(
     with_sheet(&state, sheet, |doc| doc.set_validation(sheet, rect, source))
 }
 
+// ───────────── gráficas e imágenes ─────────────
+
+/// Inserta una gráfica con los datos del rango y devuelve la hoja con el id de la gráfica.
+#[derive(Serialize)]
+struct Inserted {
+    id: u32,
+    view: SheetView,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_chart_add(
+    state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    kind: ChartType,
+) -> Result<Inserted, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let id = doc.add_chart(sheet, Rect { row1, col1, row2, col2 }, kind)?;
+    Ok(Inserted { id, view: doc.view(sheet)? })
+}
+
+#[tauri::command]
+fn sheet_image_add(state: State<OpenSheet>, sheet: u32, path: String, x: f64, y: f64) -> Result<Inserted, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_mut().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    let id = doc.add_image(sheet, &path, x, y)?;
+    Ok(Inserted { id, view: doc.view(sheet)? })
+}
+
+/// Mueve, redimensiona o cambia una gráfica (tipo, título, leyenda, datos).
+#[tauri::command]
+fn sheet_drawing_update(state: State<OpenSheet>, sheet: u32, id: u32, patch: DrawingPatch) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.update_drawing(sheet, id, patch))
+}
+
+#[tauri::command]
+fn sheet_drawing_delete(state: State<OpenSheet>, sheet: u32, id: u32) -> Result<SheetView, String> {
+    with_sheet(&state, sheet, |doc| doc.delete_drawing(id))
+}
+
+/// Una imagen como data URL, para mostrarla.
+#[tauri::command]
+fn sheet_image_data(state: State<OpenSheet>, id: u32) -> Result<String, String> {
+    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.as_ref().ok_or("No hay ninguna hoja de cálculo abierta")?;
+    doc.image_data(id)
+}
+
 // ───────────── fórmulas ─────────────
 
 /// Cambia el idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…).
@@ -456,6 +510,11 @@ pub fn run() {
             sheet_cf_icons,
             sheet_cf_delete,
             sheet_validation,
+            sheet_chart_add,
+            sheet_image_add,
+            sheet_drawing_update,
+            sheet_drawing_delete,
+            sheet_image_data,
             sheet_language,
             sheet_complete,
             sheet_undo,

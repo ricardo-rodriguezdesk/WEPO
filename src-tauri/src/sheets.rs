@@ -24,6 +24,7 @@ use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 
 mod conditional;
 mod data;
+pub mod drawings;
 mod structure;
 mod validation;
 
@@ -67,6 +68,8 @@ enum Step {
 #[derive(Clone, Debug, Default)]
 pub struct Extras {
     pub validations: Vec<validation::Validation>,
+    /// Gráficas e imágenes.
+    pub drawings: Vec<drawings::Drawing>,
 }
 
 struct InternalClipboard {
@@ -172,6 +175,8 @@ pub struct SheetView {
     pub decorations: Vec<conditional::Decoration>,
     /// Listas desplegables de la hoja.
     pub validations: Vec<ValidationView>,
+    /// Gráficas e imágenes de la hoja.
+    pub drawings: Vec<drawings::DrawingView>,
 }
 
 /// 1 → A, 26 → Z, 27 → AA.
@@ -204,15 +209,6 @@ fn extension(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Un .xlsx es un ZIP: los nombres de sus archivos internos aparecen en claro
-/// en el índice, así que basta buscar las carpetas de gráficas e imágenes.
-fn xlsx_has_drawings(path: &str) -> bool {
-    let Ok(bytes) = fs::read(path) else { return false };
-    [&b"xl/drawings/"[..], b"xl/charts/", b"xl/media/"]
-        .iter()
-        .any(|needle| bytes.windows(needle.len()).any(|w| w == *needle))
-}
-
 impl SheetDocument {
     fn wrap(model: UserModel<'static>) -> Self {
         Self {
@@ -242,9 +238,9 @@ impl SheetDocument {
                 // Recalcula por si el archivo no guardó los resultados de sus fórmulas.
                 model.evaluate();
                 let mut doc = Self::wrap(UserModel::from_model(model));
-                doc.has_drawings = xlsx_has_drawings(path);
-                // Las listas desplegables no las lee IronCalc: las leemos nosotros.
+                // Las listas desplegables, gráficas e imágenes no las lee IronCalc: las leemos nosotros.
                 doc.load_validations(path);
+                doc.load_drawings(path);
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -448,6 +444,7 @@ impl SheetDocument {
             hidden_cols,
             decorations,
             validations: self.validation_views(sheet)?,
+            drawings: self.drawing_views(sheet),
         })
     }
 
@@ -1119,16 +1116,6 @@ mod tests {
         assert_eq!(text(&doc, 3, 3), "30");
         doc.undo().unwrap();
         assert_eq!(text(&doc, 3, 3), "20");
-    }
-
-    #[test]
-    fn detecta_graficas_e_imagenes() {
-        let dir = std::env::temp_dir();
-        let with = dir.join(format!("wepo-con-grafica-{}.xlsx", std::process::id()));
-        // Un ZIP mínimo cuyo índice menciona xl/charts/ basta para la detección.
-        std::fs::write(&with, b"PK...xl/charts/chart1.xml...").unwrap();
-        assert!(xlsx_has_drawings(with.to_str().unwrap()));
-        std::fs::remove_file(&with).unwrap();
     }
 
     #[test]

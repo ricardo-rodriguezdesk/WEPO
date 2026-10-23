@@ -42,7 +42,8 @@ src-tauri/                Núcleo nativo (Rust)
 │   ├── structure.rs      Filas, columnas, celdas combinadas, paneles inmovilizados, pestañas, autollenado
 │   ├── data.rs           Ordenar, filtrar, buscar y reemplazar
 │   ├── conditional.rs    Formato condicional (reglas, barras de datos, íconos)
-│   └── validation.rs     Listas desplegables
+│   ├── validation.rs     Listas desplegables
+│   └── drawings.rs       Gráficas e imágenes
 ├── src/xlsx_extras.rs    Partes del .xlsx que el motor no maneja (se leen y escriben aparte)
 └── src/sheet_format.rs   Formato de celdas (fuentes, colores, bordes, alineación)
 
@@ -89,6 +90,9 @@ cargo test
 | Alternar referencia relativa/absoluta | F4 (A1 → $A$1 → A$1 → $A1) |
 | Abrir la lista desplegable de una celda | ⌥↓ o clic en su flecha |
 | Ajustar el ancho de una columna a su texto | Doble clic en el borde de su encabezado |
+| Editar una gráfica | Doble clic sobre ella |
+| Mover una gráfica o imagen seleccionada | Arrastrar, o flechas (⇧ para 10 px) |
+| Borrar una gráfica o imagen seleccionada | Delete |
 
 ## Fórmulas en español o en inglés
 
@@ -108,8 +112,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: fórmulas en español o inglés, autocompletado con ayuda de argumentos, referencias de colores, F4
 - [x] WEPO Sheets: formato condicional (resaltar, superiores/inferiores, barras de datos, escalas de color, íconos)
 - [x] WEPO Sheets: listas desplegables, texto que se desborda, alto automático de filas, autoajuste de columnas
-- [ ] WEPO Sheets: gráficas
-- [ ] WEPO Sheets: imágenes
+- [x] WEPO Sheets: gráficas (columnas, barras, líneas, áreas, pastel, dona, dispersión) que se leen y guardan en .xlsx
+- [x] WEPO Sheets: imágenes (PNG, JPEG, GIF)
 - [ ] WEPO Write: abrir, editar y guardar .docx
 - [ ] WEPO Present: abrir, editar y guardar .pptx, y modo presentación
 - [ ] Exportar a PDF

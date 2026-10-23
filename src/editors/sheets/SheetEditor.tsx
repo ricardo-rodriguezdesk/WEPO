@@ -1,13 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import EditorToolbar from "../../components/EditorToolbar";
 import ContextMenu from "../../components/ContextMenu";
 import type { MenuItem } from "../../components/ContextMenu";
 import { extensionOf, fileNameOf } from "../../lib/documents";
-import type { BorderKind, Cell, Decoration, FindMatch, FindOptions, ListSource, Range, SheetView } from "../../lib/spreadsheet";
+import type {
+  BorderKind,
+  Cell,
+  ChartType,
+  Decoration,
+  DrawingPatch,
+  FindMatch,
+  FindOptions,
+  ListSource,
+  Range,
+  SheetView,
+} from "../../lib/spreadsheet";
 import { cellName, columnName, rangeOf, sheetApi } from "../../lib/spreadsheet";
 import FormatBar, { Separator, ToolButton } from "./FormatBar";
 import FindBar from "./FindBar";
@@ -17,6 +28,8 @@ import { cellCss } from "./cellStyle";
 import FormulaInput from "./FormulaInput";
 import ConditionalFormatDialog from "./ConditionalFormatDialog";
 import ValidationDialog from "./ValidationDialog";
+import DrawingLayer from "./DrawingLayer";
+import ChartPanel, { CHART_TYPES } from "./ChartPanel";
 import { lineHeight, textWidth, wrappedLines } from "./measure";
 import FormulaAssist from "./FormulaAssist";
 import type { FunctionInfo } from "./functions";
@@ -125,6 +138,10 @@ export default function SheetEditor(props: Props) {
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
   const [dialog, setDialog] = useState<"conditional" | "validation" | null>(null);
   const [listOpen, setListOpen] = useState(false);
+  // Gráfica o imagen seleccionada, y si su panel de edición está abierto.
+  const [selectedDrawing, setSelectedDrawing] = useState<number | null>(null);
+  const [chartPanel, setChartPanel] = useState<number | null>(null);
+  const [chartMenu, setChartMenu] = useState<{ x: number; y: number } | null>(null);
   const [copied, setCopied] = useState<{ range: Range; cut: boolean } | null>(null);
   const [resize, setResize] = useState<Resize | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -673,6 +690,51 @@ export default function SheetEditor(props: Props) {
     await mutate(() => sheetApi.setCell(sheet, active.r, active.c, value));
   }
 
+  // ───────────── gráficas e imágenes ─────────────
+
+  /** Inserta una gráfica con los datos seleccionados (o la tabla alrededor de la celda). */
+  async function insertChart(kind: ChartType) {
+    const range = isMultiSelection ? usedSelection() : currentRegion(rows, active);
+    try {
+      const { id, view: next } = await sheetApi.addChart(sheet, range, kind);
+      setView(next);
+      markDirty();
+      setSelectedDrawing(id);
+      setChartPanel(id);
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+    }
+  }
+
+  async function insertImage() {
+    const path = await openDialog({
+      multiple: false,
+      filters: [{ name: "Imágenes", extensions: ["png", "jpg", "jpeg", "gif"] }],
+    });
+    if (!path) return;
+    try {
+      const x = Math.max(0, scrollX + 40);
+      const y = Math.max(0, scrollY + 40);
+      const { id, view: next } = await sheetApi.addImage(sheet, path, x, y);
+      setView(next);
+      markDirty();
+      setSelectedDrawing(id);
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+    }
+  }
+
+  function updateDrawing(id: number, patch: DrawingPatch) {
+    mutate(() => sheetApi.updateDrawing(sheet, id, patch));
+  }
+
+  function deleteDrawing(id: number) {
+    setSelectedDrawing(null);
+    setChartPanel(null);
+    mutate(() => sheetApi.deleteDrawing(sheet, id));
+    focusGrid();
+  }
+
   // ───────────── autollenado ─────────────
 
   /** Rango que cubriría el autollenado si se suelta en `to`: crece en una sola dirección. */
@@ -919,6 +981,28 @@ export default function SheetEditor(props: Props) {
   function onGridKeyDown(e: KeyboardEvent) {
     if (editing) return;
     const extend = e.shiftKey;
+
+    // Con una gráfica o imagen seleccionada: borrar, soltar o moverla con las flechas.
+    if (selectedDrawing !== null && !e.metaKey && !e.ctrlKey) {
+      const d = view.drawings.find((x) => x.id === selectedDrawing);
+      const nudge: Record<string, [number, number]> = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        return deleteDrawing(selectedDrawing);
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setChartPanel(null);
+        return setSelectedDrawing(null);
+      }
+      if (d && nudge[e.key]) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const [dx, dy] = nudge[e.key];
+        // Solo se manda el eje que cambia, para que dos flechas seguidas no se pisen.
+        return updateDrawing(d.id, dx ? { x: Math.max(0, d.x + dx * step) } : { y: Math.max(0, d.y + dy * step) });
+      }
+    }
 
     if (e.metaKey || e.ctrlKey) {
       const key = e.key.toLowerCase();
@@ -1222,6 +1306,7 @@ export default function SheetEditor(props: Props) {
         style={{ ...cellCss(cellStyle, numeric), ...box }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
+          if (selectedDrawing !== null) setSelectedDrawing(null);
           // Escribiendo una fórmula: el clic inserta la referencia de la celda.
           if (wantsReference()) {
             e.preventDefault();
@@ -1399,6 +1484,24 @@ export default function SheetEditor(props: Props) {
           </svg>
         </ToolButton>
         <Separator />
+        <ToolButton
+          label="Insertar gráfica con los datos seleccionados"
+          onClick={() => {
+            const box = document.querySelector("[aria-label='Insertar gráfica con los datos seleccionados']")?.getBoundingClientRect();
+            setChartMenu({ x: box?.left ?? 200, y: (box?.bottom ?? 100) + 4 });
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <path d="M5 20V11M10 20V6M15 20V13M20 20V8" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Insertar imagen" onClick={insertImage}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <circle cx="9" cy="10" r="2" />
+            <path d="M21 17l-5-5-9 8" />
+          </svg>
+        </ToolButton>
         <ToolButton label="Formato condicional" onClick={() => setDialog("conditional")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
             <rect x="3" y="4" width="18" height="16" rx="1.5" />
@@ -1442,8 +1545,8 @@ export default function SheetEditor(props: Props) {
       {showDrawingsNotice && (
         <div className="sheet-notice" role="status">
           <span>
-            Este archivo tiene gráficas o imágenes. WEPO todavía no las muestra, así que al guardar se crea una copia y
-            el original queda intacto.
+            Este archivo tiene elementos que WEPO todavía no conserva (formas, comentarios, tablas dinámicas u otros
+            tipos de gráfica), así que al guardar se crea una copia y el original queda intacto.
           </span>
           <button className="btn btn-icon" aria-label="Cerrar aviso" onClick={() => setShowDrawingsNotice(false)}>
             ×
@@ -1566,6 +1669,19 @@ export default function SheetEditor(props: Props) {
             )}
           {frozenRows > 0 && <div className="frozen-line h" style={{ top: HEADER_HEIGHT + frozenHeight + scrollY - 1 }} />}
           {frozenCols > 0 && <div className="frozen-line v" style={{ left: HEADER_WIDTH + frozenWidth + scrollX - 1 }} />}
+
+          {/* Gráficas e imágenes */}
+          <DrawingLayer
+            drawings={view.drawings}
+            selected={selectedDrawing}
+            onSelect={(id) => {
+              setSelectedDrawing(id);
+              if (id !== chartPanel) setChartPanel(null);
+              focusGrid();
+            }}
+            onChange={updateDrawing}
+            onEdit={(id) => setChartPanel(id)}
+          />
 
           {/* Números de fila fijos a la izquierda (los de filas inmovilizadas, aparte) */}
           {virtualRows.map((row) => (row.index < frozenRows ? null : renderRowHeader(row.index, row.start, row.size, false)))}
@@ -1724,6 +1840,28 @@ export default function SheetEditor(props: Props) {
           selected={assist.selected}
           onPick={acceptSuggestion}
           signature={assist.signature}
+        />
+      )}
+
+      {chartPanel !== null &&
+        (() => {
+          const chart = view.drawings.find((d) => d.id === chartPanel);
+          return chart && chart.type === "chart" ? (
+            <ChartPanel
+              chart={chart}
+              onChange={(patch) => updateDrawing(chart.id, patch)}
+              onDelete={() => deleteDrawing(chart.id)}
+              onClose={() => setChartPanel(null)}
+            />
+          ) : null;
+        })()}
+
+      {chartMenu && (
+        <ContextMenu
+          x={chartMenu.x}
+          y={chartMenu.y}
+          onClose={() => setChartMenu(null)}
+          items={CHART_TYPES.map((t) => ({ label: `Gráfica de ${t.label.toLowerCase()}`, action: () => insertChart(t.kind) }))}
         />
       )}
 

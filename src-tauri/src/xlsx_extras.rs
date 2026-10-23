@@ -4,7 +4,7 @@
 //! interesa; al guardar, IronCalc escribe el libro y después nosotros abrimos
 //! ese ZIP, agregamos nuestras partes en el lugar correcto y lo volvemos a escribir.
 //!
-//! Por ahora: listas desplegables (validación de datos).
+//! Por ahora: listas desplegables (validación de datos), gráficas e imágenes.
 
 use std::collections::HashMap;
 use std::fs;
@@ -26,7 +26,63 @@ pub struct RawValidation {
 #[derive(Default, Debug)]
 pub struct SheetExtras {
     pub validations: Vec<RawValidation>,
+    pub drawings: Vec<RawDrawing>,
 }
+
+/// Posición de un dibujo como la guarda Excel: celda (desde 0) y
+/// desplazamiento dentro de ella en EMU (1 píxel = 9525 EMU).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellOffset {
+    pub col: i32,
+    pub col_off: i64,
+    pub row: i32,
+    pub row_off: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RawAnchor {
+    /// Esquina superior izquierda y esquina inferior derecha.
+    TwoCell(CellOffset, CellOffset),
+    /// Esquina superior izquierda y tamaño en EMU.
+    OneCell(CellOffset, i64, i64),
+    /// Posición y tamaño absolutos en EMU.
+    Absolute(i64, i64, i64, i64),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RawSeries {
+    pub name_ref: Option<String>,
+    pub name: Option<String>,
+    pub categories: Option<String>,
+    pub values: String,
+    pub color: Option<String>,
+    /// Valores guardados en el archivo (los usamos al escribir para otros programas).
+    pub category_cache: Vec<String>,
+    pub value_cache: Vec<Option<f64>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawChart {
+    /// column, bar, line, area, pie, doughnut, scatter
+    pub kind: String,
+    pub title: String,
+    pub legend: bool,
+    pub series: Vec<RawSeries>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RawContent {
+    Chart(RawChart),
+    Image { name: String, mime: String, data: Vec<u8> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawDrawing {
+    pub anchor: RawAnchor,
+    pub content: RawContent,
+}
+
+pub const EMU_PER_PIXEL: f64 = 9525.0;
 
 // ───────────── ZIP ─────────────
 
@@ -60,6 +116,56 @@ fn write_zip(path: &str, entries: &Entries) -> Result<(), String> {
 
 fn entry<'a>(entries: &'a Entries, name: &str) -> Option<&'a [u8]> {
     entries.iter().find(|(n, _)| n == name).map(|(_, d)| d.as_slice())
+}
+
+/// "xl/worksheets/sheet1.xml" + "../drawings/drawing1.xml" → "xl/drawings/drawing1.xml"
+fn resolve(base: &str, target: &str) -> String {
+    if let Some(absolute) = target.strip_prefix('/') {
+        return absolute.to_string();
+    }
+    let mut parts: Vec<&str> = base.split('/').collect();
+    parts.pop(); // el nombre del archivo
+    for piece in target.split('/') {
+        match piece {
+            ".." => {
+                parts.pop();
+            }
+            "." | "" => {}
+            p => parts.push(p),
+        }
+    }
+    parts.join("/")
+}
+
+/// Archivo de relaciones de una parte: xl/worksheets/sheet1.xml → xl/worksheets/_rels/sheet1.xml.rels
+fn rels_path(part: &str) -> String {
+    match part.rsplit_once('/') {
+        Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+        None => format!("_rels/{part}.rels"),
+    }
+}
+
+/// Relaciones de una parte: Id → (tipo, ruta resuelta).
+fn relationships(entries: &Entries, part: &str) -> HashMap<String, (String, String)> {
+    let mut map = HashMap::new();
+    let Some(xml) = entry(entries, &rels_path(part)) else { return map };
+    let mut reader = Reader::from_reader(xml);
+    let mut buf = Vec::new();
+    while let Ok(event) = reader.read_event_into(&mut buf) {
+        match event {
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "Relationship" => {
+                let a = attributes(&e);
+                if let (Some(id), Some(target)) = (a.get("Id"), a.get("Target")) {
+                    let kind = a.get("Type").map(|t| t.rsplit('/').next().unwrap_or("").to_string()).unwrap_or_default();
+                    map.insert(id.clone(), (kind, resolve(part, target)));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    map
 }
 
 // ───────────── XML ─────────────
@@ -159,6 +265,294 @@ pub fn read_validations(path: &str) -> Result<Vec<(String, Vec<RawValidation>)>,
     Ok(result)
 }
 
+/// Gráficas e imágenes de cada hoja. Devuelve también si había algo que WEPO
+/// no sabe conservar (formas, cuadros de texto, otros tipos de gráfica…).
+pub fn read_drawings(path: &str) -> Result<(Vec<(String, Vec<RawDrawing>)>, bool), String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let entries = read_zip(&bytes)?;
+    let mut result = Vec::new();
+    let mut unsupported = false;
+    for (name, sheet_path) in sheet_paths(&entries)? {
+        let Some(sheet_xml) = entry(&entries, &sheet_path) else { continue };
+        let sheet_rels = relationships(&entries, &sheet_path);
+        let mut drawings = Vec::new();
+        for id in drawing_ids(sheet_xml)? {
+            let Some((_, drawing_path)) = sheet_rels.get(&id) else { continue };
+            let Some(drawing_xml) = entry(&entries, drawing_path) else { continue };
+            let drawing_rels = relationships(&entries, drawing_path);
+            let (anchors, skipped) = parse_drawing(drawing_xml)?;
+            unsupported |= skipped;
+            for (anchor, target) in anchors {
+                let content = match target {
+                    Target::Chart(rid) => {
+                        let Some((_, chart_path)) = drawing_rels.get(&rid) else { continue };
+                        let Some(chart_xml) = entry(&entries, chart_path) else { continue };
+                        match parse_chart(chart_xml)? {
+                            (Some(chart), partial) => {
+                                unsupported |= partial;
+                                RawContent::Chart(chart)
+                            }
+                            (None, _) => {
+                                unsupported = true;
+                                continue;
+                            }
+                        }
+                    }
+                    Target::Image(rid, name) => {
+                        let Some((_, media_path)) = drawing_rels.get(&rid) else { continue };
+                        let Some(data) = entry(&entries, media_path) else { continue };
+                        let mime = match media_path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+                            "png" => "image/png",
+                            "jpg" | "jpeg" => "image/jpeg",
+                            "gif" => "image/gif",
+                            _ => {
+                                unsupported = true;
+                                continue;
+                            }
+                        };
+                        RawContent::Image { name, mime: mime.into(), data: data.to_vec() }
+                    }
+                };
+                drawings.push(RawDrawing { anchor, content });
+            }
+        }
+        // Comentarios u otros dibujos "heredados" (VML) que no conservamos.
+        if !sheet_rels.values().all(|(kind, _)| matches!(kind.as_str(), "drawing" | "hyperlink" | "printerSettings")) {
+            unsupported |= sheet_rels.values().any(|(kind, _)| matches!(kind.as_str(), "vmlDrawing" | "table" | "pivotTable" | "comments"));
+        }
+        if !drawings.is_empty() {
+            result.push((name, drawings));
+        }
+    }
+    Ok((result, unsupported))
+}
+
+fn drawing_ids(sheet_xml: &[u8]) -> Result<Vec<String>, String> {
+    let mut reader = Reader::from_reader(sheet_xml);
+    let mut buf = Vec::new();
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "drawing" => {
+                if let Some(id) = attributes(&e).get("r:id").or(attributes(&e).get("id")) {
+                    ids.push(id.clone());
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(ids)
+}
+
+enum Target {
+    Chart(String),
+    Image(String, String),
+}
+
+/// Anclas de un drawingN.xml con lo que contienen. El booleano indica si se
+/// saltó algo que no es gráfica ni imagen.
+fn parse_drawing(xml: &[u8]) -> Result<(Vec<(RawAnchor, Target)>, bool), String> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buf = Vec::new();
+    let mut found = Vec::new();
+    let mut skipped = false;
+    let mut stack: Vec<String> = Vec::new();
+    let mut kind = String::new();
+    let mut from = CellOffset { col: 0, col_off: 0, row: 0, row_off: 0 };
+    let mut to = from;
+    let (mut pos, mut ext) = ((0i64, 0i64), (0i64, 0i64));
+    let mut target: Option<Target> = None;
+    let mut pic_name = String::new();
+    let mut text = String::new();
+
+    loop {
+        let event = reader.read_event_into(&mut buf).map_err(|e| e.to_string())?;
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                let local = e.local_name().as_ref().to_string();
+                let a = attributes(e);
+                match local.as_str() {
+                    "twoCellAnchor" | "oneCellAnchor" | "absoluteAnchor" => {
+                        kind = local.clone();
+                        target = None;
+                        pic_name.clear();
+                    }
+                    "pos" => pos = (num(&a, "x"), num(&a, "y")),
+                    "ext" if stack.iter().any(|s| s.ends_with("Anchor")) && !stack.iter().any(|s| s == "xfrm") => {
+                        ext = (num(&a, "cx"), num(&a, "cy"));
+                    }
+                    "chart" if stack.iter().any(|s| s == "graphicData") => {
+                        if let Some(id) = a.get("r:id").or(a.get("id")) {
+                            target = Some(Target::Chart(id.clone()));
+                        }
+                    }
+                    "cNvPr" if stack.iter().any(|s| s == "pic") => pic_name = a.get("name").cloned().unwrap_or_default(),
+                    "blip" => {
+                        if let Some(id) = a.get("r:embed").or(a.get("embed")) {
+                            target = Some(Target::Image(id.clone(), pic_name.clone()));
+                        }
+                    }
+                    "sp" | "grpSp" | "cxnSp" if stack.last().is_some_and(|s| s.ends_with("Anchor")) => skipped = true,
+                    _ => {}
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(local);
+                    text.clear();
+                }
+            }
+            Event::Text(t) => text.push_str(&t.xml10_content()),
+            Event::End(e) => {
+                let local = e.local_name().as_ref().to_string();
+                stack.pop();
+                let value: i64 = text.trim().parse().unwrap_or(0);
+                let in_from = stack.last().is_some_and(|s| s == "from");
+                let point = if in_from { &mut from } else { &mut to };
+                if stack.last().is_some_and(|s| s == "from" || s == "to") {
+                    match local.as_str() {
+                        "col" => point.col = value as i32,
+                        "colOff" => point.col_off = value,
+                        "row" => point.row = value as i32,
+                        "rowOff" => point.row_off = value,
+                        _ => {}
+                    }
+                }
+                if local == kind {
+                    let anchor = match kind.as_str() {
+                        "twoCellAnchor" => RawAnchor::TwoCell(from, to),
+                        "oneCellAnchor" => RawAnchor::OneCell(from, ext.0, ext.1),
+                        _ => RawAnchor::Absolute(pos.0, pos.1, ext.0, ext.1),
+                    };
+                    match target.take() {
+                        Some(t) => found.push((anchor, t)),
+                        None => skipped = true,
+                    }
+                }
+                text.clear();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok((found, skipped))
+}
+
+fn num(a: &HashMap<String, String>, key: &str) -> i64 {
+    a.get(key).and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+/// Lee una gráfica. Devuelve None si su tipo no es uno de los que WEPO dibuja;
+/// el booleano indica que tenía partes que no se conservan (p. ej. gráfica combinada).
+fn parse_chart(xml: &[u8]) -> Result<(Option<RawChart>, bool), String> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut chart = RawChart { kind: String::new(), title: String::new(), legend: false, series: Vec::new() };
+    let mut chart_types = 0;
+    let mut partial = false;
+    let mut series: Option<RawSeries> = None;
+    let mut text = String::new();
+    let mut title_deleted = false;
+
+    loop {
+        let event = reader.read_event_into(&mut buf).map_err(|e| e.to_string())?;
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                let local = e.local_name().as_ref().to_string();
+                let a = attributes(e);
+                let in_plot = stack.iter().any(|s| s == "plotArea");
+                match local.as_str() {
+                    "barChart" | "bar3DChart" | "lineChart" | "line3DChart" | "areaChart" | "area3DChart"
+                    | "pieChart" | "pie3DChart" | "doughnutChart" | "scatterChart" | "radarChart" | "bubbleChart"
+                    | "stockChart" | "surfaceChart" | "surface3DChart" | "ofPieChart"
+                        if in_plot =>
+                    {
+                        chart_types += 1;
+                        if chart_types == 1 {
+                            chart.kind = match local.as_str() {
+                                "barChart" | "bar3DChart" => "column",
+                                "lineChart" | "line3DChart" => "line",
+                                "areaChart" | "area3DChart" => "area",
+                                "pieChart" | "pie3DChart" => "pie",
+                                "doughnutChart" => "doughnut",
+                                "scatterChart" => "scatter",
+                                _ => "",
+                            }
+                            .to_string();
+                            partial |= local.contains("3D");
+                        } else {
+                            partial = true;
+                        }
+                    }
+                    "barDir" if chart_types == 1 && a.get("val").is_some_and(|v| v == "bar") => chart.kind = "bar".into(),
+                    "ser" if chart_types == 1 => series = Some(RawSeries::default()),
+                    "legend" => chart.legend = true,
+                    "autoTitleDeleted" => title_deleted = a.get("val").is_some_and(|v| v == "1" || v == "true"),
+                    "srgbClr" => {
+                        // El color de la serie: el primer relleno directo de su spPr (no el de un punto).
+                        if let Some(s) = series.as_mut() {
+                            let in_ser_fill = stack.iter().rev().take(3).any(|x| x == "spPr")
+                                && stack.iter().rev().nth(2).is_some_and(|x| x == "ser" || x == "spPr");
+                            if s.color.is_none() && in_ser_fill && !stack.iter().any(|x| x == "dPt") {
+                                s.color = a.get("val").map(|v| format!("#{v}"));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(local);
+                }
+                text.clear();
+            }
+            Event::Text(t) => text.push_str(&t.xml10_content()),
+            Event::GeneralRef(r) => text.push_str(&entity(r)),
+            Event::End(e) => {
+                let local = e.local_name().as_ref().to_string();
+                stack.pop();
+                let in_ser = stack.iter().any(|s| s == "ser");
+                let parent = |name: &str| stack.iter().any(|s| s == name);
+                if local == "t" && parent("title") && !in_ser {
+                    chart.title.push_str(&text);
+                }
+                if let Some(s) = series.as_mut() {
+                    match local.as_str() {
+                        "f" if parent("tx") => s.name_ref = Some(text.clone()),
+                        "f" if parent("cat") || parent("xVal") => s.categories = Some(text.clone()),
+                        "f" if parent("val") || parent("yVal") => s.values = text.clone(),
+                        "v" if parent("tx") && s.name.is_none() => s.name = Some(text.clone()),
+                        "v" if (parent("cat") || parent("xVal")) && parent("pt") => s.category_cache.push(text.clone()),
+                        "v" if (parent("val") || parent("yVal")) && parent("pt") => s.value_cache.push(text.trim().parse().ok()),
+                        _ => {}
+                    }
+                }
+                if local == "ser" {
+                    if let Some(s) = series.take() {
+                        if !s.values.is_empty() {
+                            chart.series.push(s);
+                        } else {
+                            partial = true; // serie con datos escritos sin referencia
+                        }
+                    }
+                }
+                text.clear();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    if title_deleted {
+        chart.title.clear();
+    }
+    if chart.kind.is_empty() || chart.series.is_empty() {
+        return Ok((None, true));
+    }
+    Ok((Some(chart), partial))
+}
+
 /// Solo las validaciones de tipo lista, que son las que WEPO entiende.
 fn parse_validations(xml: &[u8]) -> Result<Vec<RawValidation>, String> {
     let mut reader = Reader::from_reader(xml);
@@ -234,22 +628,261 @@ fn validations_xml(validations: &[RawValidation]) -> String {
     format!(r#"<dataValidations count="{}">{items}</dataValidations>"#, validations.len())
 }
 
+/// Etiquetas que van después de <drawing> en una hoja.
+const AFTER_DRAWING: &[&str] = &[
+    "<legacyDrawing", "<legacyDrawingHF", "<drawingHF", "<picture", "<oleObjects", "<controls",
+    "<webPublishItems", "<tableParts", "<extLst", "</worksheet>",
+];
+
+const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+const REL_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+fn set_entry(entries: &mut Entries, name: &str, data: Vec<u8>) {
+    match entries.iter_mut().find(|(n, _)| n == name) {
+        Some(e) => e.1 = data,
+        None => entries.push((name.to_string(), data)),
+    }
+}
+
+/// Agrega una relación a un archivo .rels (lo crea si no existe) y devuelve su Id.
+fn add_relationship(entries: &mut Entries, part: &str, kind: &str, target: &str) -> String {
+    let path = rels_path(part);
+    let mut xml = entry(entries, &path)
+        .map(|d| String::from_utf8_lossy(d).into_owned())
+        .unwrap_or_else(|| format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#));
+    let mut n = 1;
+    while xml.contains(&format!(r#"Id="rIdW{n}""#)) {
+        n += 1;
+    }
+    let id = format!("rIdW{n}");
+    let rel = format!(r#"<Relationship Id="{id}" Type="{REL_TYPE}/{kind}" Target="{}"/>"#, escape(target));
+    xml = xml.replace("</Relationships>", &format!("{rel}</Relationships>"));
+    set_entry(entries, &path, xml.into_bytes());
+    id
+}
+
+fn add_content_type(entries: &mut Entries, part: Option<&str>, extension: Option<(&str, &str)>, content_type: &str) {
+    let Some(data) = entry(entries, "[Content_Types].xml") else { return };
+    let mut xml = String::from_utf8_lossy(data).into_owned();
+    if let Some(part) = part {
+        if !xml.contains(&format!(r#"PartName="/{part}""#)) {
+            xml = xml.replace("</Types>", &format!(r#"<Override PartName="/{part}" ContentType="{content_type}"/></Types>"#));
+        }
+    }
+    if let Some((ext, ct)) = extension {
+        if !xml.contains(&format!(r#"Extension="{ext}""#)) {
+            xml = xml.replace("</Types>", &format!(r#"<Default Extension="{ext}" ContentType="{ct}"/></Types>"#));
+        }
+    }
+    set_entry(entries, "[Content_Types].xml", xml.into_bytes());
+}
+
+fn marker(tag: &str, p: &CellOffset) -> String {
+    format!(
+        "<xdr:{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:{tag}>",
+        p.col, p.col_off, p.row, p.row_off
+    )
+}
+
+fn anchor_xml(anchor: &RawAnchor, body: &str) -> String {
+    match anchor {
+        RawAnchor::TwoCell(from, to) => format!(
+            r#"<xdr:twoCellAnchor editAs="oneCell">{}{}{body}<xdr:clientData/></xdr:twoCellAnchor>"#,
+            marker("from", from),
+            marker("to", to)
+        ),
+        RawAnchor::OneCell(from, cx, cy) => format!(
+            r#"<xdr:oneCellAnchor>{}<xdr:ext cx="{cx}" cy="{cy}"/>{body}<xdr:clientData/></xdr:oneCellAnchor>"#,
+            marker("from", from)
+        ),
+        RawAnchor::Absolute(x, y, cx, cy) => format!(
+            r#"<xdr:absoluteAnchor><xdr:pos x="{x}" y="{y}"/><xdr:ext cx="{cx}" cy="{cy}"/>{body}<xdr:clientData/></xdr:absoluteAnchor>"#
+        ),
+    }
+}
+
+fn number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
+}
+
+fn str_ref(reference: &str, cache: &[String]) -> String {
+    let points: String = cache.iter().enumerate().map(|(i, v)| format!(r#"<c:pt idx="{i}"><c:v>{}</c:v></c:pt>"#, escape(v))).collect();
+    format!(r#"<c:strRef><c:f>{}</c:f><c:strCache><c:ptCount val="{}"/>{points}</c:strCache></c:strRef>"#, escape(reference), cache.len())
+}
+
+fn num_ref(reference: &str, cache: &[Option<f64>]) -> String {
+    let points: String = cache
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| v.map(|v| format!(r#"<c:pt idx="{i}"><c:v>{}</c:v></c:pt>"#, number(v))))
+        .collect();
+    format!(
+        r#"<c:numRef><c:f>{}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="{}"/>{points}</c:numCache></c:numRef>"#,
+        escape(reference),
+        cache.len()
+    )
+}
+
+/// XML de una gráfica en el formato de Excel (DrawingML).
+fn chart_xml(chart: &RawChart) -> String {
+    let fill = |color: &Option<String>, line: bool| match color {
+        Some(c) => {
+            let hex = c.trim_start_matches('#');
+            if line {
+                format!(r#"<c:spPr><a:ln w="28575" cap="rnd"><a:solidFill><a:srgbClr val="{hex}"/></a:solidFill></a:ln></c:spPr>"#)
+            } else {
+                format!(r#"<c:spPr><a:solidFill><a:srgbClr val="{hex}"/></a:solidFill></c:spPr>"#)
+            }
+        }
+        None => String::new(),
+    };
+    let kind = chart.kind.as_str();
+    let pie = matches!(kind, "pie" | "doughnut");
+    let series: String = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let tx = match (&s.name_ref, &s.name) {
+                (Some(r), name) => format!("<c:tx>{}</c:tx>", str_ref(r, &name.iter().cloned().collect::<Vec<_>>())),
+                (None, Some(n)) => format!("<c:tx><c:v>{}</c:v></c:tx>", escape(n)),
+                (None, None) => String::new(),
+            };
+            let line = kind == "line" || kind == "scatter";
+            let sp = if pie { String::new() } else { fill(&s.color, line) };
+            let extra = match kind {
+                "column" | "bar" => r#"<c:invertIfNegative val="0"/>"#.to_string(),
+                "line" => r#"<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>"#.to_string(),
+                "scatter" => r#"<c:marker><c:symbol val="circle"/><c:size val="6"/></c:marker>"#.to_string(),
+                _ => String::new(),
+            };
+            let data = if kind == "scatter" {
+                let x = s.categories.as_ref().map(|c| {
+                    let xs: Vec<Option<f64>> = s.category_cache.iter().map(|v| v.parse().ok()).collect();
+                    format!("<c:xVal>{}</c:xVal>", num_ref(c, &xs))
+                });
+                format!("{}<c:yVal>{}</c:yVal><c:smooth val=\"0\"/>", x.unwrap_or_default(), num_ref(&s.values, &s.value_cache))
+            } else {
+                let cat = s.categories.as_ref().map(|c| format!("<c:cat>{}</c:cat>", str_ref(c, &s.category_cache))).unwrap_or_default();
+                let smooth = if kind == "line" { r#"<c:smooth val="0"/>"# } else { "" };
+                format!("{cat}<c:val>{}</c:val>{smooth}", num_ref(&s.values, &s.value_cache))
+            };
+            format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/>{tx}{sp}{extra}{data}</c:ser>"#)
+        })
+        .collect();
+
+    let axes_ids = r#"<c:axId val="500000001"/><c:axId val="500000002"/>"#;
+    let plot = match kind {
+        "column" | "bar" => format!(
+            r#"<c:barChart><c:barDir val="{}"/><c:grouping val="clustered"/><c:varyColors val="0"/>{series}<c:gapWidth val="150"/>{axes_ids}</c:barChart>"#,
+            if kind == "bar" { "bar" } else { "col" }
+        ),
+        "line" => format!(r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>{series}<c:marker val="1"/>{axes_ids}</c:lineChart>"#),
+        "area" => format!(r#"<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>{series}{axes_ids}</c:areaChart>"#),
+        "pie" => format!(r#"<c:pieChart><c:varyColors val="1"/>{series}<c:firstSliceAng val="0"/></c:pieChart>"#),
+        "doughnut" => format!(r#"<c:doughnutChart><c:varyColors val="1"/>{series}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>"#),
+        _ => format!(r#"<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>{series}{axes_ids}</c:scatterChart>"#),
+    };
+    let axis = |id: &str, cross: &str, pos: &str, value: bool, grid: bool| {
+        let tag = if value { "valAx" } else { "catAx" };
+        let grid = if grid { "<c:majorGridlines/>" } else { "" };
+        let extra = if value { r#"<c:crossBetween val="between"/>"# } else { r#"<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>"# };
+        format!(
+            r#"<c:{tag}><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="{pos}"/>{grid}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="{cross}"/><c:crosses val="autoZero"/>{extra}</c:{tag}>"#
+        )
+    };
+    let axes = match kind {
+        "pie" | "doughnut" => String::new(),
+        "scatter" => axis("500000001", "500000002", "b", true, false) + &axis("500000002", "500000001", "l", true, true),
+        "bar" => axis("500000001", "500000002", "l", false, false) + &axis("500000002", "500000001", "b", true, true),
+        _ => axis("500000001", "500000002", "b", false, false) + &axis("500000002", "500000001", "l", true, true),
+    };
+    let title = if chart.title.is_empty() {
+        r#"<c:autoTitleDeleted val="1"/>"#.to_string()
+    } else {
+        format!(
+            r#"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>"#,
+            escape(&chart.title)
+        )
+    };
+    let legend = if chart.legend { r#"<c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>"# } else { "" };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="{NS_C}" xmlns:a="{NS_A}" xmlns:r="{NS_R}"><c:roundedCorners val="0"/><c:chart>{title}<c:plotArea><c:layout/>{plot}{axes}</c:plotArea>{legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>"#
+    )
+}
+
 /// Agrega nuestras partes al .xlsx que acaba de escribir IronCalc.
 pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), String> {
-    if sheets.iter().all(|(_, extras)| extras.validations.is_empty()) {
+    if sheets.iter().all(|(_, extras)| extras.validations.is_empty() && extras.drawings.is_empty()) {
         return Ok(());
     }
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let mut entries = read_zip(&bytes)?;
     let paths = sheet_paths(&entries)?;
+    let (mut drawing_n, mut chart_n, mut image_n) = (0, 0, 0);
 
     for (name, extras) in sheets {
         let Some((_, sheet_path)) = paths.iter().find(|(n, _)| n == name) else { continue };
-        let Some(index) = entries.iter().position(|(n, _)| n == sheet_path) else { continue };
+        let sheet_path = sheet_path.clone();
+        let Some(index) = entries.iter().position(|(n, _)| *n == sheet_path) else { continue };
         let mut xml = String::from_utf8(entries[index].1.clone()).map_err(|e| e.to_string())?;
         if !extras.validations.is_empty() && !xml.contains("<dataValidations") {
             xml = insert_before_first(&xml, &validations_xml(&extras.validations), AFTER_VALIDATIONS);
         }
+
+        if !extras.drawings.is_empty() && !xml.contains("<drawing ") {
+            drawing_n += 1;
+            let drawing_path = format!("xl/drawings/drawing{drawing_n}.xml");
+            let mut anchors = String::new();
+            for (i, drawing) in extras.drawings.iter().enumerate() {
+                let shape_id = i + 2;
+                let body = match &drawing.content {
+                    RawContent::Chart(chart) => {
+                        chart_n += 1;
+                        let chart_path = format!("xl/charts/chart{chart_n}.xml");
+                        set_entry(&mut entries, &chart_path, chart_xml(chart).into_bytes());
+                        add_content_type(&mut entries, Some(&chart_path), None, "application/vnd.openxmlformats-officedocument.drawingml.chart+xml");
+                        let rid = add_relationship(&mut entries, &drawing_path, "chart", &format!("../charts/chart{chart_n}.xml"));
+                        format!(
+                            r#"<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="{shape_id}" name="Gráfica {chart_n}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="{NS_C}"><c:chart xmlns:c="{NS_C}" r:id="{rid}"/></a:graphicData></a:graphic></xdr:graphicFrame>"#
+                        )
+                    }
+                    RawContent::Image { name, mime, data } => {
+                        image_n += 1;
+                        let ext = match mime.as_str() {
+                            "image/jpeg" => "jpeg",
+                            "image/gif" => "gif",
+                            _ => "png",
+                        };
+                        let media = format!("xl/media/image{image_n}.{ext}");
+                        set_entry(&mut entries, &media, data.clone());
+                        add_content_type(&mut entries, None, Some((ext, mime)), "");
+                        let rid = add_relationship(&mut entries, &drawing_path, "image", &format!("../media/image{image_n}.{ext}"));
+                        let (cx, cy) = match drawing.anchor {
+                            RawAnchor::OneCell(_, cx, cy) | RawAnchor::Absolute(_, _, cx, cy) => (cx, cy),
+                            RawAnchor::TwoCell(..) => (0, 0),
+                        };
+                        format!(
+                            r#"<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{shape_id}" name="{}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>"#,
+                            escape(if name.is_empty() { "Imagen" } else { name })
+                        )
+                    }
+                };
+                anchors.push_str(&anchor_xml(&drawing.anchor, &body));
+            }
+            let drawing_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="{NS_XDR}" xmlns:a="{NS_A}" xmlns:r="{NS_R}">{anchors}</xdr:wsDr>"#
+            );
+            set_entry(&mut entries, &drawing_path, drawing_xml.into_bytes());
+            add_content_type(&mut entries, Some(&drawing_path), None, "application/vnd.openxmlformats-officedocument.drawing+xml");
+            let file = drawing_path.rsplit('/').next().unwrap_or_default();
+            let rid = add_relationship(&mut entries, &sheet_path, "drawing", &format!("../drawings/{file}"));
+            xml = insert_before_first(&xml, &format!(r#"<drawing xmlns:r="{NS_R}" r:id="{rid}"/>"#), AFTER_DRAWING);
+        }
+        let index = entries.iter().position(|(n, _)| *n == sheet_path).unwrap_or(index);
         entries[index].1 = xml.into_bytes();
     }
     write_zip(path, &entries)

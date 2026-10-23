@@ -54,6 +54,49 @@ export type SheetView = {
   decorations: Decoration[];
   /** Listas desplegables de la hoja (desde 1). */
   validations: ValidationView[];
+  /** Gráficas e imágenes de la hoja, en píxeles desde la esquina de A1. */
+  drawings: DrawingView[];
+};
+
+export type ChartType = "column" | "bar" | "line" | "area" | "pie" | "doughnut" | "scatter";
+
+export type SeriesView = {
+  name: string;
+  color: string;
+  values: (number | null)[];
+  categories: string[];
+  /** Para dispersión: valores numéricos del eje X. */
+  x: (number | null)[];
+  refs: { name: string | null; name_is_ref: boolean; categories: string | null; values: string; color: string | null };
+};
+
+export type ChartView = {
+  type: "chart";
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind: ChartType;
+  title: string;
+  legend: boolean;
+  series: SeriesView[];
+};
+
+export type ImageView = { type: "image"; id: number; x: number; y: number; w: number; h: number; name: string };
+
+export type DrawingView = ChartView | ImageView;
+
+export type DrawingPatch = {
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  kind?: ChartType;
+  title?: string;
+  legend?: boolean;
+  /** Nuevo rango de datos, como "A1:C7". */
+  data?: string;
 };
 
 export type Decoration = {
@@ -195,6 +238,17 @@ export const sheetApi = {
   /** Pone una lista desplegable en el rango, o la quita con `null`. */
   setValidation: (sheet: number, range: Range, source: ListSource | null) =>
     invoke<SheetView>("sheet_validation", { sheet, ...rect(range), source }),
+
+  // Gráficas e imágenes
+  addChart: (sheet: number, range: Range, kind: ChartType) =>
+    invoke<{ id: number; view: SheetView }>("sheet_chart_add", { sheet, ...rect(range), kind }),
+  addImage: (sheet: number, path: string, x: number, y: number) =>
+    invoke<{ id: number; view: SheetView }>("sheet_image_add", { sheet, path, x, y }),
+  updateDrawing: (sheet: number, id: number, patch: DrawingPatch) =>
+    invoke<SheetView>("sheet_drawing_update", { sheet, id, patch }),
+  deleteDrawing: (sheet: number, id: number) => invoke<SheetView>("sheet_drawing_delete", { sheet, id }),
+  /** La imagen como data URL. */
+  imageData: (id: number) => invoke<string>("sheet_image_data", { id }),
 
   // Fórmulas
   /** Idioma de las funciones: "es" (SUMA, BUSCARV…) o "en" (SUM, VLOOKUP…). */
