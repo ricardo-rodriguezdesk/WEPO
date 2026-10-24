@@ -17,6 +17,8 @@ import { loadZoom, saveZoom } from "../../lib/zoom";
 import type { Annotation, FormValues, Highlight, PageRef, Source } from "./pdfEdit";
 import { mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
+import { convertPdf } from "../../lib/pdfConvert";
+import type { Converted } from "../../lib/pdfConvert";
 import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
 import "./PdfViewer.css";
@@ -29,6 +31,8 @@ type Props = {
   onOpen: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (path: string) => void;
+  /** Convertir a un documento editable (Write) o sus tablas a una hoja (Sheets). */
+  onConvert?: (kind: "write" | "sheets", converted: Converted, name: string) => void;
 };
 
 /** 100 % es el tamaño real: un punto del PDF mide 96/72 píxeles de pantalla. */
@@ -51,7 +55,7 @@ const HIGHLIGHTS = ["#FFE14D", "#7EE787", "#FF9ECF", "#7CC4FF", "#FFB366"];
 type Snapshot = { pages: PageRef[]; annotations: Annotation[]; form: FormValues };
 
 /** WEPO PDF: ver un PDF y editar sus páginas (ordenar, girar, quitar, combinar con otro PDF). */
-export default function PdfViewer({ data, path: initialPath, fileName: initialName, onHome, onOpen, onDirtyChange, onSaved }: Props) {
+export default function PdfViewer({ data, path: initialPath, fileName: initialName, onHome, onOpen, onDirtyChange, onSaved, onConvert }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [pages, setPagesState] = useState<PageRef[]>([]);
   const pagesRef = useRef(pages);
@@ -268,6 +272,34 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   function deleteAnnotation(id: string) {
     change({ annotations: annotationsRef.current.filter((a) => a.id !== id) });
     setSelectedAnnot(null);
+  }
+
+  // ───────────── convertir ─────────────
+
+  const [converting, setConverting] = useState(false);
+  async function convert(kind: "write" | "sheets") {
+    if (!onConvert) return;
+    if (locked) {
+      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no convertirlo." });
+      return;
+    }
+    setConverting(true);
+    setStatus({ text: "Convirtiendo…" });
+    try {
+      const inputs = pagesRef.current.map((p) => ({ doc: docs.get(p.source)!.doc, index: p.index, rotation: p.rotation }));
+      const converted = await convertPdf(inputs, (done, total) => setStatus({ text: `Convirtiendo… página ${done} de ${total}` }));
+      const hasTables = converted.blocks.some((b) => b.kind === "table" && !b.boxes);
+      if (!converted.blocks.length) setStatus({ text: "Este PDF no tiene texto que se pueda convertir (puede ser un escaneo).", error: true });
+      else if (kind === "sheets" && !hasTables) setStatus({ text: "No se encontraron tablas con bordes en este PDF.", error: true });
+      else {
+        setStatus(null);
+        onConvert(kind, converted, fileName);
+      }
+    } catch (e) {
+      setStatus({ text: `No se pudo convertir: ${e}`, error: true });
+    } finally {
+      setConverting(false);
+    }
   }
 
   function chooseTool(t: Tool) {
@@ -578,6 +610,11 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
             <path d="M12 10v7M9 14l3 3 3-3" />
           </svg>
         </ToolButton>
+        <Separator />
+        <span className="pdf-future-label">Convertir:</span>
+        <button type="button" className="fb-button pdf-convert" disabled={converting || !onConvert} onClick={() => void convert("write")} title="Abrir en WEPO Write para editarlo (títulos, párrafos, listas, tablas e imágenes)">
+          Write
+        </button>
         <Separator />
         <span className="pdf-future-label">Anotar:</span>
         {TOOLS.map((t) => (

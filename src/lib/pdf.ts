@@ -37,5 +37,6 @@ export async function readPdf(path: string): Promise<Uint8Array> {
 /** Abre el PDF con pdf.js. Se pasa una copia: pdf.js se queda con los bytes que recibe. */
 export function loadPdf(data: Uint8Array, password?: string): Promise<PDFDocumentProxy> {
   ensureWorker();
-  return getDocument({ data: data.slice(), password }).promise;
+  // fontExtraProperties: el nombre real de cada fuente (para saber qué es negrita o cursiva al convertir).
+  return getDocument({ data: data.slice(), password, fontExtraProperties: true }).promise;
 }

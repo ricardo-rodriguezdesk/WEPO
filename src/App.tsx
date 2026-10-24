@@ -14,6 +14,8 @@ import { emptyPresentation, openPresentation } from "./lib/present";
 import type { Deck } from "./editors/present/model";
 import PresentEditor from "./editors/present/PresentEditor";
 import PdfViewer from "./editors/pdf/PdfViewer";
+import type { Converted } from "./lib/pdfConvert";
+import { pdfToWrite } from "./editors/write/fromPdf";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
@@ -39,6 +41,8 @@ type OpenDocument = {
   present?: Deck;
   /** Viene de la copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
+  /** Mensaje al abrir (por ejemplo, de qué PDF se convirtió). */
+  notice?: string;
 };
 
 export default function App() {
@@ -115,6 +119,17 @@ export default function App() {
     addRecent(path);
     setRecents(loadRecents());
     setTitle(fileNameOf(path));
+  }
+
+  /** Un PDF convertido se abre como documento nuevo, sin guardar (en esta ventana). */
+  async function convertPdfTo(kind: "write" | "sheets", converted: Converted, pdfName: string) {
+    if (!(await confirmDiscard())) return;
+    const base = pdfName.replace(/\.pdf$/i, "") || "Sin título";
+    if (kind === "write") {
+      const write = pdfToWrite(converted);
+      show({ id: nextId.current++, kind: "write", fileName: base, path: null, write, recovered: true, notice: `Convertido de ${pdfName}: revisa el formato y guárdalo (⌘S) como .docx` });
+      dirty.current = true;
+    }
   }
 
   async function newDocument(kind: DocKind, here = false) {
@@ -316,6 +331,7 @@ export default function App() {
         initial={doc.write}
         path={doc.path}
         recovered={doc.recovered}
+        notice={doc.notice}
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
         {...common}
@@ -336,7 +352,17 @@ export default function App() {
     );
   }
   if (doc.kind === "pdf" && doc.pdf) {
-    return <PdfViewer key={doc.id} data={doc.pdf} path={doc.path} onDirtyChange={(value) => (dirty.current = value)} onSaved={rememberRecent} {...common} />;
+    return (
+      <PdfViewer
+        key={doc.id}
+        data={doc.pdf}
+        path={doc.path}
+        onDirtyChange={(value) => (dirty.current = value)}
+        onSaved={rememberRecent}
+        onConvert={(kind, converted, name) => void convertPdfTo(kind, converted, name)}
+        {...common}
+      />
+    );
   }
   return <ComingSoon key={doc.id} kind={doc.kind} {...common} />;
 }

@@ -9,6 +9,11 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - En Sheets y Present, el diálogo de impresión tiene «Exportar PDF…» junto a «Imprimir…», con las mismas opciones (área, orientación, notas).
 - Arreglo: WEPO Write volvía a imprimir hojas en blanco desde que se agregó el panel de comentarios.
 
+### Convertir un PDF en documento de WEPO Write
+- Botón *Convertir: Write* en el visor de PDF: reconstruye títulos, párrafos (con negritas, cursivas, colores, tamaños y fuente), listas con viñetas o numeradas, tablas con sus celdas combinadas y colores, recuadros, bloques de código, citas, imágenes, encabezado y pie con número de página, y el tamaño de la hoja.
+- Queda como documento nuevo sin guardar: se revisa y se guarda como .docx.
+- Con diseños complicados (columnas, cosas encimadas) puede hacer falta acomodar a mano; un escaneo sin texto se convierte en imágenes.
+
 ### WEPO PDF: edición
 - Ordenar páginas arrastrando las miniaturas, girarlas, quitarlas y elegir varias a la vez.
 - Combinar: agregar las páginas de otro PDF donde quieras, y guardar páginas elegidas como un PDF nuevo.

@@ -46,6 +46,8 @@ type Props = {
   onSaved: (path: string) => void;
   /** Viene de una copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
+  /** Mensaje al abrir (en lugar del de "documento recuperado"). */
+  notice?: string;
 };
 
 const AUTOSAVE_KEY = "wepo.autosave";
@@ -231,7 +233,7 @@ export default function WriteEditor(props: Props) {
   useEffect(() => {
     if (props.recovered) {
       onDirtyChange(true);
-      setStatus({ text: "Documento recuperado: guárdalo para conservar los cambios" });
+      setStatus({ text: props.notice ?? "Documento recuperado: guárdalo para conservar los cambios" });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
