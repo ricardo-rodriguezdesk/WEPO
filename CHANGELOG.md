@@ -18,6 +18,12 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Se abren y se guardan en .pptx: las transiciones con su duración exacta y las gráficas como gráficas de PowerPoint, con su libro de Excel incrustado (en PowerPoint funciona «Editar datos»). Ya no aparece el aviso de que se pierden las transiciones o las gráficas.
 - Sin transición, la diapositiva cambia de golpe, como en PowerPoint (antes siempre se desvanecía un poco).
 
+### Animaciones en WEPO Present
+- Botón *Animación* para el elemento elegido: Aparecer, Desvanecer, Entrar volando, Zoom o Barrido, con dirección, duración y retraso; que empiece al hacer clic, con la anterior o después de la anterior; y los cuadros de texto pueden entrar párrafo por párrafo.
+- En el menú se ve el orden de todas las animaciones de la diapositiva (para subirlas, bajarlas o quitarlas), con vista previa; junto a cada elemento animado sale el número del clic en que entra.
+- Al presentar, cada clic hace entrar lo que sigue; ← regresa un paso.
+- Se abren y se guardan en .pptx con los efectos de PowerPoint. Las de salida, de énfasis o con trayectoria todavía no (avisa al abrir).
+
 ## 0.3.1 (24 de octubre de 2026)
 
 Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.

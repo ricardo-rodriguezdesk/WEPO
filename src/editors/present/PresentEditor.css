@@ -355,3 +355,27 @@
 .present-advance { display: flex; align-items: center; gap: 6px; }
 .present-advance input[type="number"] { width: 56px; }
 .present-thumb-transition { position: absolute; left: 4px; bottom: 4px; z-index: 2; font-size: 10px; color: var(--kind-accent); }
+
+/* Animaciones: numeritos junto a los elementos y la lista en orden */
+.present-anim-badge {
+  position: absolute;
+  z-index: 5;
+  padding: 1px 5px;
+  font: 600 11px/16px -apple-system, "Segoe UI", sans-serif;
+  color: #fff;
+  background: var(--kind-accent);
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.present-animations { width: 360px; }
+.present-anim-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; counter-reset: anim; }
+.present-anim-list li { display: flex; align-items: center; gap: 4px; padding: 3px 4px; border-radius: 5px; counter-increment: anim; }
+.present-anim-list li::before { content: counter(anim); width: 16px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.present-anim-list li.current { background: color-mix(in srgb, var(--kind-accent) 12%, transparent); }
+.present-anim-when { flex: none; width: 70px; color: var(--muted); font-size: 10.5px; line-height: 1.1; }
+.present-anim-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.present-anim-list button { flex: none; width: 20px; height: 20px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; border-radius: 4px; }
+.present-anim-list button:hover:not(:disabled) { background: var(--border); color: inherit; }
+.present-anim-list button:disabled { opacity: 0.3; cursor: default; }
+@media print { .present-anim-badge { display: none; } }

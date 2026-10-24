@@ -63,7 +63,7 @@ export function TextContent({ text, hint }: { text: TextBody; hint?: string | nu
   return (
     <>
       {text.paras.map((p, i) => (
-        <p key={i} style={paraStyle(p)} data-bullet={p.bullet ?? undefined} data-level={p.level || undefined}>
+        <p key={i} style={paraStyle(p)} data-bullet={p.bullet ?? undefined} data-level={p.level || undefined} data-para={i}>
           {p.runs.some((r) => r.text) ? (
             p.runs.map((r, j) => {
               const parts = r.text.split("\n");
@@ -226,6 +226,7 @@ export default function SlideView({ slide, deck, scale, hints = false, editingId
             key={el.id}
             className={`slide-el slide-${el.kind}${el.kind === "shape" && isLine(el.geom) ? " slide-line" : ""}`}
             data-el={interactive ? el.id : undefined}
+            data-anim={el.id}
             style={elementBoxStyle(el)}
           >
             {el.kind === "shape" && <ShapeView el={el} deck={deck} hints={hints} textSlot={el.id === editingId ? editingSlot : undefined} />}

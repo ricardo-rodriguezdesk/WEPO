@@ -13,7 +13,7 @@ import type { MenuItem } from "../../components/ContextMenu";
 import { AlignIcon, ColorButton, FONTS, Popover, Separator, ToolButton } from "../sheets/FormatBar";
 import ZoomControl from "../sheets/ZoomControl";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import type { Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Transition } from "./model";
+import type { AnimEffect, Animation, Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Transition } from "./model";
 import { LAYOUTS, THEMES, cloneElement, cloneSlide, isEmptyText, layoutElements, newSlide, placeholderHint, slideTitle, uid } from "./model";
 import { SHAPES, isLine, shapePath } from "./geometry";
 import SlideView, { textDefaults } from "./SlideView";
@@ -25,6 +25,7 @@ import Presenter from "./Presenter";
 import ChartEditor from "./ChartEditor";
 import { newChart } from "./charts";
 import { DIRECTIONS, DURATIONS, TRANSITIONS, playTransition, transitionName } from "./transitions";
+import { ANIM_DIRECTIONS, EFFECTS, TRIGGERS, animationSteps, effectName, newAnimation, playStep, textParagraphs } from "./animations";
 import PrintSlides, { PresentPrintDialog, sheetSize } from "./PrintSlides";
 import type { SlidePrintJob } from "./PrintSlides";
 import { imageDataUrl } from "../../lib/write";
@@ -327,6 +328,55 @@ export default function PresentEditor(props: Props) {
     if (all) setStatus({ text: t ? `Transición «${transitionName(t)}» en todas las diapositivas` : "Se quitaron las transiciones" });
   }
 
+  // ───────────── animaciones ─────────────
+
+  /** Pone, cambia o quita (null) la animación de entrada de un elemento. */
+  function setAnimation(target: string, anim: Animation | null) {
+    const d = deckRef.current;
+    const before = d.slides[current].animations?.find((a) => a.target === target);
+    commit(
+      withSlide(d, current, (s) => {
+        const list = s.animations ?? [];
+        const at = list.findIndex((a) => a.target === target);
+        const next = anim ? (at >= 0 ? list.map((a, i) => (i === at ? anim : a)) : [...list, anim]) : list.filter((a) => a.target !== target);
+        return { ...s, animations: next.length ? next : undefined };
+      }),
+    );
+    // Al elegir otro efecto (o dirección) se ve cómo queda.
+    if (anim && (!before || before.effect !== anim.effect || before.direction !== anim.direction)) previewAnimation(anim.id);
+  }
+
+  function moveAnimation(id: string, delta: number) {
+    commit(
+      withSlide(deckRef.current, current, (s) => {
+        const list = [...(s.animations ?? [])];
+        const i = list.findIndex((a) => a.id === id);
+        const j = i + delta;
+        if (i < 0 || j < 0 || j >= list.length) return s;
+        [list[i], list[j]] = [list[j], list[i]];
+        return { ...s, animations: list };
+      }),
+    );
+  }
+
+  /** Vista previa de una animación (o de todas, en orden) en el editor. */
+  function previewAnimation(id?: string) {
+    requestAnimationFrame(() => {
+      const root = stage.current?.querySelector<HTMLElement>(".present-main-slide .slide");
+      const s = deckRef.current.slides[current];
+      if (!root || !s) return;
+      let offset = 0;
+      for (const step of animationSteps(s)) {
+        const items = step.items.filter((i) => !id || i.anim.id === id);
+        if (!items.length) continue;
+        const base = Math.min(...items.map((i) => i.start));
+        const shifted = { ...step, items: items.map((i) => ({ ...i, start: i.start - base, end: i.end - base })) };
+        playStep(shifted, root, s, deckRef.current, offset);
+        offset += Math.max(...shifted.items.map((i) => i.end)) + 250;
+      }
+    });
+  }
+
   /** Vista previa: la diapositiva entra con su transición en el editor. */
   function previewTransition(t: Transition | null | undefined = slide.transition) {
     // Se anima el marco (la diapositiva de adentro ya lleva su escala en transform).
@@ -359,7 +409,13 @@ export default function PresentEditor(props: Props) {
 
   function deleteSelected() {
     if (!selection.length) return;
-    commit(withSlide(deckRef.current, current, (s) => ({ ...s, elements: s.elements.filter((e) => !selection.includes(e.id)) })));
+    commit(
+      withSlide(deckRef.current, current, (s) => ({
+        ...s,
+        elements: s.elements.filter((e) => !selection.includes(e.id)),
+        animations: s.animations?.filter((a) => !selection.includes(a.target)),
+      })),
+    );
     setSelection([]);
     setEditing(null);
   }
@@ -1117,6 +1173,9 @@ export default function PresentEditor(props: Props) {
         onEditChart={() => setChartPanel(true)}
         onTransition={setTransition}
         onPreviewTransition={() => previewTransition()}
+        onAnimation={setAnimation}
+        onMoveAnimation={moveAnimation}
+        onPreviewAnimation={previewAnimation}
         formatRuns={formatRuns}
         formatParas={formatParas}
         onFill={(color) => selected && updateElement(selected, (e) => ({ ...e, fill: color || null }) as SlideElement)}
@@ -1209,6 +1268,7 @@ export default function PresentEditor(props: Props) {
                   ) : null
                 }
               >
+                <AnimationBadges slide={slide} scale={scale} />
                 {selectedEls.map((el) => (
                   <SelectionBox key={el.id} el={el} scale={scale} editing={editing === el.id || editingCell?.id === el.id} handles={selectedEls.length === 1} />
                 ))}
@@ -1361,6 +1421,9 @@ type BarProps = {
   onEditChart: () => void;
   onTransition: (t: Transition | null, all?: boolean) => void;
   onPreviewTransition: () => void;
+  onAnimation: (target: string, anim: Animation | null) => void;
+  onMoveAnimation: (id: string, delta: number) => void;
+  onPreviewAnimation: (id?: string) => void;
   formatRuns: (fn: (r: Run) => Run, tiptap: (ed: Editor) => void) => void;
   formatParas: (fn: (p: Para) => Para, tiptap: (ed: Editor) => void) => void;
   onFill: (color: string) => void;
@@ -1576,6 +1639,7 @@ function PresentBar(props: BarProps) {
         </svg>
       </ToolButton>
       <TransitionMenu slide={props.slide} onChange={props.onTransition} onPreview={props.onPreviewTransition} />
+      <AnimationMenu slide={props.slide} selected={props.count === 1 ? selected : null} onChange={props.onAnimation} onMove={props.onMoveAnimation} onPreview={props.onPreviewAnimation} />
       {selected?.kind === "chart" && (
         <button type="button" className="fb-button present-theme-btn" onClick={props.onEditChart} title="Tipo, título y datos de la gráfica">
           Datos de la gráfica
@@ -1944,6 +2008,228 @@ function TransitionMenu({ slide, onChange, onPreview }: { slide: Slide; onChange
         </div>
       )}
     </Popover>
+  );
+}
+
+/** Animación de entrada del elemento elegido y el orden de todas las de la diapositiva. */
+function AnimationMenu({
+  slide,
+  selected,
+  onChange,
+  onMove,
+  onPreview,
+}: {
+  slide: Slide;
+  selected: SlideElement | null;
+  onChange: (target: string, anim: Animation | null) => void;
+  onMove: (id: string, delta: number) => void;
+  onPreview: (id?: string) => void;
+}) {
+  const list = slide.animations ?? [];
+  const anim = selected ? (list.find((a) => a.target === selected.id) ?? null) : null;
+  const info = EFFECTS.find((e) => e.id === (anim?.effect ?? null));
+  const paragraphs = textParagraphs(selected ?? undefined).length;
+  const set = (patch: Partial<Animation>) => selected && anim && onChange(selected.id, { ...anim, ...patch });
+  const label = (a: Animation) => {
+    const el = slide.elements.find((e) => e.id === a.target);
+    const text = el?.kind === "shape" ? el.text?.paras.map((p) => p.runs.map((r) => r.text).join("")).join(" ").trim() : "";
+    const kind = el?.kind === "image" ? "Imagen" : el?.kind === "table" ? "Tabla" : el?.kind === "chart" ? "Gráfica" : "Forma";
+    return text ? (text.length > 26 ? `${text.slice(0, 25)}…` : text) : (el?.name ?? kind);
+  };
+  return (
+    <Popover
+      button={(toggleOpen, open) => (
+        <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Cómo entra el elemento elegido al presentar">
+          Animación{anim ? `: ${effectName(anim.effect)}` : ""} ▾
+        </button>
+      )}
+    >
+      {() => (
+        <div className="present-transitions present-animations">
+          {selected ? (
+            <>
+              <p className="present-menu-title">Entrada del elemento elegido</p>
+              <div className="present-transition-grid" role="radiogroup" aria-label="Animación">
+                {EFFECTS.map((e) => (
+                  <button
+                    key={e.id ?? "none"}
+                    type="button"
+                    role="radio"
+                    aria-checked={(anim?.effect ?? null) === e.id}
+                    className={(anim?.effect ?? null) === e.id ? "current" : ""}
+                    onClick={() => {
+                      if (!e.id) return onChange(selected.id, null);
+                      const base = anim ? { ...anim, effect: e.id as AnimEffect } : newAnimation(selected.id, e.id as AnimEffect);
+                      onChange(selected.id, {
+                        ...base,
+                        direction: e.directions ? (base.direction ?? "up") : undefined,
+                        duration: e.id === "appear" ? 0 : base.duration || 500,
+                      });
+                    }}
+                  >
+                    <AnimationIcon effect={e.id} />
+                    <span>{e.name}</span>
+                  </button>
+                ))}
+              </div>
+              {anim && (
+                <>
+                  <div className="present-menu-row">
+                    <label className="field">
+                      Empieza
+                      <select className="input" value={anim.trigger} onChange={(e) => set({ trigger: e.target.value as Animation["trigger"] })}>
+                        {TRIGGERS.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {info?.directions && (
+                      <label className="field">
+                        Dirección
+                        <select className="input" value={anim.direction ?? "up"} onChange={(e) => set({ direction: e.target.value as Animation["direction"] })}>
+                          {ANIM_DIRECTIONS.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                  <div className="present-menu-row">
+                    {anim.effect !== "appear" && (
+                      <label className="field">
+                        Duración
+                        <select className="input" value={anim.duration} onChange={(e) => set({ duration: Number(e.target.value) })}>
+                          {[...new Set([250, 500, 750, 1000, 1500, 2000, anim.duration])].sort((a, b) => a - b).map((ms) => (
+                            <option key={ms} value={ms}>
+                              {(ms / 1000).toLocaleString("es-MX")} s
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <label className="field">
+                      Retraso (s)
+                      <input
+                        type="number"
+                        className="input"
+                        min={0}
+                        max={60}
+                        step={0.25}
+                        value={anim.delay / 1000}
+                        aria-label="Retraso en segundos"
+                        onChange={(e) => set({ delay: Math.max(0, Number(e.target.value) || 0) * 1000 })}
+                      />
+                    </label>
+                  </div>
+                  {paragraphs > 1 && (
+                    <label className="radio">
+                      <input type="checkbox" checked={Boolean(anim.byParagraph)} onChange={(e) => set({ byParagraph: e.target.checked || undefined })} /> Por párrafo (un clic para cada uno)
+                    </label>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            <p className="hint">Elige un elemento de la diapositiva para darle una animación de entrada.</p>
+          )}
+          {list.length > 0 && (
+            <>
+              <p className="present-menu-title">Orden en esta diapositiva</p>
+              <ol className="present-anim-list">
+                {list.map((a, i) => (
+                  <li key={a.id} className={a.target === selected?.id ? "current" : ""}>
+                    <span className="present-anim-when">{TRIGGERS.find((t) => t.id === a.trigger)?.name}</span>
+                    <span className="present-anim-name">
+                      {effectName(a.effect)} · {label(a)}
+                    </span>
+                    <button type="button" aria-label="Subir" title="Antes" disabled={i === 0} onClick={() => onMove(a.id, -1)}>
+                      ↑
+                    </button>
+                    <button type="button" aria-label="Bajar" title="Después" disabled={i === list.length - 1} onClick={() => onMove(a.id, 1)}>
+                      ↓
+                    </button>
+                    <button type="button" aria-label="Quitar la animación" title="Quitar" onClick={() => onChange(a.target, null)}>
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+          <div className="present-menu-row">
+            <button type="button" className="btn" disabled={!anim} onClick={() => anim && onPreview(anim.id)}>
+              Vista previa
+            </button>
+            <button type="button" className="btn" disabled={!list.length} onClick={() => onPreview()}>
+              Ver todas
+            </button>
+          </div>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function AnimationIcon({ effect }: { effect: AnimEffect | null }) {
+  const star = <path d="M18 6l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5-3.6-3.5 5-.7z" fill="currentColor" />;
+  const extra: Record<string, ReactNode> = {
+    none: <path d="M10 9l16 10M26 9L10 19" stroke="currentColor" strokeWidth="1.4" opacity="0.5" />,
+    appear: star,
+    fade: <g opacity="0.45">{star}</g>,
+    fly: (
+      <g>
+        {star}
+        <path d="M18 25v-3M14 25v-2M22 25v-2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      </g>
+    ),
+    zoom: <g transform="translate(18 14) scale(0.6) translate(-18 -14)">{star}</g>,
+    wipe: (
+      <g>
+        <clipPath id="wipe-icon">
+          <rect x="3" y="14" width="30" height="12" />
+        </clipPath>
+        <g clipPath="url(#wipe-icon)">{star}</g>
+      </g>
+    ),
+  };
+  return (
+    <svg width="36" height="28" viewBox="0 0 36 28" aria-hidden>
+      {extra[effect ?? "none"]}
+    </svg>
+  );
+}
+
+/** Numeritos junto a cada elemento animado (en qué clic entra), como en PowerPoint. */
+function AnimationBadges({ slide, scale }: { slide: Slide; scale: number }) {
+  const steps = animationSteps(slide);
+  if (!steps.length) return null;
+  const auto = steps[0]?.auto;
+  const byTarget = new Map<string, number[]>();
+  steps.forEach((st, i) => {
+    const n = auto ? i : i + 1;
+    for (const item of st.items) {
+      const list = byTarget.get(item.anim.target) ?? [];
+      if (!list.includes(n)) list.push(n);
+      byTarget.set(item.anim.target, list);
+    }
+  });
+  return (
+    <>
+      {[...byTarget.entries()].map(([id, numbers]) => {
+        const el = slide.elements.find((e) => e.id === id);
+        if (!el) return null;
+        const text = numbers.length > 3 ? `${numbers[0]}–${numbers[numbers.length - 1]}` : numbers.join(", ");
+        return (
+          <span key={id} className="present-anim-badge" style={{ left: el.x, top: el.y, transform: `scale(${1 / scale})`, transformOrigin: "top left" }} aria-hidden>
+            {text}
+          </span>
+        );
+      })}
+    </>
   );
 }
 

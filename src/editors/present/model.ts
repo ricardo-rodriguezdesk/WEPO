@@ -104,6 +104,25 @@ export type Transition = {
   advanceAfter?: number | null;
 };
 
+/** Animación de entrada de un elemento de la diapositiva. */
+export type AnimEffect = "appear" | "fade" | "fly" | "zoom" | "wipe";
+export type AnimTrigger = "click" | "with" | "after";
+export type Animation = {
+  id: string;
+  /** Elemento que entra (su id). */
+  target: string;
+  effect: AnimEffect;
+  /** De dónde viene (entrar volando, barrido). */
+  direction?: Direction;
+  /** Al hacer clic, con la anterior o después de la anterior. */
+  trigger: AnimTrigger;
+  /** Milisegundos. */
+  duration: number;
+  delay: number;
+  /** Un cuadro de texto que entra párrafo por párrafo (un clic cada uno). */
+  byParagraph?: boolean;
+};
+
 export type Slide = {
   id: string;
   layout: LayoutId;
@@ -115,6 +134,8 @@ export type Slide = {
   notes: string;
   hidden?: boolean;
   transition?: Transition | null;
+  /** Animaciones de entrada, en el orden en que pasan. */
+  animations?: Animation[];
 };
 
 export type Theme = {
@@ -324,5 +345,13 @@ export function cloneElement<T extends SlideElement>(el: T, dx = 0, dy = 0): T {
 }
 
 export function cloneSlide(slide: Slide): Slide {
-  return { ...structuredClone(slide), id: uid("s"), elements: slide.elements.map((e) => cloneElement(e)) };
+  // Los elementos copiados tienen ids nuevos: las animaciones apuntan a ellos.
+  const ids = new Map<string, string>();
+  const elements = slide.elements.map((e) => {
+    const copy = cloneElement(e);
+    ids.set(e.id, copy.id);
+    return copy;
+  });
+  const animations = slide.animations?.filter((a) => ids.has(a.target)).map((a) => ({ ...a, id: uid("a"), target: ids.get(a.target)! }));
+  return { ...structuredClone(slide), id: uid("s"), elements, animations };
 }

@@ -10,6 +10,7 @@ import { EMU_PER_PX, layoutElements } from "./model";
 import { isLine } from "./geometry";
 import { chartWorkbook, chartXml } from "./charts";
 import { transitionXml } from "./transitions";
+import { timingXml } from "./animations";
 
 const NS = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"`;
 const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -110,6 +111,8 @@ function lineXml(line: ShapeElement["line"]): string {
 
 class SlideWriter {
   rels: string[] = [];
+  /** Número de forma (cNvPr id) de cada elemento, para las animaciones. */
+  spids = new Map<string, number>();
   private nextRel = 2; // rId1 es el diseño
   private nextId = 2;
   constructor(
@@ -128,6 +131,7 @@ class SlideWriter {
 
   shape(el: ShapeElement): string {
     const id = this.nextId++;
+    this.spids.set(el.id, id);
     const ph = el.placeholder ? `<p:ph${el.placeholder.type ? ` type="${el.placeholder.type}"` : ""}${el.placeholder.idx ? ` idx="${el.placeholder.idx}"` : ""}/>` : "";
     const name = esc(el.name ?? (el.role ? `${el.role === "title" ? "Título" : el.role === "subtitle" ? "Subtítulo" : "Contenido"} ${id}` : `Forma ${id}`));
     const isText = !el.placeholder && el.geom === "rect" && !el.fill && !el.line && el.text;
@@ -141,12 +145,14 @@ class SlideWriter {
     const data = dataUrlBytes(el.src);
     if (!data) return "";
     const id = this.nextId++;
+    this.spids.set(el.id, id);
     const rid = this.rel("image", `../media/${this.media(data.bytes, data.ext)}`);
     return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(el.name ?? `Imagen ${id}`)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm(el)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
 
   table(el: TableElement): string {
     const id = this.nextId++;
+    this.spids.set(el.id, id);
     const border = el.border ? `<a:solidFill><a:srgbClr val="${hex(el.border)}"/></a:solidFill>` : "<a:noFill/>";
     const edge = (tag: string) => `<a:${tag} w="12700">${border}</a:${tag}>`;
     const rows = el.rows
@@ -169,6 +175,7 @@ class SlideWriter {
 
   chart(el: ChartElement): string {
     const id = this.nextId++;
+    this.spids.set(el.id, id);
     const rid = this.rel("chart", `../charts/${this.chartPart(el)}`);
     return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${esc(el.name ?? `Gráfica ${id}`)}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>${xfrm(el, "p:xfrm")}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
   }
@@ -299,7 +306,7 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
     const bg = backgroundXml(slide.background ?? (slide.backgroundImage ? null : null), bgRel);
     put(
       `ppt/slides/slide${n}.xml`,
-      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}</p:sld>`,
+      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timingXml(slide, (id) => w.spids.get(id))}</p:sld>`,
     );
     const rels = [`<Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout${layoutIndex}.xml"/>`, ...w.rels];
     if (slide.notes.trim()) {

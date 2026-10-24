@@ -10,6 +10,7 @@ import type { ChartElement, Deck, ImageElement, LayoutId, Line, Para, Role, Run,
 import { DEFAULT_THEME, EMU_PER_PX, uid } from "./model";
 import { readChartXml } from "./charts";
 import { readTransition } from "./transitions";
+import { readTiming } from "./animations";
 
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const P = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -124,8 +125,16 @@ function roleOf(type: string | null): Role {
   return type === "title" || type === "ctrTitle" ? "title" : type === "subTitle" ? "subtitle" : "body";
 }
 
+/** Número de forma (cNvPr id) de un elemento de la diapositiva. */
+function shapeId(el: Element): string | null {
+  const nv = kids(el).find((c) => c.localName.startsWith("nv") && c.localName.endsWith("Pr"));
+  return child(nv, "cNvPr")?.getAttribute("id") ?? null;
+}
+
 class PptxReader {
   unsupported = new Set<string>();
+  /** Mientras se lee una diapositiva: número de forma → id del elemento (para las animaciones). */
+  private shapeIds: Map<string, string> | null = null;
   theme: Theme = structuredClone(DEFAULT_THEME);
   private schemeColors = new Map<string, string>();
   private parts = new Map<string, Part>();
@@ -463,6 +472,10 @@ class PptxReader {
 
   async elements(tree: Element | undefined, part: Part, layout: Part | null, master: Part | null, inheritedOnly = false): Promise<SlideElement[]> {
     const out: SlideElement[] = [];
+    const mark = (source: Element, element: SlideElement) => {
+      const id = shapeId(source);
+      if (id && this.shapeIds && !inheritedOnly) this.shapeIds.set(id, element.id);
+    };
     for (const el of kids(tree)) {
       const name = el.localName;
       if (name === "sp" || name === "cxnSp") {
@@ -493,6 +506,7 @@ class PptxReader {
           placeholder: ph ?? undefined,
         };
         if (shape.w <= 0 && shape.h <= 0) continue;
+        mark(el, shape);
         out.push(shape);
       } else if (name === "pic") {
         const ph = phOf(el);
@@ -502,7 +516,11 @@ class PptxReader {
         const src = await this.image(embed ? part.rels.get(embed) : undefined);
         if (path(el, "blipFill", "srcRect")) this.unsupported.add("imágenes recortadas");
         const fromLayout = ph && layout ? findPlaceholder(layout, ph) : undefined;
-        if (src) out.push({ id: uid(), kind: "image", src, ...this.box(child(el, "spPr"), [child(fromLayout, "spPr")]) } as ImageElement);
+        if (src) {
+          const image = { id: uid(), kind: "image", src, ...this.box(child(el, "spPr"), [child(fromLayout, "spPr")]) } as ImageElement;
+          mark(el, image);
+          out.push(image);
+        }
       } else if (name === "grpSp") {
         // Los grupos se desarman: cada pieza queda en su lugar en la diapositiva.
         const xfrm = path(el, "grpSpPr", "xfrm");
@@ -524,10 +542,10 @@ class PptxReader {
         const uri = path(el, "graphic", "graphicData")?.getAttribute("uri") ?? "";
         if (uri.endsWith("/table")) {
           const table = this.table(el, part);
-          if (table) out.push(table);
+          if (table) (mark(el, table), out.push(table));
         } else if (uri.endsWith("/chart")) {
           const chart = await this.chart(el, part);
-          if (chart) out.push(chart);
+          if (chart) (mark(el, chart), out.push(chart));
           else this.unsupported.add("gráficas");
         } else if (uri.includes("chart")) this.unsupported.add("gráficas");
         else if (uri.includes("diagram")) this.unsupported.add("SmartArt");
@@ -668,14 +686,19 @@ class PptxReader {
       }
       const { transition, other } = readTransition(slide.root);
       if (other) this.unsupported.add("algunas transiciones (se cambian por Desvanecer)");
-      if (child(slide.root, "timing")) this.unsupported.add("animaciones");
 
       // Lo que el patrón y el diseño dibujan en todas las diapositivas (logos, franjas…) va al fondo.
       const inherited: SlideElement[] = [];
       const showMaster = (part: Part | null) => part?.root.getAttribute("showMasterSp") !== "0";
       if (master && showMaster(layout) && showMaster(slide)) inherited.push(...(await this.elements(path(master.root, "cSld", "spTree"), master, null, master, true)));
       if (layout && showMaster(slide)) inherited.push(...(await this.elements(path(layout.root, "cSld", "spTree"), layout, null, master, true)));
+      this.shapeIds = new Map();
       const own = await this.elements(path(slide.root, "cSld", "spTree"), slide, layout, master);
+      const ids = this.shapeIds;
+      this.shapeIds = null;
+      const timing = readTiming(slide.root, (spid) => ids.get(spid));
+      if (timing.skipped) this.unsupported.add("animaciones de salida, de énfasis o con trayectoria");
+      if (timing.approximated) this.unsupported.add("algunas animaciones de entrada (se cambian por Desvanecer)");
       const bg = await this.background([slide, layout, master]);
       slides.push({
         id: uid("s"),
@@ -686,6 +709,7 @@ class PptxReader {
         notes: await this.notes(slide),
         hidden: slide.root.getAttribute("show") === "0" || undefined,
         transition,
+        animations: timing.animations.length ? timing.animations : undefined,
       });
     }
     return { width, height, slides, theme: this.theme, unsupported: [...this.unsupported] };

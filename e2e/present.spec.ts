@@ -93,4 +93,53 @@ test.describe("WEPO Present", () => {
     await expect(page.getByRole("button", { name: /^Transición: Empujar/ })).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test("animaciones: entran clic por clic (también por párrafo) y se guardan en PowerPoint", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "presentacion.pptx");
+    await page.locator(".present-thumb").nth(1).click();
+    const els = page.locator(".present-main-slide [data-el]");
+    const menu = page.locator(".present-animations");
+    const pick = async (index: number, effect: string) => {
+      await els.nth(index).click();
+      await page.getByRole("button", { name: /^Animación/ }).click();
+      await menu.getByRole("radio", { name: effect }).click();
+    };
+    await pick(0, "Desvanecer");
+    await page.keyboard.press("Escape");
+    await pick(1, "Entrar volando");
+    await menu.getByLabel(/Por párrafo/).check();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".present-anim-badge")).toHaveText(["1", "2–7"]);
+
+    // Al presentar: primero no se ve nada animado; cada clic hace entrar lo que sigue.
+    const shown = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".presenter-scope [data-anim]")].map((e) =>
+          [getComputedStyle(e).visibility === "visible", ...[...e.querySelectorAll("[data-para]")].map((p) => getComputedStyle(p).visibility === "visible")].map(Number).join(""),
+        ),
+      );
+    await page.keyboard.press("Shift+F5");
+    await expect(page.locator(".presenter")).toBeVisible();
+    await expect.poll(shown).toEqual(["00", "1000000"]);
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(shown).toEqual(["11", "1000000"]);
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(shown).toEqual(["11", "1100000"]);
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(shown).toEqual(["11", "1000000"]);
+    await page.keyboard.press("Escape");
+
+    // Guardar en PowerPoint y volver a abrir: siguen las mismas animaciones.
+    const out = outFile("animaciones.pptx");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".present-footer .sheet-status")).toContainText("Guardado");
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await page.locator(".present-thumb").nth(1).click();
+    await expect(page.locator(".present-anim-badge")).toHaveText(["1", "2–7"]);
+    expect(errors).toEqual([]);
+  });
 });

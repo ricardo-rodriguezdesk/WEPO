@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Deck, Slide } from "./model";
 import SlideView from "./SlideView";
 import { playTransition } from "./transitions";
+import { animationSteps, hiddenCss, playStep } from "./animations";
 
 type Props = {
   deck: Deck;
@@ -56,6 +57,41 @@ export default function Presenter({ deck, start, onExit }: Props) {
   const current = visible[Math.min(pos, visible.length - 1)];
   const next = visible[pos + 1];
 
+  // Animaciones: cuántos clics de la diapositiva ya se vieron. Lo de los clics que faltan está escondido.
+  const [step, setStep] = useState(0);
+  const steps = useMemo(() => (current && pos < visible.length ? animationSteps(current.s) : []), [current, pos, visible.length]);
+  /** El paso que se tiene que animar en cuanto se dibuje (con su espera extra, p. ej. la transición). */
+  const play = useRef<{ pos: number; step: number; offset: number } | null>(null);
+  const transitionTime = (n: number) => {
+    const t = visible[n]?.s.transition;
+    return t && t.kind !== "none" ? t.duration : 0;
+  };
+  /** Llega a la diapositiva `n`: sin nada revelado (o todo, si se regresa), y si empieza sola, se anima. */
+  function enter(n: number, revealAll: boolean) {
+    setPos(n);
+    if (n >= visible.length) return setStep(0);
+    const st = animationSteps(visible[n].s);
+    if (revealAll) return setStep(st.length);
+    if (st[0]?.auto) {
+      play.current = { pos: n, step: 1, offset: transitionTime(n) };
+      return setStep(1);
+    }
+    setStep(0);
+  }
+  useEffect(() => {
+    if (pos < visible.length) enter(pos, false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const p = play.current;
+    if (!p || p.pos !== pos || p.step !== step) return;
+    play.current = null;
+    const root = document.querySelector<HTMLElement>(".presenter-scope");
+    const st = steps[step - 1];
+    if (!root || !st) return;
+    const running = playStep(st, root, current.s, deck, p.offset);
+    return () => running.forEach((a) => a.finish());
+  }, [pos, step]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Transición: al avanzar, la diapositiva anterior se queda debajo mientras entra la nueva.
   const [leaving, setLeaving] = useState<Slide | null>(null);
   const lastPos = useRef(pos);
@@ -74,13 +110,14 @@ export default function Presenter({ deck, start, onExit }: Props) {
     return playTransition(t, enterRef.current, exitRef.current, () => setLeaving(null));
   }, [leaving]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pasar sola a la siguiente (si la diapositiva lo pide), contando desde que terminó de entrar.
+  // Pasar sola a la siguiente (si la diapositiva lo pide), cuando ya entró todo lo de sus clics.
   useEffect(() => {
     const t = visible[pos]?.s.transition;
-    if (!t?.advanceAfter || pos >= visible.length || blank) return;
-    const timer = setTimeout(() => actions.current.go(1), t.advanceAfter + (t.kind === "none" ? 0 : t.duration));
+    if (!t?.advanceAfter || pos >= visible.length || blank || step < steps.length) return;
+    const lastEnd = steps.length ? Math.max(0, ...steps[steps.length - 1].items.map((i) => i.end)) : 0;
+    const timer = setTimeout(() => actions.current.go(1), t.advanceAfter + (steps.length ? lastEnd : transitionTime(pos)));
     return () => clearTimeout(timer);
-  }, [pos, blank]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pos, step, blank]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function exit() {
     if (exiting.current) return;
@@ -102,23 +139,35 @@ export default function Presenter({ deck, start, onExit }: Props) {
 
   function go(delta: number) {
     setBlank(null);
-    setPos((p) => {
-      const n = p + delta;
-      // Después de la última, una pantalla negra; otra vez avanzar sale de la presentación.
-      if (n >= visible.length) {
-        if (p === visible.length) {
-          setTimeout(exit);
-          return p;
-        }
-        return visible.length;
-      }
-      return Math.max(0, n);
-    });
+    // Primero los clics de la diapositiva (lo que falta por entrar), luego la siguiente.
+    if (delta > 0 && pos < visible.length && step < steps.length) {
+      play.current = { pos, step: step + 1, offset: 0 };
+      setStep(step + 1);
+      return;
+    }
+    if (delta < 0 && pos < visible.length && step > (steps[0]?.auto ? 1 : 0)) {
+      setStep(step - 1);
+      return;
+    }
+    const n = pos + delta;
+    // Después de la última, una pantalla negra; otra vez avanzar sale de la presentación.
+    if (n >= visible.length) {
+      if (pos === visible.length) setTimeout(exit);
+      else enter(visible.length, false);
+      return;
+    }
+    if (n < 0) return;
+    enter(n, delta < 0);
+  }
+
+  function jump(n: number) {
+    setBlank(null);
+    enter(Math.max(0, Math.min(visible.length - 1, n)), false);
   }
 
   // Teclas como en PowerPoint y Keynote.
-  const actions = useRef({ go, exit, setPos, visible });
-  actions.current = { go, exit, setPos, visible };
+  const actions = useRef({ go, exit, jump, visible });
+  actions.current = { go, exit, jump, visible };
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const a = actions.current;
@@ -132,14 +181,14 @@ export default function Presenter({ deck, start, onExit }: Props) {
         const n = Number(typed.current) - 1;
         typed.current = "";
         const index = a.visible.findIndex((v) => v.i === n);
-        if (index >= 0) a.setPos(index);
+        if (index >= 0) a.jump(index);
         return;
       }
       typed.current = "";
       if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter", "n"].includes(k)) (e.preventDefault(), a.go(1));
       else if (["ArrowLeft", "ArrowUp", "PageUp", "Backspace", "p"].includes(k)) (e.preventDefault(), a.go(-1));
-      else if (k === "Home") a.setPos(0);
-      else if (k === "End") a.setPos(a.visible.length - 1);
+      else if (k === "Home") a.jump(0);
+      else if (k === "End") a.jump(a.visible.length - 1);
       else if (k === "Escape") (e.preventDefault(), a.exit());
       else if (k.toLowerCase() === "b" || k === ".") setBlank((b) => (b === "black" ? null : "black"));
       else if (k.toLowerCase() === "w" || k === ",") setBlank((b) => (b === "white" ? null : "white"));
@@ -185,7 +234,8 @@ export default function Presenter({ deck, start, onExit }: Props) {
     const mainH = size.h - 220;
     return (
       <div className="presenter presenter-view" onMouseMove={showControls}>
-        <div className="presenter-main">
+        <style>{hiddenCss(steps, step, ".presenter-scope")}</style>
+        <div className="presenter-main presenter-scope">
           {finished ? (
             <div className="presenter-end">Fin de la presentación</div>
           ) : (
@@ -212,6 +262,7 @@ export default function Presenter({ deck, start, onExit }: Props) {
 
   return (
     <div className={`presenter${controls ? "" : " hide-cursor"}`} onMouseMove={showControls} onClick={() => go(1)} onContextMenu={(e) => (e.preventDefault(), go(-1))}>
+      <style>{hiddenCss(steps, step, ".presenter-scope")}</style>
       {finished ? (
         <div className="presenter-end">Fin de la presentación. Haz clic para salir.</div>
       ) : (
@@ -221,7 +272,7 @@ export default function Presenter({ deck, start, onExit }: Props) {
               <SlideView slide={leaving} deck={deck} scale={fit(size.w, size.h)} />
             </div>
           )}
-          <div ref={enterRef} key={current.s.id} className="presenter-layer presenter-slide">
+          <div ref={enterRef} key={current.s.id} className="presenter-layer presenter-slide presenter-scope">
             <SlideView slide={current.s} deck={deck} scale={fit(size.w, size.h)} />
           </div>
         </div>
