@@ -25,6 +25,8 @@ use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 mod annotations;
 mod conditional;
 mod data;
+mod from_tables;
+pub use from_tables::TableSheet;
 pub mod drawings;
 mod structure;
 mod tables;

@@ -46,6 +46,18 @@ fn sheet_new(window: tauri::Window, state: State<OpenSheet>) -> Result<SheetView
     Ok(view)
 }
 
+/// Libro nuevo con las tablas de un PDF (una hoja por tabla).
+#[tauri::command]
+fn sheet_from_tables(window: tauri::Window, state: State<OpenSheet>, tables: Vec<sheets::TableSheet>) -> Result<SheetView, String> {
+    if tables.is_empty() {
+        return Err("No hay tablas".into());
+    }
+    let doc = SheetDocument::from_tables(&tables)?;
+    let view = doc.view(0)?;
+    state.0.lock().map_err(|e| e.to_string())?.insert(window.label().to_string(), doc);
+    Ok(view)
+}
+
 #[tauri::command]
 fn sheet_open(window: tauri::Window, state: State<OpenSheet>, path: String) -> Result<SheetView, String> {
     let doc = SheetDocument::open(&path)?;
@@ -691,6 +703,7 @@ pub fn run() {
             sheet_save,
             mac::take_opened_files,
             mac::print_window,
+            sheet_from_tables,
             pdf_export::export_pdf,
             windows::quit_app,
             files::file_read,

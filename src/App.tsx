@@ -16,6 +16,7 @@ import PresentEditor from "./editors/present/PresentEditor";
 import PdfViewer from "./editors/pdf/PdfViewer";
 import type { Converted } from "./lib/pdfConvert";
 import { pdfToWrite } from "./editors/write/fromPdf";
+import { pdfTables, pdfToSheets } from "./editors/sheets/fromPdf";
 import ComingSoon from "./editors/ComingSoon";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
@@ -129,6 +130,16 @@ export default function App() {
       const write = pdfToWrite(converted);
       show({ id: nextId.current++, kind: "write", fileName: base, path: null, write, recovered: true, notice: `Convertido de ${pdfName}: revisa el formato y guárdalo (⌘S) como .docx` });
       dirty.current = true;
+    } else {
+      try {
+        const count = pdfTables(converted).length;
+        const sheet = await pdfToSheets(converted);
+        const notice = count === 1 ? `1 tabla de ${pdfName}: revísala y guarda (⌘S) como .xlsx` : `${count} tablas de ${pdfName}, una por hoja: revísalas y guarda (⌘S) como .xlsx`;
+        show({ id: nextId.current++, kind: "sheets", fileName: base, path: null, sheet, recovered: true, notice });
+        dirty.current = true;
+      } catch (e) {
+        show(null, `No se pudieron pasar las tablas a una hoja: ${e}`);
+      }
     }
   }
 
@@ -317,6 +328,7 @@ export default function App() {
         key={doc.id}
         initialView={doc.sheet}
         path={doc.path}
+        notice={doc.notice}
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
         recovered={doc.recovered}

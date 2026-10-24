@@ -615,6 +615,9 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
         <button type="button" className="fb-button pdf-convert" disabled={converting || !onConvert} onClick={() => void convert("write")} title="Abrir en WEPO Write para editarlo (títulos, párrafos, listas, tablas e imágenes)">
           Write
         </button>
+        <button type="button" className="fb-button pdf-convert" disabled={converting || !onConvert} onClick={() => void convert("sheets")} title="Pasar las tablas del PDF a WEPO Sheets (una hoja por tabla)">
+          Sheets
+        </button>
         <Separator />
         <span className="pdf-future-label">Anotar:</span>
         {TOOLS.map((t) => (

@@ -83,6 +83,8 @@ type Props = {
   onSaved: (path: string) => void;
   /** El documento viene de una copia de recuperación: empieza con cambios sin guardar. */
   recovered?: boolean;
+  /** Mensaje al abrir (en lugar del de "documento recuperado"). */
+  notice?: string;
 };
 
 /**
@@ -1267,7 +1269,7 @@ export default function SheetEditor(props: Props) {
   // ───────────── autoguardado y recuperación ─────────────
 
   useEffect(() => {
-    if (props.recovered) showStatus({ text: "Documento recuperado: guárdalo para conservar los cambios" });
+    if (props.recovered) showStatus({ text: props.notice ?? "Documento recuperado: guárdalo para conservar los cambios" });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const changesRef = useRef(changes);

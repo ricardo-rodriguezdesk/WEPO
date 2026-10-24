@@ -14,6 +14,10 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Queda como documento nuevo sin guardar: se revisa y se guarda como .docx.
 - Con diseños complicados (columnas, cosas encimadas) puede hacer falta acomodar a mano; un escaneo sin texto se convierte en imágenes.
 
+### Pasar las tablas de un PDF a WEPO Sheets
+- Botón *Convertir: Sheets* en el visor de PDF: cada tabla con bordes queda en su propia hoja, con el encabezado en negrita, colores de fondo, celdas combinadas, y anchos y altos como en el PDF.
+- Las cantidades quedan como números de verdad (con su formato de moneda o porcentaje), para poder sumar y hacer gráficas.
+
 ### WEPO PDF: edición
 - Ordenar páginas arrastrando las miniaturas, girarlas, quitarlas y elegir varias a la vez.
 - Combinar: agregar las páginas de otro PDF donde quieras, y guardar páginas elegidas como un PDF nuevo.
