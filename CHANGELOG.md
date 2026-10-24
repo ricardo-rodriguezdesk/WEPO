@@ -2,6 +2,11 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
+## Próxima versión (sin publicar)
+
+### Cortes de página en WEPO Sheets
+- Botón *Cortes de página* junto al zoom: líneas punteadas en la hoja donde termina cada página al imprimir, con las últimas opciones de impresión (papel, orientación, márgenes, escala, área y filas que se repiten). Como en Excel, aparecen solas después de imprimir o exportar a PDF.
+
 ## 0.3.1 (24 de octubre de 2026)
 
 Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.

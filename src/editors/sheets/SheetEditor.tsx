@@ -36,7 +36,7 @@ import ConditionalFormatDialog from "./ConditionalFormatDialog";
 import ValidationDialog from "./ValidationDialog";
 import DrawingLayer from "./DrawingLayer";
 import ChartPanel, { CHART_TYPES } from "./ChartPanel";
-import PrintDialog, { pageForm } from "./PrintDialog";
+import PrintDialog, { loadOptions, pageForm } from "./PrintDialog";
 import type { PageForm } from "./PrintDialog";
 import LinkDialog from "./LinkDialog";
 import TableDialog from "./TableDialog";
@@ -65,7 +65,7 @@ import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDT
 import ZoomControl from "./ZoomControl";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
-import { pageSize, parseRange } from "./printLayout";
+import { layoutPages, pageSize, parseRange } from "./printLayout";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
@@ -146,6 +146,16 @@ const AUTOSAVE_KEY = "wepo.autosave";
 function loadAutosave(): boolean {
   try {
     return localStorage.getItem(AUTOSAVE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** ¿Se ven en la hoja las líneas donde corta cada página al imprimir? */
+const BREAKS_KEY = "wepo.sheets.pageBreaks";
+function loadBreaks(): boolean {
+  try {
+    return localStorage.getItem(BREAKS_KEY) === "1";
   } catch {
     return false;
   }
@@ -1427,6 +1437,8 @@ export default function SheetEditor(props: Props) {
 
   async function startPrint(options: PrintOptions, form: PageForm, toPdf = false) {
     setDialog(null);
+    // Como en Excel: después de imprimir quedan marcados los cortes de página.
+    setShowBreaks(true);
     setPrintJob(null);
     setPrintInitial(null);
     pdfTarget.current = null;
@@ -1882,6 +1894,33 @@ export default function SheetEditor(props: Props) {
 
   const isMultiSelection = selection.r1 !== selection.r2 || selection.c1 !== selection.c2;
   const printData = useMemo(() => ({ view, cols: baseCols, rows: baseRows, merged, decorations }), [view, baseCols, baseRows, merged, decorations]);
+
+  // ───────────── cortes de página ─────────────
+  // Como en Excel: después de imprimir (o con el botón de abajo), unas líneas
+  // punteadas marcan dónde termina cada página con las últimas opciones de impresión.
+  const [showBreaks, setShowBreaksState] = useState(loadBreaks);
+  function setShowBreaks(on: boolean) {
+    setShowBreaksState(on);
+    try {
+      localStorage.setItem(BREAKS_KEY, on ? "1" : "0");
+    } catch {
+      // Sin almacenamiento la preferencia no se recuerda.
+    }
+  }
+  const pageBreaks = useMemo(() => {
+    if (!showBreaks || dialog === "print" || pickingArea) return null;
+    const page = view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null };
+    const options = loadOptions(Boolean(page.print_area));
+    const range = printRangeFor(options.area, pageForm(page).printArea);
+    if (!range) return null;
+    const repeat: [number, number] | null = page.repeat_rows ? [page.repeat_rows[0] - 1, page.repeat_rows[1] - 1] : null;
+    const layout = layoutPages(range, baseCols, baseRows, { ...options, header: Boolean(page.header), footer: Boolean(page.footer) }, repeat);
+    // Dónde termina cada grupo de columnas y de filas (la última columna o fila de la página).
+    const colEnds = [...new Set(layout.pages.map((p) => p.cols[p.cols.length - 1]).filter((c) => c !== undefined))];
+    const rowEnds = [...new Set(layout.pages.map((p) => p.rows[p.rows.length - 1]).filter((r) => r !== undefined))];
+    return { range, colEnds, rowEnds, pages: layout.pages.length };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBreaks, dialog, pickingArea, view, baseCols, baseRows, printJob]);
   const selectionLabel = isMultiSelection
     ? wholeCols
       ? selection.c1 === selection.c2
@@ -2378,6 +2417,25 @@ export default function SheetEditor(props: Props) {
           {frozenRows > 0 && <div className="frozen-line h" style={{ top: HEADER_HEIGHT + frozenHeight + scrollY - 1 }} />}
           {frozenCols > 0 && <div className="frozen-line v" style={{ left: HEADER_WIDTH + frozenWidth + scrollX - 1 }} />}
 
+          {/* Cortes de página: una línea punteada donde termina cada página impresa */}
+          {pageBreaks &&
+            (() => {
+              const top = HEADER_HEIGHT + rowAxis.start(pageBreaks.range.r1);
+              const bottom = HEADER_HEIGHT + rowAxis.start(pageBreaks.range.r2 + 1);
+              const left = HEADER_WIDTH + colAxis.start(pageBreaks.range.c1);
+              const right = HEADER_WIDTH + colAxis.start(pageBreaks.range.c2 + 1);
+              return (
+                <>
+                  {pageBreaks.colEnds.map((c) => (
+                    <div key={`pbc-${c}`} className="page-break v" style={{ left: HEADER_WIDTH + colAxis.start(c + 1) - 1, top, height: bottom - top }} />
+                  ))}
+                  {pageBreaks.rowEnds.map((r) => (
+                    <div key={`pbr-${r}`} className="page-break h" style={{ top: HEADER_HEIGHT + rowAxis.start(r + 1) - 1, left, width: right - left }} />
+                  ))}
+                </>
+              );
+            })()}
+
           {/* Gráficas e imágenes */}
           <DrawingLayer
             drawings={view.drawings}
@@ -2606,6 +2664,19 @@ export default function SheetEditor(props: Props) {
             {stats.numbers > 0 && <span>Suma: {statsFormat.format(stats.sum)}</span>}
           </span>
         )}
+        <button
+          type="button"
+          className={`page-break-toggle${showBreaks ? " on" : ""}`}
+          aria-pressed={showBreaks}
+          onClick={() => setShowBreaks(!showBreaks)}
+          title={
+            showBreaks && pageBreaks
+              ? `Cortes de página: ${pageBreaks.pages} ${pageBreaks.pages === 1 ? "página" : "páginas"} con las últimas opciones de impresión`
+              : "Mostrar dónde corta cada página al imprimir"
+          }
+        >
+          Cortes de página
+        </button>
         <ZoomControl zoom={zoom} onChange={(z) => setZoom(z)} />
       </SheetTabs>
 

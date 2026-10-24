@@ -89,4 +89,27 @@ test.describe("WEPO Sheets", () => {
     await page.getByLabel("Imprimir", { exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Área de impresión" })).toHaveValue("A1:B3");
   });
+
+  test("cortes de página: líneas punteadas donde termina cada hoja impresa", async ({ page }) => {
+    await openFile(page, "gastos.xlsx");
+    await expect(page.locator(".page-break")).toHaveCount(0);
+    const toggle = page.getByRole("button", { name: "Cortes de página" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    // 150 filas, ajustadas al ancho: 4 páginas hacia abajo y 1 de ancho.
+    await expect(page.locator(".page-break.h")).toHaveCount(4);
+    await expect(page.locator(".page-break.v")).toHaveCount(1);
+
+    // Con otras opciones de impresión, los cortes cambian.
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await page.locator(".print-settings select").nth(2).selectOption("page");
+    await expect(page.locator(".print-count")).toHaveText("1 página");
+    await saveAs(page, outFile("gastos-una.pdf"));
+    await page.getByRole("button", { name: "Exportar PDF…" }).click();
+    await finishExport(page, outFile("gastos-una.pdf"));
+    await expect(page.locator(".page-break.h")).toHaveCount(1);
+
+    await toggle.click();
+    await expect(page.locator(".page-break")).toHaveCount(0);
+  });
 });
