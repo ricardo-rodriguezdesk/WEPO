@@ -19,7 +19,9 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1400, height: 900 } } }],
+  // channel "chromium": el Chromium completo también sin ventana, así basta con
+  // `npx playwright install chromium` (no hace falta el "headless shell").
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium", viewport: { width: 1400, height: 900 } } }],
   webServer: [
     {
       command: "cargo run --quiet --manifest-path src-tauri/Cargo.toml --example e2e_bridge",

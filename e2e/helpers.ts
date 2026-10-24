@@ -115,7 +115,8 @@ export function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
-    if (m.type() === "error" && !m.text().includes("Download the React DevTools")) errors.push(m.text());
+    // El navegador completo pide el icono de la pestaña (favicon.ico), que la app no tiene en Vite.
+    if (m.type() === "error" && !m.location().url.endsWith("/favicon.ico")) errors.push(m.text());
   });
   return errors;
 }
