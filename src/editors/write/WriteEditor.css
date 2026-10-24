@@ -187,7 +187,9 @@
 @media print {
   html, body, #root { height: auto !important; overflow: visible !important; background: #fff !important; }
   .write-editor { display: block; height: auto; }
-  .write-editor > :not(.write-canvas) { display: none !important; }
+  /* Solo se imprime la hoja (que va dentro de .write-main, junto al panel de comentarios). */
+  .write-editor > :not(.write-canvas, .write-main) { display: none !important; }
+  .write-main > :not(.write-canvas) { display: none !important; }
   .write-canvas { padding: 0; overflow: visible; background: none; }
   .write-page { margin: 0; border-radius: 0; box-shadow: none; zoom: 1 !important; }
   .write-gap-band { display: none !important; }

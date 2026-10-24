@@ -25,9 +25,9 @@ import Dialog from "../../components/Dialog";
 import Presenter from "./Presenter";
 import PrintSlides from "./PrintSlides";
 import type { SlidePrintJob } from "./PrintSlides";
-import { isMac, isWindows } from "../../lib/platform";
 import { imageDataUrl } from "../../lib/write";
 import { extensionOf, fileNameOf } from "../../lib/documents";
+import { askPdfPath, letter, printReady, writePdf } from "../../lib/exportPdf";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import "../sheets/FormatBar.css";
@@ -118,7 +118,10 @@ export default function PresentEditor(props: Props) {
   const [protectedPath] = useState(initial.unsupported.length ? props.path : null);
   const [notice, setNotice] = useState(initial.unsupported.length > 0);
   const [presenting, setPresenting] = useState<number | null>(null);
-  const [printDialog, setPrintDialog] = useState(false);
+  /** Diálogo de impresión; "pdf" si se abrió para exportar como PDF. */
+  const [printDialog, setPrintDialog] = useState<false | "print" | "pdf">(false);
+  /** Con "Exportar PDF", dónde se guarda (si no, se abre el diálogo de impresión). */
+  const pdfTarget = useRef<string | null>(null);
   const [printJob, setPrintJob] = useState<SlidePrintJob | null>(null);
   const [autosave, setAutosave] = useState(loadAutosave);
   /** Cuenta los cambios: así se sabe si la copia de recuperación o el archivo ya están al día. */
@@ -854,8 +857,41 @@ export default function PresentEditor(props: Props) {
     setPresenting(fromStart ? deckRef.current.slides.findIndex((x) => !x.hidden) : current);
   }
 
+  async function startPrint(job: SlidePrintJob, toPdf: boolean) {
+    setPrintDialog(false);
+    pdfTarget.current = null;
+    if (toPdf) {
+      const target = await askPdfPath(path, fileName);
+      if (!target) return;
+      pdfTarget.current = target;
+    }
+    setPrintJob(job);
+  }
+
   useEffect(() => {
     if (!printJob) return;
+    const target = pdfTarget.current;
+    if (target) {
+      let cancelled = false;
+      (async () => {
+        await printReady();
+        if (cancelled) return;
+        // Con notas: hoja carta con márgenes de 0.6 in; si no, una hoja del tamaño de la diapositiva.
+        const page = printJob.notes ? letter(false, 43.2) : { width: (deckRef.current.width / 96) * 72, height: (deckRef.current.height / 96) * 72, margin: 0 };
+        try {
+          const name = await writePdf(target, page);
+          setStatus({ text: `PDF guardado: ${name}` });
+        } catch (e) {
+          setStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
+        } finally {
+          pdfTarget.current = null;
+          setPrintJob(null);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
     const done = () => setPrintJob(null);
     window.addEventListener("afterprint", done);
     // Se da un momento para que se dibujen las diapositivas antes de abrir el diálogo.
@@ -890,7 +926,8 @@ export default function PresentEditor(props: Props) {
       else if (command === "zoom-in") setZoom(clampZoom(stepZoom(a.scale, 1)));
       else if (command === "zoom-out") setZoom(clampZoom(stepZoom(a.scale, -1)));
       else if (command === "zoom-reset") setZoom(null);
-      else if (command === "print") setPrintDialog(true);
+      else if (command === "print") setPrintDialog("print");
+      else if (command === "export-pdf") setPrintDialog("pdf");
     });
     function onKey(e: KeyboardEvent) {
       const a = actions.current;
@@ -1003,11 +1040,14 @@ export default function PresentEditor(props: Props) {
             <button className="btn btn-icon" onClick={redo} title={keys("Rehacer (⌘⇧Z)")} aria-label="Rehacer">
               ↷
             </button>
-            <button className="btn btn-icon" onClick={() => setPrintDialog(true)} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
+            <button className="btn btn-icon" onClick={() => setPrintDialog("print")} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
                 <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
                 <rect x="7" y="14" width="10" height="7" rx="1" />
               </svg>
+            </button>
+            <button className="btn btn-pdf" onClick={() => setPrintDialog("pdf")} title="Exportar como PDF (guarda el archivo directo)" aria-label="Exportar como PDF">
+              PDF
             </button>
             <label
               className={`autosave-toggle${autosave ? " on" : ""}`}
@@ -1185,10 +1225,8 @@ export default function PresentEditor(props: Props) {
       {printDialog && (
         <PrintSlidesDialog
           hasHidden={deck.slides.some((x) => x.hidden)}
-          onPrint={(job) => {
-            setPrintDialog(false);
-            setPrintJob(job);
-          }}
+          pdf={printDialog === "pdf"}
+          onPrint={(job, toPdf) => void startPrint(job, toPdf)}
           onClose={() => setPrintDialog(false)}
         />
       )}
@@ -1810,7 +1848,18 @@ function LayoutPreview({ id }: { id: LayoutId }) {
 
 
 /** Opciones antes de imprimir: solo diapositivas, o con sus notas. */
-function PrintSlidesDialog({ hasHidden, onPrint, onClose }: { hasHidden: boolean; onPrint: (job: SlidePrintJob) => void; onClose: () => void }) {
+function PrintSlidesDialog({
+  hasHidden,
+  pdf,
+  onPrint,
+  onClose,
+}: {
+  hasHidden: boolean;
+  /** Abierto desde "Exportar como PDF": ese botón es el principal. */
+  pdf: boolean;
+  onPrint: (job: SlidePrintJob, toPdf: boolean) => void;
+  onClose: () => void;
+}) {
   const [notes, setNotes] = useState(false);
   const [hidden, setHidden] = useState(false);
   return (
@@ -1823,7 +1872,10 @@ function PrintSlidesDialog({ hasHidden, onPrint, onClose }: { hasHidden: boolean
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" autoFocus onClick={() => onPrint({ notes, hidden })}>
+          <button className={`btn${pdf ? " btn-primary" : ""}`} autoFocus={pdf} onClick={() => onPrint({ notes, hidden }, true)}>
+            Exportar PDF…
+          </button>
+          <button className={`btn${pdf ? "" : " btn-primary"}`} autoFocus={!pdf} onClick={() => onPrint({ notes, hidden }, false)}>
             Imprimir…
           </button>
         </>
@@ -1840,13 +1892,7 @@ function PrintSlidesDialog({ hasHidden, onPrint, onClose }: { hasHidden: boolean
           <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} /> Incluir las diapositivas ocultas
         </label>
       )}
-      <p className="hint">
-        {isMac
-          ? "Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión."
-          : isWindows
-            ? "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."
-            : "Para crear un PDF, elige «Imprimir a un archivo» (formato PDF) en el diálogo de impresión."}
-      </p>
+      <p className="hint">«Exportar PDF…» guarda el archivo directo, igual que se vería impreso.</p>
     </Dialog>
   );
 }

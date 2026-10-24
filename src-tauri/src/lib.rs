@@ -4,6 +4,7 @@
 
 mod files;
 mod mac;
+mod pdf_export;
 mod recovery;
 mod windows;
 mod sheet_format;
@@ -690,6 +691,7 @@ pub fn run() {
             sheet_save,
             mac::take_opened_files,
             mac::print_window,
+            pdf_export::export_pdf,
             windows::quit_app,
             files::file_read,
             files::file_write,

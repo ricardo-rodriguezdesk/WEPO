@@ -30,6 +30,21 @@ tauri-plugin-clipboard-manager = "2"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
 
+# Exportar como PDF con el motor de impresión de cada sistema (mismas versiones que usa Tauri).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSDictionary", "NSGeometry", "NSObject"] }
+objc2-app-kit = { version = "0.3", features = ["NSPrintInfo", "NSPrintOperation", "NSView", "NSResponder", "NSWindow"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "objc2-app-kit"] }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = "2.0"
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

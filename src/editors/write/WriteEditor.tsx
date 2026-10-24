@@ -29,6 +29,7 @@ import { CommentMark, DeletionMark, InsertionMark, Review, initialsOf, newId } f
 import { docxBase64, imageDataUrl, loadAuthor, saveAuthor, saveWriteDocument } from "../../lib/write";
 import { recoveryApi } from "../../lib/recovery";
 import { extensionOf, fileNameOf } from "../../lib/documents";
+import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, isMac, isWindows, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
@@ -351,6 +352,21 @@ export default function WriteEditor(props: Props) {
     invoke("print_window").catch(() => window.print());
   }
 
+  /** Exportar como PDF: las mismas páginas que se imprimen, directo a un archivo. */
+  async function exportPdf() {
+    const target = await askPdfPath(path, fileName);
+    if (!target) return;
+    setStatus({ text: "Creando el PDF…" });
+    try {
+      await printReady();
+      // Las medidas de la hoja están en vigésimos de punto; el margen ya va dentro de cada página.
+      const name = await writePdf(target, { width: page.width / 20, height: page.height / 20, margin: 0 });
+      setStatus({ text: `PDF guardado: ${name}` });
+    } catch (e) {
+      setStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
+    }
+  }
+
   // ───────────── vínculos e imágenes ─────────────
 
   function openLinkDialog() {
@@ -388,14 +404,15 @@ export default function WriteEditor(props: Props) {
   // ───────────── órdenes del menú y atajos ─────────────
 
   const openFind = () => setFindOpen(true);
-  const commands = useRef({ saveDocument, print, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking });
-  commands.current = { saveDocument, print, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking };
+  const commands = useRef({ saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking });
+  commands.current = { saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
       if (command === "save") c.saveDocument(false);
       else if (command === "save-as") c.saveDocument(true);
       else if (command === "print") c.print();
+      else if (command === "export-pdf") void c.exportPdf();
       else if (command === "zoom-in") c.setZoom(stepZoom(c.zoom, 1));
       else if (command === "zoom-out") c.setZoom(stepZoom(c.zoom, -1));
       else if (command === "zoom-reset") c.setZoom(1);
@@ -480,6 +497,9 @@ export default function WriteEditor(props: Props) {
           <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
           <rect x="7" y="14" width="10" height="7" rx="1" />
         </svg>
+      </button>
+      <button className="btn btn-pdf" onClick={() => void exportPdf()} title="Exportar como PDF (guarda el archivo directo)" aria-label="Exportar como PDF">
+        PDF
       </button>
       <label
         className={`autosave-toggle${autosave ? " on" : ""}`}

@@ -3,7 +3,6 @@ import Dialog from "../../components/Dialog";
 import type { PageView } from "../../lib/spreadsheet";
 import { cellName } from "../../lib/spreadsheet";
 import type { PrintOptions } from "./PrintSheet";
-import { isMac, isWindows } from "../../lib/platform";
 
 const KEY = "wepo.print";
 
@@ -36,12 +35,15 @@ type Props = {
   /** Texto de la selección actual, como "B2:D9". */
   selectionLabel: string;
   page: PageView;
-  onPrint: (options: PrintOptions, page: PageForm) => void;
+  /** `toPdf`: guardar directo como PDF en vez de abrir el diálogo de impresión. */
+  onPrint: (options: PrintOptions, page: PageForm, toPdf: boolean) => void;
   onClose: () => void;
+  /** Abierto desde "Exportar como PDF": ese botón es el principal. */
+  pdf?: boolean;
 };
 
 /** Opciones antes de abrir el diálogo de impresión del sistema (donde también se guarda como PDF). */
-export default function PrintDialog({ selectionLabel, page, onPrint, onClose }: Props) {
+export default function PrintDialog({ selectionLabel, page, onPrint, onClose, pdf = false }: Props) {
   const [form, setForm] = useState<PageForm>(() => pageForm(page));
   const [options, setOptions] = useState(() => loadOptions(Boolean(page.print_area)));
   const set = (patch: Partial<PrintOptions>) => setOptions((o) => ({ ...o, ...patch }));
@@ -53,13 +55,13 @@ export default function PrintDialog({ selectionLabel, page, onPrint, onClose }: 
     field({ [key]: `${form[key]}${form[key] && !form[key].endsWith(" ") ? " " : ""}${text}` });
   }
 
-  function print() {
+  function print(toPdf = false) {
     try {
       localStorage.setItem(KEY, JSON.stringify({ ...options, area: "sheet" }));
     } catch {
       // Sin almacenamiento las opciones no se recuerdan.
     }
-    onPrint(options.area === "saved" && !form.printArea.trim() ? { ...options, area: "sheet" } : options, form);
+    onPrint(options.area === "saved" && !form.printArea.trim() ? { ...options, area: "sheet" } : options, form, toPdf);
   }
 
   return (
@@ -72,7 +74,10 @@ export default function PrintDialog({ selectionLabel, page, onPrint, onClose }: 
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" onClick={print} autoFocus>
+          <button className={`btn${pdf ? " btn-primary" : ""}`} onClick={() => print(true)} autoFocus={pdf}>
+            Exportar PDF…
+          </button>
+          <button className={`btn${pdf ? "" : " btn-primary"}`} onClick={() => print(false)} autoFocus={!pdf}>
             Imprimir…
           </button>
         </>
@@ -151,13 +156,7 @@ export default function PrintDialog({ selectionLabel, page, onPrint, onClose }: 
           <input className="input" style={{ width: 110 }} value={form.repeatRows} placeholder="1 o 1:2" onChange={(e) => field({ repeatRows: e.target.value })} />
         </label>
       </fieldset>
-      <p className="hint">
-        {isMac
-          ? "Para crear un PDF, elige «Guardar como PDF» en el menú «PDF» del diálogo de impresión."
-          : isWindows
-            ? "Para crear un PDF, elige la impresora «Microsoft Print to PDF» en el diálogo de impresión."
-            : "Para crear un PDF, elige «Imprimir a un archivo» (formato PDF) en el diálogo de impresión."}
-      </p>
+      <p className="hint">«Exportar PDF…» guarda el archivo directo, igual que se vería impreso.</p>
     </Dialog>
   );
 }

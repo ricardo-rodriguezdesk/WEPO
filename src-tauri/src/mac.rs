@@ -1,5 +1,6 @@
 //! Integración con el sistema: barra de menús en español, archivos abiertos
 //! desde Finder o el Explorador de Windows (doble clic o "Abrir con…") e impresión.
+//! (Exportar como PDF sin diálogo está en pdf_export.rs.)
 
 use std::sync::Mutex;
 
@@ -29,7 +30,8 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("save", "Guardar", Some("CmdOrCtrl+S"))?)
         .item(&item("save-as", "Guardar como…", Some("CmdOrCtrl+Shift+S"))?)
         .separator()
-        .item(&item("print", "Imprimir o exportar a PDF…", Some("CmdOrCtrl+P"))?)
+        .item(&item("print", "Imprimir…", Some("CmdOrCtrl+P"))?)
+        .item(&item("export-pdf", "Exportar como PDF…", None)?)
         .separator()
         .item(&item("home", "Ir al inicio", None)?);
 

@@ -4,6 +4,11 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ## Próxima versión (sin publicar)
 
+### Exportar como PDF
+- Nuevo botón «PDF» y opción *Archivo → Exportar como PDF…* en Sheets, Write y Present: pide el nombre y guarda el PDF directo, igual que se vería impreso (sin pasar por el diálogo de impresión). Usa el motor de impresión de cada sistema (macOS, Windows y Linux).
+- En Sheets y Present, el diálogo de impresión tiene «Exportar PDF…» junto a «Imprimir…», con las mismas opciones (área, orientación, notas).
+- Arreglo: WEPO Write volvía a imprimir hojas en blanco desde que se agregó el panel de comentarios.
+
 ### WEPO PDF: edición
 - Ordenar páginas arrastrando las miniaturas, girarlas, quitarlas y elegir varias a la vez.
 - Combinar: agregar las páginas de otro PDF donde quieras, y guardar páginas elegidas como un PDF nuevo.

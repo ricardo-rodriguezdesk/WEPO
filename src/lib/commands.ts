@@ -11,6 +11,7 @@ export type Command =
   | "save"
   | "save-as"
   | "print"
+  | "export-pdf"
   | "find"
   | "home"
   | "quit"

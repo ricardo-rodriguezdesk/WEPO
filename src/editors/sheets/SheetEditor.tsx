@@ -64,6 +64,7 @@ import { getFormulaLanguage, setFormulaLanguage } from "../../lib/preferences";
 import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH, clampZoom, stepZoom } from "./layout";
 import ZoomControl from "./ZoomControl";
 import { loadZoom, saveZoom } from "../../lib/zoom";
+import { askPdfPath, letter, printReady, writePdf } from "../../lib/exportPdf";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
@@ -171,6 +172,9 @@ export default function SheetEditor(props: Props) {
   const [language, setLanguage] = useState<FormulaLanguage>(getFormulaLanguage);
   const [dialog, setDialog] = useState<"conditional" | "validation" | "print" | null>(null);
   const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  /** Con "Exportar PDF", dónde se guarda (si no, se abre el diálogo de impresión). */
+  const pdfTarget = useRef<string | null>(null);
+  const [pdfDialog, setPdfDialog] = useState(false);
   // Copiar formato (brocha): el rango de origen; `sticky` si se usa varias veces (doble clic).
   const [painter, setPainter] = useState<{ source: Range; sticky: boolean } | null>(null);
   const [noteEdit, setNoteEdit] = useState<(NoteTarget & { text: string }) | null>(null);
@@ -1395,9 +1399,15 @@ export default function SheetEditor(props: Props) {
 
   // ───────────── imprimir ─────────────
 
-  async function startPrint(options: PrintOptions, form: PageForm) {
+  async function startPrint(options: PrintOptions, form: PageForm, toPdf = false) {
     setDialog(null);
     setPrintJob(null);
+    pdfTarget.current = null;
+    if (toPdf) {
+      const target = await askPdfPath(path, fileName);
+      if (!target) return focusGrid();
+      pdfTarget.current = target;
+    }
     await commit();
     // La configuración de página se guarda en el archivo (si cambió).
     let page = view.page;
@@ -1450,16 +1460,37 @@ export default function SheetEditor(props: Props) {
     });
   }
 
-  // Cuando la hoja para imprimir ya está dibujada, se abre el diálogo de macOS.
+  // Cuando la hoja para imprimir ya está dibujada, se abre el diálogo del sistema
+  // o, con "Exportar PDF", se guarda directo.
   useEffect(() => {
     if (!printJob) return;
+    const target = pdfTarget.current;
+    if (target) {
+      let cancelled = false;
+      (async () => {
+        await printReady();
+        if (cancelled) return;
+        try {
+          const name = await writePdf(target, letter(printJob.landscape, 34));
+          showStatus({ text: `PDF guardado: ${name}` });
+        } catch (e) {
+          showStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
+        } finally {
+          pdfTarget.current = null;
+          setPrintJob(null);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
     const frame = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         invoke("print_window").catch(() => window.print());
       }),
     );
     return () => cancelAnimationFrame(frame);
-  }, [printJob]);
+  }, [printJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Terminada la impresión, la versión para imprimir ya no hace falta.
   useEffect(() => {
@@ -1469,15 +1500,16 @@ export default function SheetEditor(props: Props) {
   }, []);
 
   // Órdenes que llegan del menú de la app o de los atajos (⌘S, ⌘⇧S, ⌘F, ⌘P).
-  const commands = useRef({ saveDocument, setFindOpen, setDialog, setZoom, zoom });
-  commands.current = { saveDocument, setFindOpen, setDialog, setZoom, zoom };
+  const commands = useRef({ saveDocument, setFindOpen, setDialog, setPdfDialog, setZoom, zoom });
+  commands.current = { saveDocument, setFindOpen, setDialog, setPdfDialog, setZoom, zoom };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
       if (command === "save") c.saveDocument(false);
       else if (command === "save-as") c.saveDocument(true);
       else if (command === "find") c.setFindOpen(true);
-      else if (command === "print") c.setDialog("print");
+      else if (command === "print") (c.setPdfDialog(false), c.setDialog("print"));
+      else if (command === "export-pdf") (c.setPdfDialog(true), c.setDialog("print"));
       else if (command === "zoom-in") c.setZoom(stepZoom(c.zoom, 1));
       else if (command === "zoom-out") c.setZoom(stepZoom(c.zoom, -1));
       else if (command === "zoom-reset") c.setZoom(1);
@@ -2030,7 +2062,7 @@ export default function SheetEditor(props: Props) {
       <button className="btn btn-icon" onClick={() => setFindOpen((v) => !v)} title={keys("Buscar y reemplazar (⌘F)")} aria-label="Buscar">
         ⌕
       </button>
-      <button className="btn btn-icon" onClick={() => setDialog("print")} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
+      <button className="btn btn-icon" onClick={() => (setPdfDialog(false), setDialog("print"))} title={keys("Imprimir o exportar a PDF (⌘P)")} aria-label="Imprimir">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
           <path d="M7 8V3h10v5M7 17H4v-7a2 2 0 012-2h12a2 2 0 012 2v7h-3" />
           <rect x="7" y="14" width="10" height="7" rx="1" />
@@ -2650,6 +2682,7 @@ export default function SheetEditor(props: Props) {
           }
           page={view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null }}
           onPrint={startPrint}
+          pdf={pdfDialog}
           onClose={() => {
             setDialog(null);
             focusGrid();
