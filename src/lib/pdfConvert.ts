@@ -746,6 +746,11 @@ export async function convertPdf(inputs: PageInput[], onProgress?: (done: number
       } else if (prev.kind === "list" && next.kind === "list" && prev.ordered === next.ordered) {
         prev.items.push(...next.items);
         ordered.shift();
+      } else if (prev.kind === "table" && next.kind === "table" && !prev.boxes && !next.boxes && sameColumns(prev.widths, next.widths)) {
+        // Una tabla que sigue en la página siguiente es la misma tabla (si repite el encabezado, se quita).
+        const repeatsHeader = prev.header && JSON.stringify(next.rows[0]?.map((c) => c.text)) === JSON.stringify(prev.rows[0]?.map((c) => c.text));
+        prev.rows.push(...next.rows.slice(repeatsHeader ? 1 : 0));
+        ordered.shift();
       }
     }
     blocks.push(...ordered);
@@ -768,6 +773,10 @@ export async function convertPdf(inputs: PageInput[], onProgress?: (done: number
     bodySize: body,
     pages: pages.length,
   };
+}
+
+function sameColumns(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((w, i) => Math.abs(w - b[i]) < 3);
 }
 
 /** Las viñetas dibujadas (un punto antes del renglón) marcan ese renglón como de lista. */
