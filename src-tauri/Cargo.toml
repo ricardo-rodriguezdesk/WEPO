@@ -14,6 +14,10 @@ edition = "2024"
 name = "wepo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Solo para las pruebas de la interfaz (examples/e2e_bridge.rs).
+[dev-dependencies]
+tiny_http = "0.12"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

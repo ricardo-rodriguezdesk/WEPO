@@ -2,13 +2,13 @@
 // Cada módulo atiende un tipo de documento; aquí solo se exponen sus
 // funciones a la interfaz como comandos de Tauri.
 
-mod files;
+pub mod files;
 mod mac;
 mod pdf_export;
 mod recovery;
 mod windows;
 mod sheet_format;
-mod sheets;
+pub mod sheets;
 mod xlsx_extras;
 
 use std::collections::HashMap;

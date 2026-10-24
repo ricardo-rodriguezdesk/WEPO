@@ -1,0 +1,92 @@
+import { expect, test } from "@playwright/test";
+import { cellPoint, collectErrors, finishExport, openFile, outFile, pdfInfo, pdfText, readSheets, saveAs, sheetCell } from "./helpers";
+
+test.describe("WEPO Sheets", () => {
+  test("abre un Excel, calcula una fórmula y la guarda", async ({ page }) => {
+    const errors = collectErrors(page);
+    const copy = await openFile(page, "ventas.xlsx");
+    await expect(page.locator(".grid-scroll")).toBeVisible();
+    expect((await sheetCell(page, "A1")).text).toBe("Mes");
+
+    // Las funciones van en español, como en Excel en español.
+    const p = await cellPoint(page, "B12");
+    await page.mouse.click(p.x, p.y);
+    await page.keyboard.type("=SUMA(B2:B7)");
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await sheetCell(page, "B12")).text).toMatch(/356,?700/);
+    expect((await sheetCell(page, "D9")).text).toMatch(/148,?300/);
+
+    // Guardar sobre el mismo archivo y volver a abrirlo con el motor.
+    await page.locator("button[title^='Guardar']").first().click();
+    await expect(page.locator(".sheet-status")).toHaveText("Guardado");
+    const saved = await readSheets(copy);
+    expect(saved.names[0]).toBe("Ventas 2026");
+    const f2 = await saved.cell(0, "B12");
+    expect(f2.number).toBe(true);
+    expect(f2.text).toMatch(/356,?700/);
+    expect(errors).toEqual([]);
+  });
+
+  test("imprimir: la vista previa cambia con las opciones y el PDF sale igual", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "ventas.xlsx");
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    const count = page.locator(".print-count");
+    await expect(count).toHaveText("1 página");
+    await page.locator(".print-settings select").nth(2).selectOption("none");
+    await expect(count).toHaveText("2 páginas");
+
+    // Elegir el área de impresión con el mouse.
+    await page.getByRole("button", { name: "Seleccionar en la hoja…" }).click();
+    await expect(page.locator(".print-pick-bar")).toBeVisible();
+    const a = await cellPoint(page, "A1");
+    const b = await cellPoint(page, "C4");
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator(".print-pick-bar b")).toHaveText("A1:C4");
+    await page.locator(".print-pick-bar").getByRole("button", { name: "Listo" }).click();
+    await expect(page.getByRole("textbox", { name: "Área de impresión" })).toHaveValue("A1:C4");
+    await expect(count).toHaveText("1 página");
+
+    // Pie con número de página, y el PDF con las mismas páginas que dice la vista previa (sin hoja en blanco de más).
+    await page.getByPlaceholder("Por ejemplo: Página [Página] de [Páginas]").fill("Página [Página] de [Páginas]");
+    await expect(page.locator(".print-preview .print-page-text")).toHaveText("Página 1 de 1");
+    const out = outFile("area.pdf");
+    await saveAs(page, out);
+    await page.getByRole("button", { name: "Exportar PDF…" }).click();
+    await finishExport(page, out);
+    const pages = await pdfInfo(out);
+    expect(pages).toHaveLength(1);
+    expect((await pdfText(out))[0]).toContain("Página 1 de 1");
+    expect(errors).toEqual([]);
+  });
+
+  test("imprimir: filas que se repiten arriba en cada página", async ({ page }) => {
+    await openFile(page, "gastos.xlsx");
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(page.locator(".print-count")).toHaveText("4 páginas");
+    await page.getByPlaceholder("1 o 1:2").fill("1");
+    await expect(page.locator(".print-count")).toHaveText("5 páginas");
+    await page.getByLabel("Página siguiente").click();
+    await expect(page.locator(".print-preview .print-table tr").first()).toContainText("Folio");
+    await page.locator(".print-settings select").nth(2).selectOption("page");
+    await expect(page.locator(".print-count")).toHaveText("1 página");
+  });
+
+  test("área de impresión desde el menú de la celda", async ({ page }) => {
+    await openFile(page, "ventas.xlsx");
+    const a = await cellPoint(page, "A1");
+    const b = await cellPoint(page, "B3");
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 5 });
+    await page.mouse.up();
+    await page.mouse.click(a.x, a.y + 20, { button: "right" });
+    await page.locator(".context-item", { hasText: "Establecer área de impresión" }).click();
+    await expect(page.locator(".sheet-status")).toContainText("A1:B3");
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Área de impresión" })).toHaveValue("A1:B3");
+  });
+});

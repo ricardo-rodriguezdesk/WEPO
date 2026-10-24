@@ -95,6 +95,14 @@ cd src-tauri
 cargo test
 ```
 
+Pruebas de la interfaz (carpeta `e2e/`): abren los archivos de ejemplo de `e2e/fixtures/`, imprimen, exportan a PDF, convierten y guardan, como lo haría una persona. Corren en Chromium con el motor de Rust de verdad (un puente en `src-tauri/examples/e2e_bridge.rs`), y GitHub las corre en cada cambio.
+
+```bash
+npx playwright install chromium   # solo la primera vez
+npm run test:e2e                  # todas (la primera vez compila el puente: tarda unos minutos)
+npx playwright test e2e/write.spec.ts --headed   # una sola, viendo el navegador
+```
+
 ## Crear la app e instalarla
 
 Para generar `WEPO.app` y el instalador `.dmg` en tu Mac:
