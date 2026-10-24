@@ -45,7 +45,7 @@ test.describe("WEPO PDF", () => {
 
     const out = outFile("combinado.pdf");
     await saveAs(page, out);
-    await page.keyboard.press("Control+Shift+s");
+    await page.keyboard.press("ControlOrMeta+Shift+s");
     await expect.poll(async () => (await pdfInfo(out).catch(() => [])).length).toBe(4);
     const pages = await pdfInfo(out);
     expect(pages.map((p) => p.rotation)).toEqual([0, 0, 0, 90]);
@@ -53,7 +53,7 @@ test.describe("WEPO PDF", () => {
     expect(text.map((t) => t.slice(0, 7))).toEqual(["Hoja A1", "Hoja B1", "Hoja B2", "Hoja A2"]);
 
     // Deshacer todo deja el documento como estaba.
-    for (let i = 0; i < 3; i++) await page.keyboard.press("Control+z");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ControlOrMeta+z");
     await expect(thumbs).toHaveCount(3);
     expect(errors).toEqual([]);
   });
@@ -87,7 +87,7 @@ test.describe("WEPO PDF", () => {
     expect(h.bottom).toBeLessThan(z.y + z.height + 4);
 
     // Arrastrar en el espacio en blanco del pie no resalta nada.
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await page.mouse.move(box.x + box.width - 8, box.y + box.height - 40);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width - 200, box.y + box.height - 60, { steps: 6 });
@@ -132,7 +132,7 @@ test.describe("WEPO PDF", () => {
 
     const out = outFile("con-nota.pdf");
     await saveAs(page, out);
-    await page.keyboard.press("Control+Shift+s");
+    await page.keyboard.press("ControlOrMeta+Shift+s");
     await expect.poll(async () => (await pdfInfo(out).catch(() => [])).length).toBe(3);
 
     // Al volver a abrirlo, la nota está ahí con su texto.

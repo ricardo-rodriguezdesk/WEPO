@@ -27,7 +27,7 @@ test.describe("Convertir un PDF", () => {
 
     const out = outFile("tablas.xlsx");
     await saveAs(page, out);
-    await page.keyboard.press("Control+s");
+    await page.keyboard.press("ControlOrMeta+s");
     await expect(page.locator(".sheet-status")).toHaveText("Guardado");
     const book = await readSheets(out);
     expect(book.names).toHaveLength(4);
