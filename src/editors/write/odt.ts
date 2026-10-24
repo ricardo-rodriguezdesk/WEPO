@@ -152,7 +152,18 @@ class OdtReader {
         else if (name === "s") push(" ".repeat(Number(get(e, "text", "c") ?? 1)), marks);
         else if (name === "tab") push("\t", marks);
         else if (name === "line-break") out.push({ type: "hardBreak" });
-        else if (name === "note") this.unsupported.add("notas al pie");
+        else if (name === "note") {
+          // Notas al pie: el texto de la nota va en la llamada (las notas al final no se conservan).
+          if (get(e, "text", "note-class") === "endnote") this.unsupported.add("notas al final");
+          else {
+            const body = first(e, "text", "note-body");
+            const text = kids(body, "text")
+              .map((p) => (p.textContent ?? "").replace(/\s+/g, " ").trim())
+              .filter(Boolean)
+              .join("\n");
+            out.push({ type: "footnote", attrs: { text } });
+          }
+        }
         else if (name === "tracked-changes" || name === "change-start") this.unsupported.add("control de cambios");
         else if (["bookmark", "bookmark-start", "bookmark-end", "soft-page-break", "change-end", "change"].includes(name)) continue;
         else await this.inline(e, marks, out);
@@ -251,7 +262,8 @@ class OdtReader {
       else if (el.namespaceURI === NS.text && name === "list") out.push(await this.list(el, null, 0));
       else if (el.namespaceURI === NS.text && name === "section") out.push(...(await this.blocks(el)));
       else if (el.namespaceURI === NS.table && name === "table") out.push(await this.table(el));
-      else if (el.namespaceURI === NS.text && (name === "table-of-content" || name === "alphabetical-index" || name === "bibliography")) {
+      else if (el.namespaceURI === NS.text && name === "table-of-content") out.push({ type: "tableOfContents" });
+      else if (el.namespaceURI === NS.text && (name === "alphabetical-index" || name === "bibliography")) {
         this.unsupported.add("índices");
         const body = first(el, "text", "index-body");
         if (body) out.push(...(await this.blocks(body)));

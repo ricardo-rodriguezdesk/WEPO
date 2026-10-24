@@ -127,6 +127,66 @@
 }
 .write-page-break.ProseMirror-selectednode { border-top-color: var(--kind-accent); }
 
+/* Notas al pie: el número volado en el texto y las notas al pie de la hoja */
+.write-content { counter-reset: wepo-footnote; }
+.write-fn-ref {
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 0.7em;
+  line-height: 0;
+  vertical-align: super;
+  color: var(--kind-accent);
+  font-weight: 600;
+}
+.write-fn-ref::before { counter-increment: wepo-footnote; content: counter(wepo-footnote); }
+.write-fn-ref.ProseMirror-selectednode { outline: 1.5px solid var(--kind-accent); border-radius: 2px; }
+.write-footnotes {
+  box-sizing: border-box;
+  overflow: hidden;
+  padding-top: 14px;
+  position: relative;
+  font-size: 9pt;
+  line-height: 1.25;
+  color: #1d1d1f;
+  font-family: Calibri, Carlito, "Segoe UI", sans-serif;
+}
+.write-footnotes::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 33%;
+  border-top: 1px solid #8a8a8a;
+}
+.write-footnote { padding-bottom: 2px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer; }
+.write-footnote sup { font-size: 0.75em; }
+.write-footnotes-measure { position: absolute; left: -100000px; top: 0; height: auto !important; visibility: hidden; pointer-events: none; padding-top: 0; }
+.write-footnotes-measure::before { content: none; }
+.write-footnote-input { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+.write-footnote-delete { color: var(--danger); }
+
+/* Índice: los títulos con su página, puntos de relleno y clic para ir */
+.write-toc {
+  margin: 6px 0 14px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.write-toc:hover { background: color-mix(in srgb, var(--kind-accent) 6%, transparent); }
+.write-toc.ProseMirror-selectednode { outline: 1.5px solid var(--kind-accent); }
+.write-toc-title { font-size: 16pt; font-weight: 700; color: #1f3864; margin-bottom: 8px; }
+.write-toc-entry { display: flex; align-items: baseline; gap: 4px; padding: 1px 0; color: inherit; text-decoration: none; }
+.write-toc-entry:hover .write-toc-text { text-decoration: underline; }
+.write-toc-entry.lvl-1 { font-weight: 600; margin-top: 4px; }
+.write-toc-entry.lvl-2 { padding-left: 20px; }
+.write-toc-entry.lvl-3 { padding-left: 40px; font-size: 0.95em; }
+.write-toc-text { flex: none; max-width: 85%; }
+.write-toc-dots { flex: 1; min-width: 12px; border-bottom: 1.5px dotted #8a8a8a; transform: translateY(-4px); }
+.write-toc-page { flex: none; font-variant-numeric: tabular-nums; }
+.write-toc-empty { color: #6e6e73; font-style: italic; font-size: 0.95em; }
+
 /* Resultados de buscar */
 .write-content .write-match { background: #fff3a3; border-radius: 2px; }
 .write-content .write-match.current { background: #ffb347; }
@@ -193,6 +253,8 @@
   .write-canvas { padding: 0; overflow: visible; background: none; }
   .write-page { margin: 0; border-radius: 0; box-shadow: none; zoom: 1 !important; }
   .write-gap-band { display: none !important; }
+  .write-toc:hover { background: none; }
+  .write-fn-ref { color: inherit; }
   /* El salto conserva su alto para que las hojas impresas coincidan con la pantalla. */
   .write-page-break { border-top-color: transparent; }
   .write-page-break::after { content: none; }

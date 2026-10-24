@@ -21,6 +21,8 @@ import { LETTER, NO_HEADER_FOOTER } from "./docx";
 import type { PageLayout, ParagraphFormat } from "./extensions";
 import { ColoredCell, ColoredHeader, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, currentParagraphFormat, fillFields } from "./extensions";
 import HeaderFooterDialog from "./HeaderFooterDialog";
+import FootnoteDialog from "./FootnoteDialog";
+import { Footnote, TableOfContents, footnoteAt, footnotePos, withTocCache } from "./notes";
 import ParagraphDialog from "./ParagraphDialog";
 import WriteFindBar from "./WriteFindBar";
 import ReviewPanel from "./ReviewPanel";
@@ -143,6 +145,10 @@ export default function WriteEditor(props: Props) {
     zoom,
   };
 
+  // Nota al pie que se está escribiendo (posición en el documento, número y texto).
+  const [noteEdit, setNoteEdit] = useState<{ pos: number; n: number; text: string } | null>(null);
+  const editNote = useRef<(pos: number) => void>(() => {});
+
   const extensions = useMemo(
     () => [
       StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: "https" }, strike: false }),
@@ -160,6 +166,8 @@ export default function WriteEditor(props: Props) {
       ColoredCell,
       CharacterCount,
       PageBreak,
+      Footnote.configure({ onEdit: (pos) => editNote.current(pos) }),
+      TableOfContents,
       ParagraphFormatExtension,
       Search,
       Pagination.configure({ layout: () => layout.current, onPages: setPages }),
@@ -186,6 +194,26 @@ export default function WriteEditor(props: Props) {
   useEffect(() => {
     loading.current = false;
   }, []);
+
+  editNote.current = (pos) => {
+    if (!editor) return;
+    const note = footnoteAt(editor.state, pos);
+    if (note) setNoteEdit({ pos, ...note });
+  };
+
+  function saveNote(text: string) {
+    if (!editor || !noteEdit) return;
+    const node = editor.state.doc.nodeAt(noteEdit.pos);
+    if (node?.type.name !== "footnote") return;
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(noteEdit.pos, undefined, { ...node.attrs, text }));
+  }
+
+  function deleteNote() {
+    if (!editor || !noteEdit) return;
+    const node = editor.state.doc.nodeAt(noteEdit.pos);
+    if (node?.type.name !== "footnote") return;
+    editor.view.dispatch(editor.state.tr.delete(noteEdit.pos, noteEdit.pos + node.nodeSize));
+  }
 
   // Con otra hoja, otro encabezado o zoom, las páginas se vuelven a cortar.
   useEffect(() => {
@@ -262,7 +290,7 @@ export default function WriteEditor(props: Props) {
     if (!editor) return false;
     const savedChanges = changesRef.current;
     try {
-      await saveWriteDocument(target, editor.getJSON(), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""), comments);
+      await saveWriteDocument(target, withTocCache(editor.getJSON(), editor.state), page, headerFooter, editor.getText({ blockSeparator: "\n" }), fileNameOf(target).replace(/\.[^.]+$/, ""), comments);
       // Si se siguió escribiendo mientras se guardaba, sigue habiendo cambios.
       if (changesRef.current === savedChanges) markSaved(target);
       else (setPath(target), setFileName(fileNameOf(target)), onSaved(target));
@@ -318,7 +346,7 @@ export default function WriteEditor(props: Props) {
       if (!r.dirty || !editor || recoveredAt.current === changesRef.current) return;
       recoveredAt.current = changesRef.current;
       try {
-        const data = await docxBase64(editor.getJSON(), r.page, r.headerFooter, r.fileName.replace(/\.[^.]+$/, ""), r.comments);
+        const data = await docxBase64(withTocCache(editor.getJSON(), editor.state), r.page, r.headerFooter, r.fileName.replace(/\.[^.]+$/, ""), r.comments);
         await recoveryApi.saveFile(r.fileName, r.path, data);
       } catch {
         // Si no se pudo, se intenta en la siguiente vuelta.
@@ -478,8 +506,9 @@ export default function WriteEditor(props: Props) {
   // ───────────── órdenes del menú y atajos ─────────────
 
   const openFind = () => setFindOpen(true);
-  const commands = useRef({ saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking });
-  commands.current = { saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, setTracking, tracking };
+  const addFootnote = () => editor?.chain().focus().insertFootnote().run();
+  const commands = useRef({ saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, setTracking, tracking });
+  commands.current = { saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, setTracking, tracking };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
@@ -499,6 +528,12 @@ export default function WriteEditor(props: Props) {
       if (e.altKey && (e.code === "KeyM" || key === "m")) {
         e.preventDefault();
         commands.current.addComment();
+        return;
+      }
+      // ⌘⌥F: nota al pie (como en Word).
+      if (e.altKey && (e.code === "KeyF" || key === "f")) {
+        e.preventDefault();
+        commands.current.addFootnote();
         return;
       }
       if (e.shiftKey && key === "e") {
@@ -531,6 +566,16 @@ export default function WriteEditor(props: Props) {
 
   // ⌘ + clic (Ctrl en Windows) en un vínculo lo abre en el navegador.
   function onContentMouseDown(e: React.MouseEvent) {
+    // Clic en una nota al pie (abajo de la hoja): escribirla.
+    const note = (e.target as HTMLElement).closest<HTMLElement>(".write-footnote[data-note]");
+    if (note && editor) {
+      const pos = footnotePos(editor.state, Number(note.dataset.note));
+      if (pos !== null) {
+        e.preventDefault();
+        editNote.current(pos);
+        return;
+      }
+    }
     const link = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
     if (!link || !hasModifier(e)) return;
     e.preventDefault();
@@ -714,6 +759,19 @@ export default function WriteEditor(props: Props) {
           }}
           onClose={() => {
             setHfDialog(false);
+            editor?.commands.focus();
+          }}
+        />
+      )}
+      {noteEdit && (
+        <FootnoteDialog
+          key={noteEdit.pos}
+          n={noteEdit.n}
+          text={noteEdit.text}
+          onSave={saveNote}
+          onDelete={deleteNote}
+          onClose={() => {
+            setNoteEdit(null);
             editor?.commands.focus();
           }}
         />
@@ -1017,6 +1075,19 @@ function WriteBar(props: {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
             <path d="M6 3v5h12V3M6 21v-5h12v5" />
             <path d="M3 12h3M9 12h2M13 12h2M18 12h3" />
+          </svg>
+        </ToolButton>
+        <ToolButton label={keys("Nota al pie (⌘⌥F)")} onClick={() => chain().insertFootnote().run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 6h10M4 10h10M4 14h6" />
+            <path d="M17 4.5l1.6-.9V9" />
+            <path d="M4 19h16" strokeDasharray="2 2" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Índice (con los títulos y sus páginas)" onClick={() => chain().insertTableOfContents().run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 5h11M7 10h8M7 15h8M4 20h11" />
+            <path d="M19 5h1M19 10h1M19 15h1M19 20h1" />
           </svg>
         </ToolButton>
         <ToolButton label="Encabezado y pie de página" onClick={props.onHeaderFooter}>

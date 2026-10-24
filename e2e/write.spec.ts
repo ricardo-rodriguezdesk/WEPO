@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { collectErrors, finishExport, openFile, outFile, pdfInfo, pdfText, saveAs } from "./helpers";
+import { collectErrors, finishExport, home, openFile, outFile, pdfInfo, pdfText, saveAs } from "./helpers";
 
 const count = (page: Page) => page.locator(".print-count");
 const pager = (page: Page) => page.locator(".print-pager span");
@@ -72,5 +72,73 @@ test.describe("WEPO Write", () => {
     const text = await pdfText(out);
     expect(text).toHaveLength(2);
     expect(text[1]).toContain("Comentarios");
+  });
+
+  test("índice y notas al pie: se ven, se guardan en Word y se vuelven a abrir", async ({ page }) => {
+    const errors = collectErrors(page);
+    await home(page);
+    await page.locator(".home-card.kind-write").click();
+    await page.locator(".write-content").click();
+    const k = page.keyboard;
+    await page.getByLabel("Índice (con los títulos y sus páginas)").click();
+    const heading = async (level: number, text: string) => {
+      await page.getByLabel("Estilo del párrafo").selectOption(String(level));
+      await k.type(text);
+      await k.press("Enter");
+    };
+    await heading(1, "Introducción");
+    await k.type("Texto con nota");
+    await page.locator("[aria-label^='Nota al pie']").click();
+    await page.getByLabel("Texto de la nota").fill("Fuente: INEGI, 2025.");
+    await page.getByRole("dialog").getByRole("button", { name: "Listo" }).click();
+    await k.press("End");
+    await k.press("Enter");
+    for (let i = 1; i <= 30; i++) {
+      await k.type(`Renglón de relleno ${i}.`);
+      await k.press("Enter");
+    }
+    await heading(2, "Detalle");
+    await k.type("Otra nota");
+    await k.press("ControlOrMeta+Alt+f");
+    await page.getByLabel("Texto de la nota").fill("Segunda nota.");
+    await k.press("Enter");
+
+    // Las notas van al pie de la hoja donde está su número; el índice dice en qué página está cada título.
+    await expect(page.locator(".write-fn-ref")).toHaveCount(2);
+    await expect(page.locator(".write-gap .write-footnote")).toHaveText(["1 Fuente: INEGI, 2025.", "2 Segunda nota."]);
+    await expect(page.locator(".write-toc-entry")).toHaveText(["Introducción1", "Detalle2"]);
+
+    // Clic en la nota de abajo: se puede cambiar.
+    await page.locator(".write-gap .write-footnote").first().click();
+    await expect(page.getByRole("dialog", { name: "Nota al pie 1" })).toBeVisible();
+    await page.getByLabel("Texto de la nota").fill("Fuente: INEGI.");
+    await page.getByRole("dialog").getByRole("button", { name: "Listo" }).click();
+    await expect(page.locator(".write-gap .write-footnote").first()).toHaveText("1 Fuente: INEGI.");
+
+    // Guardar en Word y volver a abrir.
+    const out = outFile("indice-notas.docx");
+    await saveAs(page, out);
+    await k.press("ControlOrMeta+s");
+    await expect(page.locator(".write-footer .sheet-status")).toContainText("Guardado");
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".write-toc-entry")).toHaveText(["Introducción1", "Detalle2"]);
+    await expect(page.locator(".write-gap .write-footnote")).toHaveText(["1 Fuente: INEGI.", "2 Segunda nota."]);
+    await expect(page.locator(".write-notice")).toHaveCount(0);
+
+    // Y en el PDF las notas salen al pie de su hoja.
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(page.locator(".print-count")).toHaveText("2 páginas");
+    const pdf = outFile("indice-notas.pdf");
+    await saveAs(page, pdf);
+    await page.getByRole("button", { name: "Exportar PDF…" }).click();
+    await finishExport(page, pdf);
+    const text = await pdfText(pdf);
+    expect(text).toHaveLength(2);
+    expect(text[0]).toMatch(/Índice.*Introducción.*1.*Detalle.*2/);
+    expect(text[0]).toMatch(/1 Fuente: INEGI\.$/);
+    expect(text[1]).toMatch(/2 Segunda nota\.$/);
+    expect(errors).toEqual([]);
   });
 });

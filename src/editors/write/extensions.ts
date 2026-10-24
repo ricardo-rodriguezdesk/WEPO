@@ -15,6 +15,8 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { TableCell, TableHeader } from "@tiptap/extension-table";
 import Strike from "@tiptap/extension-strike";
 import type { EditorView } from "@tiptap/pm/view";
+import { NoteMeasurer, notesBlock, notesIn } from "./notes";
+import type { Note } from "./notes";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -329,8 +331,10 @@ export type PageLayout = {
   zoom: number;
 };
 
-type Break = { pos: number; fill: number };
-type PageState = { breaks: Break[]; endFill: number; pages: number; decorations: DecorationSet; stamp: string };
+/** Dónde empieza una página, cuánto espacio queda libre al pie de la anterior y sus notas al pie. */
+type Break = { pos: number; fill: number; notes: Note[]; notesHeight: number };
+type PageEnd = { fill: number; notes: Note[]; notesHeight: number };
+type PageState = { breaks: Break[]; end: PageEnd; pages: number; decorations: DecorationSet; stamp: string };
 
 export const pagesKey = new PluginKey<PageState>("wepo-pages");
 
@@ -363,14 +367,16 @@ export function headerBand(layout: PageLayout, page: number, pages: number) {
   return band("header", layout.header, layout.top, page, pages, layout, layout.skipFirst && page === 1);
 }
 
-function gapWidget(fill: number, page: number, pages: number, layout: PageLayout, last: boolean) {
+function gapWidget(end: PageEnd, page: number, pages: number, layout: PageLayout, last: boolean) {
   const el = document.createElement("div");
   el.className = last ? "write-gap write-gap-end" : "write-gap";
   el.contentEditable = "false";
   const space = document.createElement("div");
   space.className = "write-gap-fill";
-  space.style.height = `${fill}px`;
+  space.style.height = `${end.fill}px`;
   el.appendChild(space);
+  // Las notas al pie de esta hoja, justo arriba del pie de página.
+  if (end.notes.length) el.appendChild(notesBlock(end.notes, end.notesHeight));
   el.appendChild(band("footer", layout.footer, layout.bottom, page, pages, layout, layout.skipFirst && page === 1));
   if (!last) {
     const between = document.createElement("div");
@@ -390,22 +396,33 @@ function hash(text: string): string {
   return (h >>> 0).toString(36);
 }
 
-function buildDecorations(doc: PMNode, breaks: Break[], endFill: number, layout: PageLayout, stamp: string): DecorationSet {
+function notesKey(notes: Note[]): string {
+  return notes.length ? hash(JSON.stringify(notes)) : "";
+}
+
+function buildDecorations(doc: PMNode, breaks: Break[], end: PageEnd, layout: PageLayout, stamp: string): DecorationSet {
   const pages = breaks.length + 1;
   const v = hash(stamp);
   const decos = breaks.map((b, i) =>
-    Decoration.widget(b.pos, () => gapWidget(b.fill, i + 1, pages, layout, false), { side: -1, ignoreSelection: true, key: `gap-${i}-${b.fill}-${pages}-${v}` }),
+    Decoration.widget(b.pos, () => gapWidget(b, i + 1, pages, layout, false), { side: -1, ignoreSelection: true, key: `gap-${i}-${b.fill}-${pages}-${v}-${notesKey(b.notes)}` }),
   );
-  decos.push(Decoration.widget(doc.content.size, () => gapWidget(endFill, pages, pages, layout, true), { side: 1, ignoreSelection: true, key: `end-${endFill}-${pages}-${v}` }));
+  decos.push(
+    Decoration.widget(doc.content.size, () => gapWidget(end, pages, pages, layout, true), { side: 1, ignoreSelection: true, key: `end-${end.fill}-${pages}-${v}-${notesKey(end.notes)}` }),
+  );
   return DecorationSet.create(doc, decos);
 }
 
 /** Dónde cortar las páginas, midiendo los bloques tal como se ven (sin contar los cortes que ya hay). */
-function measure(view: EditorView, layout: PageLayout): { breaks: Break[]; endFill: number } {
+function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): { breaks: Break[]; end: PageEnd } {
   const root = view.dom as HTMLElement;
   const zoom = layout.zoom || 1;
   const rootTop = root.getBoundingClientRect().top;
   const contentHeight = layout.height - layout.top - layout.bottom;
+  const textWidth = layout.width - layout.left - layout.right;
+  const notesHeight = (notes: Note[]) => measurer.height(root.parentElement ?? root, textWidth, zoom, notes);
+  // Notas al pie de la hoja que se está llenando.
+  let pageNotes: Note[] = [];
+  let noteCount = 0;
   // Cuánto miden los cortes que hay antes de cada elemento.
   const before = new Map<Element, number>();
   let gaps = 0;
@@ -425,11 +442,17 @@ function measure(view: EditorView, layout: PageLayout): { breaks: Break[]; endFi
     const rect = dom.getBoundingClientRect();
     const top = (rect.top - rootTop) / zoom - shift;
     const bottom = (rect.bottom - rootTop) / zoom - shift;
-    const overflows = bottom - pageStart > contentHeight + 0.5;
+    // Las notas de este bloque van al pie de la misma hoja: le quitan espacio al texto.
+    const blockNotes = notesIn(node, noteCount + 1);
+    noteCount += blockNotes.length;
+    const overflows = bottom - pageStart > contentHeight - notesHeight([...pageNotes, ...blockNotes]) + 0.5;
     if (index > 0 && (forced || (overflows && cursor > pageStart + 1))) {
-      breaks.push({ pos: offset, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY)) });
+      const h = notesHeight(pageNotes);
+      breaks.push({ pos: offset, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h });
       pageStart = cursor;
+      pageNotes = [];
     }
+    pageNotes = [...pageNotes, ...blockNotes];
     forced = node.type.name === "pageBreak";
     const margin = parseFloat(getComputedStyle(dom).marginBottom) || 0;
     cursor = Math.max(bottom + margin, top);
@@ -439,7 +462,8 @@ function measure(view: EditorView, layout: PageLayout): { breaks: Break[]; endFi
     while (bottom - pageStart > contentHeight + 0.5) pageStart += contentHeight;
     index++;
   });
-  return { breaks, endFill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY)) };
+  const h = notesHeight(pageNotes);
+  return { breaks, end: { fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h } };
 }
 
 export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: (pages: number) => void }>({
@@ -461,13 +485,14 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
       new Plugin<PageState>({
         key: pagesKey,
         state: {
-          init: (_, state) => ({ breaks: [], endFill: 0, pages: 1, decorations: DecorationSet.create(state.doc, []), stamp: "" }),
+          init: (_, state) => ({ breaks: [], end: { fill: 0, notes: [], notesHeight: 0 }, pages: 1, decorations: DecorationSet.create(state.doc, []), stamp: "" }),
           apply(tr, prev) {
-            const meta = tr.getMeta(pagesKey) as { breaks?: Break[]; endFill?: number; stamp?: string; refresh?: boolean } | undefined;
+            const meta = tr.getMeta(pagesKey) as { breaks?: Break[]; end?: PageEnd; stamp?: string; refresh?: boolean } | undefined;
             if (meta?.refresh) return { ...prev, stamp: "" };
             if (meta?.breaks) {
               const layout = options.layout();
-              return { breaks: meta.breaks, endFill: meta.endFill ?? 0, pages: meta.breaks.length + 1, stamp: meta.stamp ?? "", decorations: buildDecorations(tr.doc, meta.breaks, meta.endFill ?? 0, layout, meta.stamp ?? "") };
+              const end = meta.end ?? prev.end;
+              return { breaks: meta.breaks, end, pages: meta.breaks.length + 1, stamp: meta.stamp ?? "", decorations: buildDecorations(tr.doc, meta.breaks, end, layout, meta.stamp ?? "") };
             }
             if (!tr.docChanged) return prev;
             // Mientras se vuelve a medir, los cortes se mueven con el texto.
@@ -479,6 +504,7 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
         view(view) {
           let frame = 0;
           let rounds = 0;
+          const measurer = new NoteMeasurer();
           const schedule = () => {
             cancelAnimationFrame(frame);
             frame = requestAnimationFrame(run);
@@ -489,17 +515,19 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
             if (window.matchMedia?.("print").matches) return;
             const layout = options.layout();
             if (!layout.height) return;
-            const { breaks, endFill } = measure(view, layout);
+            const { breaks, end } = measure(view, layout, measurer);
             const prev = pagesKey.getState(view.state)!;
             const stamp = JSON.stringify([layout.header, layout.footer, layout.skipFirst, layout.fileName, layout.width, layout.height, layout.top, layout.bottom, layout.left, layout.right]);
+            const sameNotes = (a: Note[], b: Note[]) => notesKey(a) === notesKey(b);
             const same =
               stamp === prev.stamp &&
               breaks.length === prev.breaks.length &&
-              Math.abs(endFill - prev.endFill) < 2 &&
-              breaks.every((b, i) => b.pos === prev.breaks[i].pos && Math.abs(b.fill - prev.breaks[i].fill) < 2);
+              Math.abs(end.fill - prev.end.fill) < 2 &&
+              sameNotes(end.notes, prev.end.notes) &&
+              breaks.every((b, i) => b.pos === prev.breaks[i].pos && Math.abs(b.fill - prev.breaks[i].fill) < 2 && sameNotes(b.notes, prev.breaks[i].notes));
             if (same || rounds > 6) return;
             rounds++;
-            view.dispatch(view.state.tr.setMeta(pagesKey, { breaks, endFill, stamp }).setMeta("addToHistory", false));
+            view.dispatch(view.state.tr.setMeta(pagesKey, { breaks, end, stamp }).setMeta("addToHistory", false));
             options.onPages(breaks.length + 1);
             // Con los cortes puestos, se mide otra vez para afinar.
             schedule();
@@ -518,6 +546,7 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
             },
             destroy() {
               cancelAnimationFrame(frame);
+              measurer.destroy();
               observer.disconnect();
               view.dom.removeEventListener("load", schedule, true);
             },

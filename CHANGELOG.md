@@ -7,6 +7,11 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 ### Cortes de página en WEPO Sheets
 - Botón *Cortes de página* junto al zoom: líneas punteadas en la hoja donde termina cada página al imprimir, con las últimas opciones de impresión (papel, orientación, márgenes, escala, área y filas que se repiten). Como en Excel, aparecen solas después de imprimir o exportar a PDF.
 
+### Índice y notas al pie en WEPO Write
+- Botón *Índice*: arma la tabla de contenido con los títulos (1, 2 y 3) y la página donde cae cada uno; se actualiza sola al escribir y un clic en una entrada lleva a ese título.
+- Botón *Nota al pie* (⌘⌥F): pone el número volado en el texto y la nota al pie de la hoja donde quedó, con su raya, como en Word. Las páginas dejan espacio para las notas; clic en el número o en la nota para cambiarla o borrarla.
+- Se abren y se guardan en .docx (el índice como el de Word, con sus páginas; las notas en su lugar de Word) y se leen de .odt. En Markdown las notas van como [^1].
+
 ## 0.3.1 (24 de octubre de 2026)
 
 Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.

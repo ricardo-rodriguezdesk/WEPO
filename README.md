@@ -157,6 +157,7 @@ En Windows y Linux, ⌘ es Ctrl.
 | ⌘↩ | Salto de página |
 | ⌘F | Buscar y reemplazar |
 | ⌘⌥M | Comentar el texto seleccionado |
+| ⌘⌥F | Nota al pie (clic en su número o en la nota para cambiarla) |
 | ⌘⇧E | Encender o apagar el control de cambios |
 | ⌘S / ⌘⇧S | Guardar / Guardar como (.docx, .md o .txt) |
 | ⌘P | Imprimir o exportar a PDF |
@@ -268,9 +269,13 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: imprimir con vista previa (papel, orientación, márgenes, escala) y elegir el área de impresión con el mouse
 - [x] WEPO PDF: convertir un PDF en documento de Write (títulos, listas, tablas, imágenes, encabezado y pie)
 - [x] WEPO PDF: pasar las tablas de un PDF a Sheets, con números de verdad y celdas combinadas
-- [ ] Vista previa de impresión en Write y Present
-- [ ] WEPO Present: animaciones, transiciones y gráficas
-- [ ] WEPO Write: índice automático y notas al pie
+- [x] Vista previa de impresión en Write y Present
+- [x] Pruebas automáticas de la interfaz (en cada cambio, en GitHub)
+- [x] WEPO Sheets: cortes de página en la hoja
+- [x] WEPO Write: índice automático y notas al pie
+- [ ] WEPO Present: transiciones y gráficas
+- [ ] WEPO Present: animaciones
+- [ ] WEPO PDF: abrir y guardar PDF con contraseña
 - [ ] WEPO PDF: reconocer texto en escaneos (OCR)
 
 ## Licencia
