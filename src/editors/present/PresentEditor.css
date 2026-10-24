@@ -283,15 +283,24 @@
 .presenter-next-end { padding: 24px; color: #888; border: 1px dashed #444; border-radius: 6px; }
 .presenter-notes { flex: 1; overflow-y: auto; font-size: 20px; line-height: 1.45; white-space: pre-wrap; color: #f2f2f2; }
 
-/* Impresión: cada diapositiva en su hoja (ver PrintSlides.tsx). */
+/* Impresión y vista previa: cada hoja (ver PrintSlides.tsx). */
+.present-print-page { position: relative; overflow: hidden; background: #fff; color: #1d1d1f; box-sizing: border-box; font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+.present-print-page .slide-frame { box-shadow: none; }
+.present-print-sheet { box-sizing: border-box; width: 100%; height: 100%; display: flex; flex-direction: column; }
+.present-print-slide { border: 1px solid #b0b0b0; flex: none; }
+.present-print-number { display: block; margin: 6px 0 2px; font-size: 9pt; color: #666; }
+.present-print-text { margin-top: 6px; font-size: 12pt; line-height: 1.45; white-space: pre-wrap; overflow: hidden; }
+.present-print-h2 { justify-content: space-around; align-items: center; }
+.present-print-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.present-print-h3 { justify-content: space-between; }
+.present-print-row { display: flex; gap: 24px; align-items: center; }
+.present-print-row .present-print-cell { width: 48%; align-items: flex-start; }
+.present-print-lines { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; align-self: stretch; padding: 12px 0; }
+.present-print-lines span { display: block; border-bottom: 1px solid #c8c8c8; height: 1px; }
+.present-print-h6 { display: grid; grid-template-columns: 1fr 1fr; align-content: space-around; justify-items: center; column-gap: 24px; }
+.present-print-folio { position: absolute; right: 58px; bottom: 28px; font-size: 9pt; color: #888; }
 @media print {
   .present-print { color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .present-print .slide-frame { box-shadow: none; }
   .present-print-page { break-after: page; page-break-after: always; }
   .present-print-page:last-child { break-after: auto; page-break-after: auto; }
-  .present-print-notes { font-family: -apple-system, "Segoe UI", sans-serif; }
-  .present-print-notes .slide-frame { border: 1px solid #999; }
-  .present-print-number { margin: 10px 0 4px; font-size: 10pt; color: #666; }
-  .present-print-text { font-size: 12pt; line-height: 1.45; white-space: pre-wrap; }
-  .present-print-break { break-after: page; page-break-after: always; }
 }

@@ -21,13 +21,12 @@ import { SlideParagraph, allRuns, fromEditor, mapParas, mapRuns, toEditor } from
 import { presentationBase64, savePresentation } from "../../lib/present";
 import { recoveryApi } from "../../lib/recovery";
 import { invoke } from "@tauri-apps/api/core";
-import Dialog from "../../components/Dialog";
 import Presenter from "./Presenter";
-import PrintSlides from "./PrintSlides";
+import PrintSlides, { PresentPrintDialog, sheetSize } from "./PrintSlides";
 import type { SlidePrintJob } from "./PrintSlides";
 import { imageDataUrl } from "../../lib/write";
 import { extensionOf, fileNameOf } from "../../lib/documents";
-import { askPdfPath, letter, printReady, writePdf } from "../../lib/exportPdf";
+import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import "../sheets/FormatBar.css";
@@ -876,8 +875,9 @@ export default function PresentEditor(props: Props) {
       (async () => {
         await printReady();
         if (cancelled) return;
-        // Con notas: hoja carta con márgenes de 0.6 in; si no, una hoja del tamaño de la diapositiva.
-        const page = printJob.notes ? letter(false, 43.2) : { width: (deckRef.current.width / 96) * 72, height: (deckRef.current.height / 96) * 72, margin: 0 };
+        // Cada hoja ya trae su margen: el PDF es del tamaño de la hoja (la diapositiva o el papel).
+        const size = sheetSize(printJob, deckRef.current);
+        const page = { width: (size.width * 72) / 96, height: (size.height * 72) / 96, margin: 0 };
         try {
           const name = await writePdf(target, page);
           setStatus({ text: `PDF guardado: ${name}` });
@@ -1223,8 +1223,9 @@ export default function PresentEditor(props: Props) {
         />
       )}
       {printDialog && (
-        <PrintSlidesDialog
-          hasHidden={deck.slides.some((x) => x.hidden)}
+        <PresentPrintDialog
+          deck={deck}
+          current={current}
           pdf={printDialog === "pdf"}
           onPrint={(job, toPdf) => void startPrint(job, toPdf)}
           onClose={() => setPrintDialog(false)}
@@ -1848,51 +1849,3 @@ function LayoutPreview({ id }: { id: LayoutId }) {
 
 
 /** Opciones antes de imprimir: solo diapositivas, o con sus notas. */
-function PrintSlidesDialog({
-  hasHidden,
-  pdf,
-  onPrint,
-  onClose,
-}: {
-  hasHidden: boolean;
-  /** Abierto desde "Exportar como PDF": ese botón es el principal. */
-  pdf: boolean;
-  onPrint: (job: SlidePrintJob, toPdf: boolean) => void;
-  onClose: () => void;
-}) {
-  const [notes, setNotes] = useState(false);
-  const [hidden, setHidden] = useState(false);
-  return (
-    <Dialog
-      title="Imprimir o exportar a PDF"
-      onClose={onClose}
-      width={420}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Cancelar
-          </button>
-          <button className={`btn${pdf ? " btn-primary" : ""}`} autoFocus={pdf} onClick={() => onPrint({ notes, hidden }, true)}>
-            Exportar PDF…
-          </button>
-          <button className={`btn${pdf ? "" : " btn-primary"}`} autoFocus={!pdf} onClick={() => onPrint({ notes, hidden }, false)}>
-            Imprimir…
-          </button>
-        </>
-      }
-    >
-      <label className="radio">
-        <input type="radio" checked={!notes} onChange={() => setNotes(false)} /> Diapositivas (una por hoja)
-      </label>
-      <label className="radio">
-        <input type="radio" checked={notes} onChange={() => setNotes(true)} /> Diapositivas con sus notas (hoja carta)
-      </label>
-      {hasHidden && (
-        <label className="radio">
-          <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} /> Incluir las diapositivas ocultas
-        </label>
-      )}
-      <p className="hint">«Exportar PDF…» guarda el archivo directo, igual que se vería impreso.</p>
-    </Dialog>
-  );
-}

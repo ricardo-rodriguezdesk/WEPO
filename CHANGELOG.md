@@ -11,6 +11,10 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Los comentarios se pueden imprimir al final, con su autor, el texto comentado y las respuestas.
 - Arreglo: en algunos documentos, un párrafo que terminaba justo al pie de la hoja hacía que todo lo siguiente quedara encimado en esa página (se veía al poner la hoja horizontal).
 
+### Imprimir en WEPO Present, con vista previa
+- Pantalla de impresión con vista previa: diapositivas (una por hoja), diapositivas con notas, o documentos con 2, 3 (con renglones para apuntes) o 6 diapositivas por hoja, en Carta o A4.
+- Todas las diapositivas, la actual o un rango («1-3, 5»), con o sin las ocultas.
+
 ## 0.3.0 (23 de octubre de 2026)
 
 WEPO PDF ya edita, y los documentos pasan de un formato a otro: exportar a PDF desde los tres editores y convertir un PDF en documento de Write o en hojas de Sheets.
