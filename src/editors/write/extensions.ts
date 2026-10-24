@@ -433,8 +433,10 @@ function measure(view: EditorView, layout: PageLayout): { breaks: Break[]; endFi
     forced = node.type.name === "pageBreak";
     const margin = parseFloat(getComputedStyle(dom).marginBottom) || 0;
     cursor = Math.max(bottom + margin, top);
-    // Un bloque más alto que una hoja (una tabla enorme) sigue de largo.
-    while (cursor - pageStart > contentHeight + 0.5) pageStart += contentHeight;
+    // Un bloque más alto que una hoja (una tabla enorme) sigue de largo. Se mide con el
+    // borde del bloque, sin su margen de abajo: ese margen no cabe al pie de la hoja y se pierde,
+    // y contarlo hacía avanzar la hoja sin poner el corte (todo lo que seguía quedaba encimado).
+    while (bottom - pageStart > contentHeight + 0.5) pageStart += contentHeight;
     index++;
   });
   return { breaks, endFill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY)) };

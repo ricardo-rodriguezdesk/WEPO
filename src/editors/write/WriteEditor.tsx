@@ -34,6 +34,8 @@ import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, isMac, isWindows, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import "../sheets/FormatBar.css";
+import WritePrintDialog, { WritePrintPortal, snapshotPages } from "./WritePrint";
+import type { CommentEntry, WritePrintJob } from "./WritePrint";
 import "./WriteEditor.css";
 
 type Props = {
@@ -350,14 +352,41 @@ export default function WriteEditor(props: Props) {
     saveZoom(path, value);
   }
 
-  function print() {
-    invoke("print_window").catch(() => window.print());
-  }
+  // ───────────── imprimir y exportar (con vista previa) ─────────────
 
-  /** Exportar como PDF: las mismas páginas que se imprimen, directo a un archivo. */
-  async function exportPdf() {
-    const target = await askPdfPath(path, fileName);
-    if (!target) return;
+  const pageEl = useRef<HTMLDivElement>(null);
+  const [printDialog, setPrintDialog] = useState<false | "print" | "pdf">(false);
+  const [printOpen, setPrintOpen] = useState<{ current: number; comments: CommentEntry[] } | null>(null);
+  const [printJob, setPrintJob] = useState<{ job: WritePrintJob; pdf: string | null } | null>(null);
+
+  function openPrint(mode: "print" | "pdf") {
+    const el = pageEl.current;
+    if (!el || !editor) return;
+    // Página del cursor: dónde cae, contando las franjas entre hojas.
+    let current = 0;
+    try {
+      const rect = el.getBoundingClientRect();
+      const y = editor.view.coordsAtPos(editor.state.selection.from).top;
+      current = Array.from(el.querySelectorAll(".write-gap-band")).filter((b) => b.getBoundingClientRect().bottom <= y).length;
+      if (y < rect.top) current = 0;
+    } catch {
+      current = 0;
+    }
+    const entries = comments.map((comment) => ({
+      comment,
+      quote: Array.from(el.querySelectorAll(`span[data-comment="${CSS.escape(comment.id)}"]`))
+        .map((s) => s.textContent ?? "")
+        .join(" ")
+        .trim(),
+    }));
+    setPrintOpen({ current, comments: entries });
+    setPrintDialog(mode);
+  }
+  const print = () => openPrint("print");
+  const exportPdf = () => openPrint("pdf");
+
+  /** PDF de todo el documento, tal como se ve (el camino directo de siempre). */
+  async function exportAll(target: string) {
     setStatus({ text: "Creando el PDF…" });
     try {
       await printReady();
@@ -368,6 +397,49 @@ export default function WriteEditor(props: Props) {
       setStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
     }
   }
+
+  async function startPrint(job: WritePrintJob, toPdf: boolean, all: boolean) {
+    setPrintDialog(false);
+    let target: string | null = null;
+    if (toPdf) {
+      target = await askPdfPath(path, fileName);
+      if (!target) return;
+    }
+    if (all) {
+      if (target) await exportAll(target);
+      else invoke("print_window").catch(() => window.print());
+      return;
+    }
+    setPrintJob({ job, pdf: target });
+  }
+
+  // Páginas elegidas o con comentarios: se imprime la copia recortada.
+  useEffect(() => {
+    if (!printJob) return;
+    let cancelled = false;
+    const done = () => setPrintJob(null);
+    (async () => {
+      await printReady();
+      if (cancelled) return;
+      if (printJob.pdf) {
+        try {
+          const { snap } = printJob.job;
+          const name = await writePdf(printJob.pdf, { width: (snap.width * 72) / 96, height: (snap.height * 72) / 96, margin: 0 });
+          setStatus({ text: `PDF guardado: ${name}` });
+        } catch (e) {
+          setStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
+        }
+        done();
+      } else {
+        window.addEventListener("afterprint", done, { once: true });
+        invoke("print_window").catch(() => window.print());
+      }
+    })();
+    return () => {
+      cancelled = true;
+      window.removeEventListener("afterprint", done);
+    };
+  }, [printJob]);
 
   // ───────────── vínculos e imágenes ─────────────
 
@@ -474,7 +546,8 @@ export default function WriteEditor(props: Props) {
     }),
   });
 
-  const pageLabel = PAGE_SIZES.find((s) => s.width === page.width && s.height === page.height)?.label ?? "Personalizado";
+  const landscape = page.width > page.height;
+  const pageLabel = PAGE_SIZES.find((s) => (s.width === page.width && s.height === page.height) || (s.height === page.width && s.width === page.height))?.label ?? "Personalizado";
   // Las páginas ya vienen cortadas (con su encabezado y pie), así que la hoja impresa no lleva márgenes propios.
   const pageCss = `@page { size: ${page.width / 1440}in ${page.height / 1440}in; margin: 0; }`;
 
@@ -557,6 +630,7 @@ export default function WriteEditor(props: Props) {
       <div className="write-main">
       <div className="write-canvas">
         <div
+          ref={pageEl}
           className="write-page"
           style={{ width: px(page.width), padding: `0 ${px(page.right)}px`, zoom, ["--page-gap" as string]: `${PAGE_GAP}px` }}
           onMouseDown={onContentMouseDown}
@@ -599,12 +673,15 @@ export default function WriteEditor(props: Props) {
             onChange={(e) => {
               const size = PAGE_SIZES.find((s) => s.label === e.target.value);
               if (!size) return;
-              setPage((p) => ({ ...p, width: size.width, height: size.height }));
+              setPage((p) => (p.width > p.height ? { ...p, width: size.height, height: size.width } : { ...p, width: size.width, height: size.height }));
               markDirty();
             }}
           >
             {PAGE_SIZES.map((s) => (
-              <option key={s.label}>{s.label}</option>
+              <option key={s.label} value={s.label}>
+                {s.label}
+                {landscape ? " (horizontal)" : ""}
+              </option>
             ))}
             {pageLabel === "Personalizado" && <option>Personalizado</option>}
           </select>
@@ -651,6 +728,26 @@ export default function WriteEditor(props: Props) {
           }}
         />
       )}
+      {printDialog && printOpen && (
+        <WritePrintDialog
+          snapshot={() => snapshotPages(pageEl.current!, page)}
+          page={page}
+          currentPage={printOpen.current}
+          comments={printOpen.comments}
+          sizes={PAGE_SIZES}
+          onPageChange={(next) => {
+            setPage(next);
+            markDirty();
+          }}
+          onPrint={(job, toPdf, all) => void startPrint(job, toPdf, all)}
+          onClose={() => {
+            setPrintDialog(false);
+            editor?.commands.focus();
+          }}
+          pdf={printDialog === "pdf"}
+        />
+      )}
+      {printJob && <WritePrintPortal job={printJob.job} />}
       <p className="write-print-hint" hidden>
         {isMac ? "Guardar como PDF" : isWindows ? "Microsoft Print to PDF" : "Imprimir a un archivo"}
       </p>

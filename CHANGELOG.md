@@ -2,6 +2,15 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
+## Próxima versión (sin publicar)
+
+### Imprimir en WEPO Write, con vista previa
+- Pantalla de impresión como la de Sheets: las páginas a la derecha, tal como van a salir.
+- Imprimir o exportar a PDF todas las páginas, la página actual o un rango («1-3, 5»).
+- Tamaño (Carta, A4, Oficio) y orientación de la hoja: el documento se vuelve a acomodar y la vista previa lo muestra.
+- Los comentarios se pueden imprimir al final, con su autor, el texto comentado y las respuestas.
+- Arreglo: en algunos documentos, un párrafo que terminaba justo al pie de la hoja hacía que todo lo siguiente quedara encimado en esa página (se veía al poner la hoja horizontal).
+
 ## 0.3.0 (23 de octubre de 2026)
 
 WEPO PDF ya edita, y los documentos pasan de un formato a otro: exportar a PDF desde los tres editores y convertir un PDF en documento de Write o en hojas de Sheets.

@@ -290,3 +290,30 @@
   .write-main { display: block; }
   .write-content .write-comment { background: none; border: 0; }
 }
+
+/* Paso 40: imprimir con vista previa. Cada hoja es una copia del documento recortada a esa página. */
+.write-print-frame { position: relative; overflow: hidden; background: #fff; color: #1d1d1f; box-sizing: border-box; }
+.write-print-frame .write-page { margin: 0 !important; box-shadow: none !important; border-radius: 0 !important; zoom: 1 !important; }
+.write-print-frame .write-gap-band { background: #fff !important; }
+.write-print-frame.no-comments .write-comment { background: none !important; border: 0 !important; }
+.write-print-frame .write-hf:hover { box-shadow: none; }
+.write-print-comments { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; color: #1d1d1f; }
+.write-print-comments h2 { margin: 0 0 12px; font-size: 16pt; color: #1f3864; }
+.write-print-comment { margin-bottom: 10px; padding: 0 0 8px 10px; border-left: 3px solid #f2c94c; break-inside: avoid; }
+.write-print-comment-head { display: flex; gap: 8px; align-items: baseline; font-size: 9.5pt; }
+.write-print-comment-head span { color: #6e6e73; }
+.write-print-done { padding: 0 6px; border-radius: 6px; background: #e3f4e8; color: #1d7a4a !important; }
+.write-print-quote { margin: 3px 0; font-style: italic; color: #555; }
+.write-print-text { white-space: pre-wrap; }
+.write-print-reply { margin: 6px 0 0 14px; font-size: 9.5pt; }
+.write-print-reply span { color: #6e6e73; }
+.write-print-measure { position: fixed; left: -100000px; top: 0; visibility: hidden; }
+
+@media print {
+  /* La copia conserva sus franjas (si no, el recorte se movería) y no salta de página por dentro. */
+  .print-root .write-print-frame .write-gap-band { display: block !important; }
+  .print-root .write-print-frame .write-hf-header { break-before: auto !important; page-break-before: auto !important; }
+  .print-root .write-print-frame { break-after: page; page-break-after: always; }
+  .print-root .write-print-frame:last-child { break-after: auto; page-break-after: auto; }
+  .print-root.write-print-root { display: block; }
+}
