@@ -273,7 +273,7 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] Pruebas automáticas de la interfaz (en cada cambio, en GitHub)
 - [x] WEPO Sheets: cortes de página en la hoja
 - [x] WEPO Write: índice automático y notas al pie
-- [ ] WEPO Present: transiciones y gráficas
+- [x] WEPO Present: transiciones y gráficas
 - [ ] WEPO Present: animaciones
 - [ ] WEPO PDF: abrir y guardar PDF con contraseña
 - [ ] WEPO PDF: reconocer texto en escaneos (OCR)

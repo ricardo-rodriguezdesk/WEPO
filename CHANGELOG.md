@@ -12,6 +12,12 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Botón *Nota al pie* (⌘⌥F): pone el número volado en el texto y la nota al pie de la hoja donde quedó, con su raya, como en Word. Las páginas dejan espacio para las notas; clic en el número o en la nota para cambiarla o borrarla.
 - Se abren y se guardan en .docx (el índice como el de Word, con sus páginas; las notas en su lugar de Word) y se leen de .odt. En Markdown las notas van como [^1].
 
+### Transiciones y gráficas en WEPO Present
+- Botón *Transición*: Desvanecer, Empujar, Barrido, Cubrir, Acercar o Dividir, con dirección y duración, y la opción de pasar sola a la siguiente después de unos segundos. Vista previa en el editor, «Aplicar a todas» y una estrellita en la miniatura de las diapositivas que tienen transición. Al presentar, la diapositiva entra con su efecto.
+- Botón *Gráfica*: columnas, barras, líneas, áreas, pastel o dona, con título, leyenda, valores y apiladas. Los datos se escriben en el panel de la derecha (categorías y series, como en PowerPoint); doble clic en la gráfica para volver a abrirlo.
+- Se abren y se guardan en .pptx: las transiciones con su duración exacta y las gráficas como gráficas de PowerPoint, con su libro de Excel incrustado (en PowerPoint funciona «Editar datos»). Ya no aparece el aviso de que se pierden las transiciones o las gráficas.
+- Sin transición, la diapositiva cambia de golpe, como en PowerPoint (antes siempre se desvanecía un poco).
+
 ## 0.3.1 (24 de octubre de 2026)
 
 Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.

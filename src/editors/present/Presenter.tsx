@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Deck } from "./model";
+import type { Deck, Slide } from "./model";
 import SlideView from "./SlideView";
+import { playTransition } from "./transitions";
 
 type Props = {
   deck: Deck;
@@ -54,6 +55,32 @@ export default function Presenter({ deck, start, onExit }: Props) {
 
   const current = visible[Math.min(pos, visible.length - 1)];
   const next = visible[pos + 1];
+
+  // Transición: al avanzar, la diapositiva anterior se queda debajo mientras entra la nueva.
+  const [leaving, setLeaving] = useState<Slide | null>(null);
+  const lastPos = useRef(pos);
+  const enterRef = useRef<HTMLDivElement>(null);
+  const exitRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const before = lastPos.current;
+    lastPos.current = pos;
+    const t = visible[pos]?.s.transition;
+    if (pos === before + 1 && pos < visible.length && t && t.kind !== "none" && !presenter) setLeaving(visible[before].s);
+    else setLeaving(null);
+  }, [pos]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const t = visible[pos]?.s.transition;
+    if (!enterRef.current || !t || t.kind === "none" || pos !== lastPos.current || (!leaving && pos !== 0)) return;
+    return playTransition(t, enterRef.current, exitRef.current, () => setLeaving(null));
+  }, [leaving]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pasar sola a la siguiente (si la diapositiva lo pide), contando desde que terminó de entrar.
+  useEffect(() => {
+    const t = visible[pos]?.s.transition;
+    if (!t?.advanceAfter || pos >= visible.length || blank) return;
+    const timer = setTimeout(() => actions.current.go(1), t.advanceAfter + (t.kind === "none" ? 0 : t.duration));
+    return () => clearTimeout(timer);
+  }, [pos, blank]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function exit() {
     if (exiting.current) return;
@@ -188,8 +215,15 @@ export default function Presenter({ deck, start, onExit }: Props) {
       {finished ? (
         <div className="presenter-end">Fin de la presentación. Haz clic para salir.</div>
       ) : (
-        <div key={current.s.id} className="presenter-slide">
-          <SlideView slide={current.s} deck={deck} scale={fit(size.w, size.h)} />
+        <div className="presenter-stage">
+          {leaving && (
+            <div ref={exitRef} className="presenter-layer" key={`out-${leaving.id}`}>
+              <SlideView slide={leaving} deck={deck} scale={fit(size.w, size.h)} />
+            </div>
+          )}
+          <div ref={enterRef} key={current.s.id} className="presenter-layer presenter-slide">
+            <SlideView slide={current.s} deck={deck} scale={fit(size.w, size.h)} />
+          </div>
         </div>
       )}
       {blank && <div className={`presenter-blank ${blank}`} />}

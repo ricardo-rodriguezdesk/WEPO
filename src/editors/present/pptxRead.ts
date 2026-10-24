@@ -6,8 +6,10 @@
 // esa herencia y cada cuadro queda con sus valores propios, listos para dibujar.
 
 import JSZip from "jszip";
-import type { Deck, ImageElement, LayoutId, Line, Para, Role, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
+import type { ChartElement, Deck, ImageElement, LayoutId, Line, Para, Role, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
 import { DEFAULT_THEME, EMU_PER_PX, uid } from "./model";
+import { readChartXml } from "./charts";
+import { readTransition } from "./transitions";
 
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const P = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -523,6 +525,10 @@ class PptxReader {
         if (uri.endsWith("/table")) {
           const table = this.table(el, part);
           if (table) out.push(table);
+        } else if (uri.endsWith("/chart")) {
+          const chart = await this.chart(el, part);
+          if (chart) out.push(chart);
+          else this.unsupported.add("gráficas");
         } else if (uri.includes("chart")) this.unsupported.add("gráficas");
         else if (uri.includes("diagram")) this.unsupported.add("SmartArt");
         else this.unsupported.add("objetos incrustados");
@@ -535,6 +541,30 @@ class PptxReader {
       }
     }
     return out;
+  }
+
+  /** Gráfica: el graphicFrame apunta a chartN.xml, que trae los datos en su caché. */
+  async chart(frame: Element, part: Part): Promise<ChartElement | null> {
+    const ref = path(frame, "graphic", "graphicData", "chart");
+    const rel = ref ? part.rels.get(ref.getAttributeNS(R, "id") ?? "") : undefined;
+    if (!rel || rel.external) return null;
+    const xml = await this.text(rel.target);
+    if (!xml) return null;
+    const data = readChartXml(xml, this.theme, (el) => this.color(el));
+    if (!data) return null;
+    for (const u of data.unsupported) this.unsupported.add(u);
+    const { unsupported: _u, ...rest } = data;
+    const xfrm = child(frame, "xfrm");
+    return {
+      id: uid(),
+      kind: "chart",
+      name: path(frame, "nvGraphicFramePr", "cNvPr")?.getAttribute("name") ?? undefined,
+      x: px(num(child(xfrm, "off"), "x")),
+      y: px(num(child(xfrm, "off"), "y")),
+      w: px(num(child(xfrm, "ext"), "cx")),
+      h: px(num(child(xfrm, "ext"), "cy")),
+      ...rest,
+    };
   }
 
   table(frame: Element, part: Part): TableElement | null {
@@ -636,7 +666,8 @@ class PptxReader {
         this.setClrMap(master);
         clrMapSet = true;
       }
-      if (child(slide.root, "transition")) this.unsupported.add("transiciones");
+      const { transition, other } = readTransition(slide.root);
+      if (other) this.unsupported.add("algunas transiciones (se cambian por Desvanecer)");
       if (child(slide.root, "timing")) this.unsupported.add("animaciones");
 
       // Lo que el patrón y el diseño dibujan en todas las diapositivas (logos, franjas…) va al fondo.
@@ -654,6 +685,7 @@ class PptxReader {
         elements: [...inherited, ...own],
         notes: await this.notes(slide),
         hidden: slide.root.getAttribute("show") === "0" || undefined,
+        transition,
       });
     }
     return { width, height, slides, theme: this.theme, unsupported: [...this.unsupported] };

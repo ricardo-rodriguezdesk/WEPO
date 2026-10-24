@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -13,7 +13,7 @@ import type { MenuItem } from "../../components/ContextMenu";
 import { AlignIcon, ColorButton, FONTS, Popover, Separator, ToolButton } from "../sheets/FormatBar";
 import ZoomControl from "../sheets/ZoomControl";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import type { Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody } from "./model";
+import type { Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Transition } from "./model";
 import { LAYOUTS, THEMES, cloneElement, cloneSlide, isEmptyText, layoutElements, newSlide, placeholderHint, slideTitle, uid } from "./model";
 import { SHAPES, isLine, shapePath } from "./geometry";
 import SlideView, { textDefaults } from "./SlideView";
@@ -22,6 +22,9 @@ import { presentationBase64, savePresentation } from "../../lib/present";
 import { recoveryApi } from "../../lib/recovery";
 import { invoke } from "@tauri-apps/api/core";
 import Presenter from "./Presenter";
+import ChartEditor from "./ChartEditor";
+import { newChart } from "./charts";
+import { DIRECTIONS, DURATIONS, TRANSITIONS, playTransition, transitionName } from "./transitions";
 import PrintSlides, { PresentPrintDialog, sheetSize } from "./PrintSlides";
 import type { SlidePrintJob } from "./PrintSlides";
 import { imageDataUrl } from "../../lib/write";
@@ -93,6 +96,8 @@ export default function PresentEditor(props: Props) {
   const [selection, setSelection] = useState<string[]>([]);
   const selected = selection.length === 1 ? selection[0] : null;
   const setSelected = (id: string | null) => setSelection(id ? [id] : []);
+  /** Panel de datos de la gráfica elegida (se abre al insertarla o con doble clic). */
+  const [chartPanel, setChartPanel] = useState(false);
   /** Celda elegida de una tabla, y la que se está escribiendo. */
   const [cell, setCell] = useState<{ r: number; c: number } | null>(null);
   const [editingCell, setEditingCell] = useState<{ id: string; r: number; c: number } | null>(null);
@@ -305,6 +310,30 @@ export default function PresentEditor(props: Props) {
       h: line ? 0 : 200,
       text: line ? undefined : { paras: [{ runs: [], align: "center" }], anchor: "middle", defaultSize: 20 },
     } as ShapeElement);
+  }
+
+  function addChart() {
+    const d = deckRef.current;
+    addElement(newChart(d.theme, d.width, d.height));
+    setChartPanel(true);
+  }
+
+  // ───────────── transiciones ─────────────
+
+  function setTransition(t: Transition | null, all = false) {
+    const d = deckRef.current;
+    commit({ ...d, slides: d.slides.map((s, i) => (all || i === current ? { ...s, transition: t } : s)) });
+    if (t && t.kind !== "none") previewTransition(t);
+    if (all) setStatus({ text: t ? `Transición «${transitionName(t)}» en todas las diapositivas` : "Se quitaron las transiciones" });
+  }
+
+  /** Vista previa: la diapositiva entra con su transición en el editor. */
+  function previewTransition(t: Transition | null | undefined = slide.transition) {
+    // Se anima el marco (la diapositiva de adentro ya lleva su escala en transform).
+    const el = stage.current?.querySelector<HTMLElement>(".present-main-slide .slide-frame");
+    if (!t || t.kind === "none" || !el) return;
+    el.getAnimations().forEach((a) => a.cancel());
+    playTransition(t, el, null, () => el.getAnimations().forEach((a) => a.cancel()));
   }
 
   async function addImage() {
@@ -592,6 +621,11 @@ export default function PresentEditor(props: Props) {
       setSelected(el.id);
       setCell({ r, c });
       setEditingCell({ id: el.id, r, c });
+      return;
+    }
+    if (el?.kind === "chart") {
+      setSelected(el.id);
+      setChartPanel(true);
       return;
     }
     if (!el || el.kind !== "shape" || isLine(el.geom)) return;
@@ -1079,6 +1113,10 @@ export default function PresentEditor(props: Props) {
         onTextBox={addTextBox}
         onShape={addShape}
         onImage={addImage}
+        onChart={addChart}
+        onEditChart={() => setChartPanel(true)}
+        onTransition={setTransition}
+        onPreviewTransition={() => previewTransition()}
         formatRuns={formatRuns}
         formatParas={formatParas}
         onFill={(color) => selected && updateElement(selected, (e) => ({ ...e, fill: color || null }) as SlideElement)}
@@ -1132,6 +1170,11 @@ export default function PresentEditor(props: Props) {
               title={slideTitle(s) || `Diapositiva ${i + 1}`}
             >
               <span className="present-thumb-number">{i + 1}</span>
+              {s.transition && s.transition.kind !== "none" && (
+                <span className="present-thumb-transition" title={`Transición: ${transitionName(s.transition)}`} aria-label={`Transición: ${transitionName(s.transition)}`}>
+                  ✦
+                </span>
+              )}
               <SlideView slide={s} deck={deck} scale={thumbWidth / deck.width} />
             </div>
           ))}
@@ -1196,6 +1239,9 @@ export default function PresentEditor(props: Props) {
             aria-label="Notas del orador"
           />
         </div>
+        {chartPanel && selectedEl?.kind === "chart" && selection.length === 1 && (
+          <ChartEditor chart={selectedEl} theme={deck.theme} onChange={(next) => updateElement(next.id, () => next)} onClose={() => setChartPanel(false)} />
+        )}
       </div>
 
       <footer className="write-footer present-footer">
@@ -1311,6 +1357,10 @@ type BarProps = {
   onTextBox: () => void;
   onShape: (geom: string) => void;
   onImage: () => void;
+  onChart: () => void;
+  onEditChart: () => void;
+  onTransition: (t: Transition | null, all?: boolean) => void;
+  onPreviewTransition: () => void;
   formatRuns: (fn: (r: Run) => Run, tiptap: (ed: Editor) => void) => void;
   formatParas: (fn: (p: Para) => Para, tiptap: (ed: Editor) => void) => void;
   onFill: (color: string) => void;
@@ -1517,6 +1567,20 @@ function PresentBar(props: BarProps) {
       >
         {(close) => <TablePicker onPick={(r, c) => (props.onTable(r, c), close())} />}
       </Popover>
+      <ToolButton label="Gráfica" onClick={props.onChart}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+          <path d="M4 20h16" />
+          <rect x="5.5" y="11" width="3" height="7" />
+          <rect x="10.5" y="6" width="3" height="12" />
+          <rect x="15.5" y="9" width="3" height="9" />
+        </svg>
+      </ToolButton>
+      <TransitionMenu slide={props.slide} onChange={props.onTransition} onPreview={props.onPreviewTransition} />
+      {selected?.kind === "chart" && (
+        <button type="button" className="fb-button present-theme-btn" onClick={props.onEditChart} title="Tipo, título y datos de la gráfica">
+          Datos de la gráfica
+        </button>
+      )}
 
       {textTarget && (
         <>
@@ -1790,6 +1854,119 @@ function PresentBar(props: BarProps) {
 }
 
 /** Cuadrícula para elegir cuántas filas y columnas tiene la tabla nueva. */
+/** Transición de la diapositiva: efecto, dirección, duración y si pasa sola. */
+function TransitionMenu({ slide, onChange, onPreview }: { slide: Slide; onChange: (t: Transition | null, all?: boolean) => void; onPreview: () => void }) {
+  const t = slide.transition ?? null;
+  const kind = t?.kind ?? "none";
+  const info = TRANSITIONS.find((x) => x.id === kind);
+  const base = (patch: Partial<Transition>): Transition => ({ kind, duration: t?.duration ?? 700, direction: t?.direction, advanceAfter: t?.advanceAfter ?? null, ...patch });
+  const clean = (next: Transition): Transition | null => (next.kind === "none" && !next.advanceAfter ? null : next);
+  return (
+    <Popover
+      button={(toggleOpen, open) => (
+        <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Cómo entra esta diapositiva al presentar">
+          Transición{t && t.kind !== "none" ? `: ${transitionName(t)}` : ""} ▾
+        </button>
+      )}
+    >
+      {() => (
+        <div className="present-transitions">
+          <p className="present-menu-title">Efecto al entrar a esta diapositiva</p>
+          <div className="present-transition-grid" role="radiogroup" aria-label="Transición">
+            {TRANSITIONS.map((x) => (
+              <button
+                key={x.id}
+                type="button"
+                role="radio"
+                aria-checked={kind === x.id}
+                className={kind === x.id ? "current" : ""}
+                onClick={() => onChange(clean(base({ kind: x.id, direction: x.directions ? (t?.direction ?? "left") : undefined })))}
+              >
+                <TransitionIcon kind={x.id} />
+                <span>{x.name}</span>
+              </button>
+            ))}
+          </div>
+          {kind !== "none" && (
+            <div className="present-menu-row">
+              {info?.directions && (
+                <label className="field">
+                  Dirección
+                  <select className="input" value={t?.direction ?? "left"} onChange={(e) => onChange(base({ direction: e.target.value as Transition["direction"] }))}>
+                    {DIRECTIONS.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="field">
+                Duración
+                <select className="input" value={t?.duration ?? 700} onChange={(e) => onChange(base({ duration: Number(e.target.value) }))}>
+                  {[...new Set([...DURATIONS, t?.duration ?? 700])].sort((a, b) => a - b).map((ms) => (
+                    <option key={ms} value={ms}>
+                      {(ms / 1000).toLocaleString("es-MX")} s
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+          <label className="radio present-advance">
+            <input
+              type="checkbox"
+              checked={Boolean(t?.advanceAfter)}
+              onChange={(e) => onChange(clean(base({ advanceAfter: e.target.checked ? 5000 : null })))}
+            />
+            Pasar sola a la siguiente después de
+            <input
+              type="number"
+              className="input"
+              min={1}
+              max={600}
+              step={1}
+              aria-label="Segundos antes de pasar sola"
+              disabled={!t?.advanceAfter}
+              value={t?.advanceAfter ? Math.round(t.advanceAfter / 1000) : 5}
+              onChange={(e) => onChange(base({ advanceAfter: Math.max(1, Number(e.target.value) || 1) * 1000 }))}
+            />
+            s
+          </label>
+          <div className="present-menu-row">
+            <button type="button" className="btn" disabled={kind === "none"} onClick={onPreview}>
+              Vista previa
+            </button>
+            <button type="button" className="btn" onClick={() => onChange(t, true)}>
+              Aplicar a todas
+            </button>
+          </div>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+/** Dibujito de cada transición en el menú. */
+function TransitionIcon({ kind }: { kind: Transition["kind"] }) {
+  const frame = <rect x="3" y="5" width="30" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />;
+  const inner: Record<Transition["kind"], ReactNode> = {
+    none: <path d="M10 9l16 10M26 9L10 19" stroke="currentColor" strokeWidth="1.4" opacity="0.5" />,
+    fade: <rect x="3" y="5" width="30" height="18" rx="2" fill="currentColor" opacity="0.25" />,
+    push: <path d="M24 14H8m4-4l-4 4 4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+    wipe: <rect x="18" y="5" width="15" height="18" fill="currentColor" opacity="0.35" />,
+    cover: <rect x="12" y="8" width="21" height="15" fill="currentColor" opacity="0.35" />,
+    zoom: <rect x="12" y="10" width="12" height="8" fill="currentColor" opacity="0.35" />,
+    split: <rect x="13" y="5" width="10" height="18" fill="currentColor" opacity="0.35" />,
+  };
+  return (
+    <svg width="36" height="28" viewBox="0 0 36 28" aria-hidden>
+      {inner[kind]}
+      {frame}
+    </svg>
+  );
+}
+
 function TablePicker({ onPick }: { onPick: (rows: number, cols: number) => void }) {
   const [hover, setHover] = useState({ r: 2, c: 3 });
   return (

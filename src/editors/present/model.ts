@@ -71,9 +71,38 @@ export type ImageElement = Box & { kind: "image"; src: string };
 export type TableCell = { text: TextBody; fill: string | null; span?: number; rowSpan?: number; merged?: "h" | "v" };
 export type TableElement = Box & { kind: "table"; cols: number[]; rows: { h: number; cells: TableCell[] }[]; border: string | null; header: boolean };
 
-export type SlideElement = ShapeElement | ImageElement | TableElement;
+/** Gráfica de la diapositiva: los datos van en ella misma (en el .pptx, con su libro de Excel). */
+export type ChartKind = "column" | "bar" | "line" | "area" | "pie" | "doughnut";
+export type ChartSeries = { name: string; values: (number | null)[]; color: string };
+export type ChartElement = Box & {
+  kind: "chart";
+  chartType: ChartKind;
+  title: string;
+  legend: boolean;
+  stacked: boolean;
+  /** Valores escritos sobre las barras, los puntos o las rebanadas. */
+  labels: boolean;
+  categories: string[];
+  series: ChartSeries[];
+};
+
+export type SlideElement = ShapeElement | ImageElement | TableElement | ChartElement;
 
 export type LayoutId = "title" | "titleContent" | "twoContent" | "titleOnly" | "section" | "blank";
+
+/** Cómo entra la diapositiva al presentar. */
+/** "none": sin efecto (sirve para que pase sola después de un tiempo). */
+export type TransitionKind = "none" | "fade" | "push" | "wipe" | "cover" | "zoom" | "split";
+export type Direction = "left" | "right" | "up" | "down";
+export type Transition = {
+  kind: TransitionKind;
+  /** Milisegundos que dura. */
+  duration: number;
+  /** Hacia dónde se mueve (empujar, barrido, cubrir). */
+  direction?: Direction;
+  /** Pasar sola a la siguiente después de estos milisegundos (además del clic). */
+  advanceAfter?: number | null;
+};
 
 export type Slide = {
   id: string;
@@ -85,6 +114,7 @@ export type Slide = {
   elements: SlideElement[];
   notes: string;
   hidden?: boolean;
+  transition?: Transition | null;
 };
 
 export type Theme = {

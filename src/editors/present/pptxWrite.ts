@@ -5,9 +5,11 @@
 // Keynote o LibreOffice), imágenes y notas del orador.
 
 import JSZip from "jszip";
-import type { Deck, ImageElement, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
+import type { ChartElement, Deck, ImageElement, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
 import { EMU_PER_PX, layoutElements } from "./model";
 import { isLine } from "./geometry";
+import { chartWorkbook, chartXml } from "./charts";
+import { transitionXml } from "./transitions";
 
 const NS = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"`;
 const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -110,7 +112,11 @@ class SlideWriter {
   rels: string[] = [];
   private nextRel = 2; // rId1 es el diseño
   private nextId = 2;
-  constructor(private media: (bytes: Uint8Array, ext: string) => string) {}
+  constructor(
+    private media: (bytes: Uint8Array, ext: string) => string,
+    /** Guarda la gráfica (chartN.xml, su libro y sus relaciones) y devuelve el nombre de su parte. */
+    private chartPart: (el: ChartElement) => string = () => "",
+  ) {}
 
   rel(type: string, target: string, external = false): string {
     const id = `rId${this.nextRel++}`;
@@ -161,8 +167,14 @@ class SlideWriter {
     return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${esc(el.name ?? `Tabla ${id}`)}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>${xfrm(el, "p:xfrm")}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${el.header ? ' firstRow="1"' : ""} bandRow="1"/><a:tblGrid>${grid}</a:tblGrid>${rows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
   }
 
+  chart(el: ChartElement): string {
+    const id = this.nextId++;
+    const rid = this.rel("chart", `../charts/${this.chartPart(el)}`);
+    return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${esc(el.name ?? `Gráfica ${id}`)}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>${xfrm(el, "p:xfrm")}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+  }
+
   element(el: SlideElement): string {
-    return el.kind === "shape" ? this.shape(el) : el.kind === "image" ? this.image(el) : this.table(el);
+    return el.kind === "shape" ? this.shape(el) : el.kind === "image" ? this.image(el) : el.kind === "chart" ? this.chart(el) : this.table(el);
   }
 }
 
@@ -255,12 +267,28 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
     return name;
   };
 
+  // Gráficas: cada una con su chartN.xml y su libro de Excel incrustado (para «Editar datos»).
+  const workbooks = new Map<string, Uint8Array>();
+  await Promise.all(deck.slides.flatMap((s) => s.elements).filter((e): e is ChartElement => e.kind === "chart").map(async (e) => workbooks.set(e.id, await chartWorkbook(e))));
+  let chartCount = 0;
+  const chartPart = (el: ChartElement) => {
+    const n = ++chartCount;
+    put(`ppt/charts/chart${n}.xml`, chartXml(el, deck.theme.text));
+    put(`ppt/embeddings/Microsoft_Excel_Worksheet${n}.xlsx`, workbooks.get(el.id)!);
+    put(
+      `ppt/charts/_rels/chart${n}.xml.rels`,
+      `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/package" Target="../embeddings/Microsoft_Excel_Worksheet${n}.xlsx"/></Relationships>`,
+    );
+    slideOverrides.push(`<Override PartName="/ppt/charts/chart${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
+    return `chart${n}.xml`;
+  };
+
   const slideOverrides: string[] = [];
   const presRels: string[] = [`<Relationship Id="rId1" Type="${REL}/slideMaster" Target="slideMasters/slideMaster1.xml"/>`];
   const sldIds: string[] = [];
   deck.slides.forEach((slide: Slide, i) => {
     const n = i + 1;
-    const w = new SlideWriter(media);
+    const w = new SlideWriter(media, chartPart);
     const layoutIndex = LAYOUT_ORDER.indexOf(slide.layout) + 1 || 2;
     let bgRel: string | null = null;
     if (slide.backgroundImage) {
@@ -271,7 +299,7 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
     const bg = backgroundXml(slide.background ?? (slide.backgroundImage ? null : null), bgRel);
     put(
       `ppt/slides/slide${n}.xml`,
-      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`,
+      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}</p:sld>`,
     );
     const rels = [`<Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout${layoutIndex}.xml"/>`, ...w.rels];
     if (slide.notes.trim()) {
@@ -339,7 +367,7 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
   const mime: Record<string, string> = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml" };
   put(
     "[Content_Types].xml",
-    `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${[...mediaTypes].map((e) => `<Default Extension="${e}" ContentType="${mime[e]}"/>`).join("")}<Override PartName="/ppt/presentation.xml" ContentType="${CT}.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="${CT}.slideMaster+xml"/>${LAYOUT_ORDER.map((_, i) => `<Override PartName="/ppt/slideLayouts/slideLayout${i + 1}.xml" ContentType="${CT}.slideLayout+xml"/>`).join("")}${slideOverrides.join("")}<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="${CT}.notesMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/theme/theme2.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="${CT}.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="${CT}.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="${CT}.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+    `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${chartCount ? '<Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>' : ""}${[...mediaTypes].map((e) => `<Default Extension="${e}" ContentType="${mime[e]}"/>`).join("")}<Override PartName="/ppt/presentation.xml" ContentType="${CT}.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="${CT}.slideMaster+xml"/>${LAYOUT_ORDER.map((_, i) => `<Override PartName="/ppt/slideLayouts/slideLayout${i + 1}.xml" ContentType="${CT}.slideLayout+xml"/>`).join("")}${slideOverrides.join("")}<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="${CT}.notesMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/theme/theme2.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="${CT}.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="${CT}.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="${CT}.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
   );
   return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
 }

@@ -70,7 +70,7 @@
   background: var(--chrome);
   border-right: 1px solid var(--border);
 }
-.present-thumb { display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+.present-thumb { position: relative; display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
 .present-thumb-number { width: 18px; padding-top: 2px; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .present-thumb .slide-frame { border-radius: 4px; box-shadow: 0 0 0 1px var(--border); pointer-events: none; }
 .present-thumb.current .slide-frame { box-shadow: 0 0 0 3px var(--kind-accent); }
@@ -239,8 +239,9 @@
   user-select: none;
 }
 .presenter.hide-cursor { cursor: none; }
-.presenter-slide { animation: presenter-fade 0.35s ease; }
-@keyframes presenter-fade { from { opacity: 0; } to { opacity: 1; } }
+/* Las diapositivas al presentar, una encima de otra mientras corre la transición */
+.presenter-stage { position: absolute; inset: 0; overflow: hidden; }
+.presenter-layer { position: absolute; inset: 0; display: grid; place-items: center; background: #000; }
 .presenter .slide-frame { box-shadow: none; }
 .presenter-blank { position: absolute; inset: 0; }
 .presenter-blank.black { background: #000; }
@@ -304,3 +305,53 @@
   .present-print-page { break-after: page; page-break-after: always; }
   .present-print-page:last-child { break-after: auto; page-break-after: auto; }
 }
+
+/* Gráficas en las diapositivas */
+.slide-chart-box, .slide-chart-box svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+
+/* Panel de la gráfica (a la derecha) */
+.present-chart-panel {
+  width: 330px;
+  flex: none;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+  border-left: 1px solid var(--border);
+  background: var(--surface, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+}
+.present-chart-panel header { display: flex; align-items: center; justify-content: space-between; }
+.present-chart-panel h3 { margin: 0; font-size: 14px; }
+.present-chart-panel .field { display: flex; flex-direction: column; gap: 3px; }
+.chart-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.chart-kinds button { padding: 5px 4px; font: inherit; font-size: 12px; background: none; border: 1px solid var(--border); border-radius: 6px; color: inherit; cursor: pointer; }
+.chart-kinds button.on { border-color: var(--kind-accent); color: var(--kind-accent); font-weight: 600; }
+.chart-options { display: flex; gap: 14px; flex-wrap: wrap; }
+.chart-data { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+.chart-data table { border-collapse: collapse; }
+.chart-data th, .chart-data td { padding: 0; border: 1px solid var(--border); font-weight: 400; }
+.chart-data tr:first-child th { border-top: 0; }
+.chart-data th:first-child { border-left: 0; }
+.chart-data .unused { opacity: 0.45; }
+.chart-series-head { display: flex; align-items: center; gap: 2px; padding-right: 2px; }
+.chart-series-head input[type="color"] { width: 18px; height: 18px; padding: 0; border: 0; background: none; flex: none; margin-left: 3px; }
+.chart-cell { width: 86px; min-width: 0; border: 0 !important; border-radius: 0 !important; padding: 4px 6px !important; font-size: 12px !important; background: transparent !important; }
+.chart-cell.num { text-align: right; font-variant-numeric: tabular-nums; }
+.chart-cell:focus { outline: 2px solid var(--kind-accent); outline-offset: -2px; }
+.chart-remove { flex: none; width: 16px; height: 16px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; opacity: 0; }
+.chart-series-head:hover .chart-remove { opacity: 1; }
+.chart-remove:disabled { visibility: hidden; }
+.chart-add { display: flex; gap: 6px; }
+
+/* Menú de transiciones */
+.present-transitions { width: 340px; padding: 4px 2px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.present-transition-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.present-transition-grid button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; font: inherit; font-size: 11px; background: none; border: 1px solid transparent; border-radius: 6px; color: inherit; cursor: pointer; }
+.present-transition-grid button:hover { border-color: var(--border); }
+.present-transition-grid button.current { border-color: var(--kind-accent); color: var(--kind-accent); }
+.present-transitions .field { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.present-advance { display: flex; align-items: center; gap: 6px; }
+.present-advance input[type="number"] { width: 56px; }
+.present-thumb-transition { position: absolute; left: 4px; bottom: 4px; z-index: 2; font-size: 10px; color: var(--kind-accent); }

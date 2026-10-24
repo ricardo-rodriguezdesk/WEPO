@@ -2,6 +2,11 @@ import type { CSSProperties, ReactNode } from "react";
 import type { Deck, ImageElement, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody } from "./model";
 import { isEmptyText, placeholderHint } from "./model";
 import { isLine, shapePath } from "./geometry";
+import ChartSvg from "../sheets/ChartSvg";
+import { chartView } from "./charts";
+
+/** Las gráficas se dibujan a esta escala (letra de unos 16 px en la diapositiva). */
+const CHART_SCALE = 1.5;
 
 /** Interlineado "sencillo" de PowerPoint en CSS. */
 const LINE = 1.2;
@@ -225,6 +230,12 @@ export default function SlideView({ slide, deck, scale, hints = false, editingId
           >
             {el.kind === "shape" && <ShapeView el={el} deck={deck} hints={hints} textSlot={el.id === editingId ? editingSlot : undefined} />}
             {el.kind === "image" && <img src={(el as ImageElement).src} alt="" draggable={false} />}
+            {el.kind === "chart" && (
+              // En una diapositiva la letra va más grande que en una hoja de cálculo: se dibuja más chica y se agranda.
+              <div className="slide-chart-box" style={{ ["--chart-bg" as string]: background, ["--chart-text" as string]: deck.theme.text, ["--chart-muted" as string]: deck.theme.text, ["--chart-grid" as string]: "rgba(128,128,128,.3)" }}>
+                <ChartSvg chart={chartView(el)} width={Math.max(el.w, 1) / CHART_SCALE} height={Math.max(el.h, 1) / CHART_SCALE} scale={CHART_SCALE} />
+              </div>
+            )}
             {el.kind === "table" && (
               <TableView
                 el={el}
