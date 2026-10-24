@@ -131,15 +131,12 @@ export default function App() {
       show({ id: nextId.current++, kind: "write", fileName: base, path: null, write, recovered: true, notice: `Convertido de ${pdfName}: revisa el formato y guárdalo (⌘S) como .docx` });
       dirty.current = true;
     } else {
-      try {
-        const count = pdfTables(converted).length;
-        const sheet = await pdfToSheets(converted);
-        const notice = count === 1 ? `1 tabla de ${pdfName}: revísala y guarda (⌘S) como .xlsx` : `${count} tablas de ${pdfName}, una por hoja: revísalas y guarda (⌘S) como .xlsx`;
-        show({ id: nextId.current++, kind: "sheets", fileName: base, path: null, sheet, recovered: true, notice });
-        dirty.current = true;
-      } catch (e) {
-        show(null, `No se pudieron pasar las tablas a una hoja: ${e}`);
-      }
+      // Si falla, el error se ve en el visor y el PDF sigue abierto.
+      const count = pdfTables(converted).length;
+      const sheet = await pdfToSheets(converted);
+      const notice = count === 1 ? `1 tabla de ${pdfName}: revísala y guarda (⌘S) como .xlsx` : `${count} tablas de ${pdfName}, una por hoja: revísalas y guarda (⌘S) como .xlsx`;
+      show({ id: nextId.current++, kind: "sheets", fileName: base, path: null, sheet, recovered: true, notice });
+      dirty.current = true;
     }
   }
 
@@ -371,7 +368,7 @@ export default function App() {
         path={doc.path}
         onDirtyChange={(value) => (dirty.current = value)}
         onSaved={rememberRecent}
-        onConvert={(kind, converted, name) => void convertPdfTo(kind, converted, name)}
+        onConvert={convertPdfTo}
         {...common}
       />
     );

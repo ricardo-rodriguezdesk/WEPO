@@ -1,0 +1,53 @@
+/* Imprimir o exportar a PDF: opciones a la izquierda, vista previa a la derecha. */
+.print-screen { display: grid; grid-template-columns: 330px 1fr; gap: 18px; height: min(70vh, 720px); }
+.print-settings { overflow-y: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 10px; }
+.print-settings fieldset { margin: 0; padding: 8px 10px 10px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
+.print-settings legend { padding: 0 4px; font-size: 12px; font-weight: 600; color: var(--text-muted, #6e6e73); }
+.print-settings .field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.print-settings .field .input, .print-settings select.input { width: 100%; }
+.print-area-row { display: flex; gap: 6px; align-items: center; }
+.print-area-row .input { width: 110px; }
+.print-area-row .input.invalid { border-color: var(--danger, #c42b45); }
+.print-fields { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.print-fields .btn { padding: 1px 7px; font-size: 11px; }
+.print-segment { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; align-self: flex-start; }
+.print-segment button { padding: 4px 14px; font: inherit; font-size: 12px; background: none; border: 0; color: inherit; cursor: pointer; }
+.print-segment button + button { border-left: 1px solid var(--border); }
+.print-segment button.on { background: var(--kind-accent, #1d7a4a); color: #fff; }
+
+.print-preview { display: flex; flex-direction: column; min-width: 0; }
+.print-preview-pane {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #8e8e93;
+  border-radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .print-preview-pane { background: #3a3a3c; }
+}
+.print-preview-sheet { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35); background: #fff; flex: none; }
+.print-preview-pane .hint { color: #fff; }
+.print-pager { display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 8px; font-size: 12px; }
+.print-count { margin-right: auto; font-size: 12px; color: var(--text-muted, #6e6e73); }
+
+/* Mientras se elige el área de impresión en la hoja. */
+.print-pick-bar {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  font-size: 13px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.print-pick-bar b { font-variant-numeric: tabular-nums; }

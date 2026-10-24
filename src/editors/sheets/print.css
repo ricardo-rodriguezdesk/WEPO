@@ -17,6 +17,7 @@
   body:has(> .print-root) #root { display: none !important; }
   .print-root {
     display: block;
+    margin: 0;
     color: #000;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -62,14 +63,25 @@
 .print-drawing img { width: 100%; height: 100%; object-fit: fill; }
 .print-drawing .chart-svg { display: block; }
 
+/* Una página impresa: del tamaño del papel, con su margen (ver printLayout.ts). */
+.print-page { position: relative; overflow: hidden; background: #fff; color: #000; box-sizing: border-box; }
+.print-page-area { position: absolute; overflow: hidden; }
+.print-page-content { position: relative; transform-origin: 0 0; }
+@media print {
+  .print-page { break-after: page; page-break-after: always; }
+  .print-page:last-child { break-after: auto; page-break-after: auto; }
+}
+
 /* Encabezado y pie de página: se repiten en cada hoja impresa */
 .print-page-text {
-  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: 9pt;
-  font-weight: 400;
   color: #555;
-  text-align: center;
-  border: 0 !important;
-  background: none !important;
+  white-space: nowrap;
+  overflow: hidden;
 }
-.print-table tfoot { display: table-footer-group; }
+.print-page-footer { position: absolute; left: 0; right: 0; bottom: 0; }

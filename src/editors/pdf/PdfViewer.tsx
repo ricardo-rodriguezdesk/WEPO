@@ -32,7 +32,7 @@ type Props = {
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (path: string) => void;
   /** Convertir a un documento editable (Write) o sus tablas a una hoja (Sheets). */
-  onConvert?: (kind: "write" | "sheets", converted: Converted, name: string) => void;
+  onConvert?: (kind: "write" | "sheets", converted: Converted, name: string) => Promise<void>;
 };
 
 /** 100 % es el tamaño real: un punto del PDF mide 96/72 píxeles de pantalla. */
@@ -293,7 +293,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       else if (kind === "sheets" && !hasTables) setStatus({ text: "No se encontraron tablas con bordes en este PDF.", error: true });
       else {
         setStatus(null);
-        onConvert(kind, converted, fileName);
+        await onConvert(kind, converted, fileName);
       }
     } catch (e) {
       setStatus({ text: `No se pudo convertir: ${e}`, error: true });

@@ -116,8 +116,5 @@
 .fn-detail p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
 .dup-columns { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
 .print-options.two { grid-template-columns: 1fr 1fr; align-content: start; }
-.print-page { margin: 16px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid var(--border); }
-.print-page legend { padding: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
-.print-page .field { margin-bottom: 8px; }
 .print-fields { margin: -2px 0 10px; }
 .print-fields .btn { padding: 2px 8px; font-size: 12px; }

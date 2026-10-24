@@ -64,7 +64,8 @@ import { getFormulaLanguage, setFormulaLanguage } from "../../lib/preferences";
 import { Axis, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, HEADER_HEIGHT, HEADER_WIDTH, clampZoom, stepZoom } from "./layout";
 import ZoomControl from "./ZoomControl";
 import { loadZoom, saveZoom } from "../../lib/zoom";
-import { askPdfPath, letter, printReady, writePdf } from "../../lib/exportPdf";
+import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
+import { pageSize, parseRange } from "./printLayout";
 import { MAX_COL, MAX_ROW, MergedCells, clampToData, currentRegion, looksLikeHeader } from "./regions";
 import "./SheetEditor.css";
 
@@ -1401,9 +1402,33 @@ export default function SheetEditor(props: Props) {
 
   // ───────────── imprimir ─────────────
 
+  /** Lo que se imprime con cada opción (para la vista previa y para imprimir). */
+  function printRangeFor(area: PrintOptions["area"], printArea: string): Range | null {
+    if (area === "selection") return clampToData(rows, selection);
+    if (area === "saved" && printArea.trim()) return parseRange(printArea);
+    return usedRange(view, baseCols, baseRows);
+  }
+
+  /** Las imágenes de la hoja, ya cargadas, para que estén en el papel. */
+  async function loadPrintImages(): Promise<Record<number, string>> {
+    const images: Record<number, string> = {};
+    await Promise.all(
+      view.drawings
+        .filter((d) => d.type === "image")
+        .map((d) =>
+          sheetApi
+            .imageData(d.id)
+            .then((url) => (images[d.id] = url))
+            .catch(() => {}),
+        ),
+    );
+    return images;
+  }
+
   async function startPrint(options: PrintOptions, form: PageForm, toPdf = false) {
     setDialog(null);
     setPrintJob(null);
+    setPrintInitial(null);
     pdfTarget.current = null;
     if (toPdf) {
       const target = await askPdfPath(path, fileName);
@@ -1425,32 +1450,12 @@ export default function SheetEditor(props: Props) {
         return;
       }
     }
-    const saved = page.print_area
-      ? { r1: page.print_area[0] - 1, c1: page.print_area[1] - 1, r2: page.print_area[2] - 1, c2: page.print_area[3] - 1 }
-      : null;
-    // Una selección de filas o columnas completas se recorta hasta donde hay datos.
-    const range =
-      options.area === "selection"
-        ? clampToData(rows, selection)
-        : options.area === "saved" && saved
-          ? saved
-          : usedRange(view, baseCols, baseRows);
+    const range = printRangeFor(options.area, form.printArea);
     if (!range) {
-      showStatus({ text: "La hoja está vacía: no hay nada que imprimir.", error: true });
+      showStatus({ text: "No hay nada que imprimir con esas opciones.", error: true });
       return;
     }
-    // Las imágenes se cargan antes, para que ya estén en el papel.
-    const images: Record<number, string> = {};
-    await Promise.all(
-      view.drawings
-        .filter((d) => d.type === "image")
-        .map((d) =>
-          sheetApi
-            .imageData(d.id)
-            .then((url) => (images[d.id] = url))
-            .catch(() => {}),
-        ),
-    );
+    const images = await loadPrintImages();
     const sheetName = view.sheet_names[sheet] ?? "";
     setPrintJob({
       ...options,
@@ -1460,6 +1465,27 @@ export default function SheetEditor(props: Props) {
       footer: fillPageFields(page.footer, fileName, sheetName),
       repeat: page.repeat_rows ? [page.repeat_rows[0] - 1, page.repeat_rows[1] - 1] : null,
     });
+  }
+
+  /** "Seleccionar en la hoja…": se esconde el diálogo y se elige el área con el mouse. */
+  const [printInitial, setPrintInitial] = useState<{ options: PrintOptions; form: PageForm } | null>(null);
+  const [pickingArea, setPickingArea] = useState<{ options: PrintOptions; form: PageForm } | null>(null);
+  function finishPicking(ok: boolean) {
+    if (!pickingArea) return;
+    const area = clampToData(rows, selection);
+    const label = `${cellName({ r: area.r1, c: area.c1 })}:${cellName({ r: area.r2, c: area.c2 })}`;
+    setPrintInitial(ok ? { options: { ...pickingArea.options, area: "saved" }, form: { ...pickingArea.form, printArea: label } } : pickingArea);
+    setPickingArea(null);
+    setDialog("print");
+  }
+
+  /** Área de impresión desde el menú de la celda (se guarda con el archivo). */
+  function setPrintArea(clear: boolean) {
+    const form = pageForm(view.page);
+    const area = clampToData(rows, selection);
+    const text = clear ? "" : `${cellName({ r: area.r1, c: area.c1 })}:${cellName({ r: area.r2, c: area.c2 })}`;
+    mutate(() => sheetApi.pageSetup(sheet, form.header, form.footer, form.repeatRows, text));
+    showStatus({ text: clear ? "Se quitó el área de impresión" : `Área de impresión: ${text}` });
   }
 
   // Cuando la hoja para imprimir ya está dibujada, se abre el diálogo del sistema
@@ -1473,7 +1499,9 @@ export default function SheetEditor(props: Props) {
         await printReady();
         if (cancelled) return;
         try {
-          const name = await writePdf(target, letter(printJob.landscape, 34));
+          // Cada página ya trae su margen: la hoja del PDF es del tamaño del papel, sin margen.
+          const size = pageSize(printJob);
+          const name = await writePdf(target, { width: (size.width * 72) / 96, height: (size.height * 72) / 96, margin: 0 });
           showStatus({ text: `PDF guardado: ${name}` });
         } catch (e) {
           showStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
@@ -1844,6 +1872,8 @@ export default function SheetEditor(props: Props) {
       ...linkItems,
       "separator",
       freezeItem,
+      { label: "Establecer área de impresión", disabled: !isMultiSelection, action: () => setPrintArea(false) },
+      ...(view.page?.print_area ? [{ label: "Quitar área de impresión", action: () => setPrintArea(true) }] : []),
       { label: "Borrar contenido", shortcut: "⌫", action: clearSelection },
     ];
   }
@@ -1851,6 +1881,7 @@ export default function SheetEditor(props: Props) {
   // ───────────── dibujo ─────────────
 
   const isMultiSelection = selection.r1 !== selection.r2 || selection.c1 !== selection.c2;
+  const printData = useMemo(() => ({ view, cols: baseCols, rows: baseRows, merged, decorations }), [view, baseCols, baseRows, merged, decorations]);
   const selectionLabel = isMultiSelection
     ? wholeCols
       ? selection.c1 === selection.c2
@@ -2683,13 +2714,38 @@ export default function SheetEditor(props: Props) {
               : `${cellName({ r: selection.r1, c: selection.c1 })}:${cellName({ r: selection.r2, c: selection.c2 })}`
           }
           page={view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null }}
+          initial={printInitial}
+          rangeFor={printRangeFor}
+          data={printData}
+          fileName={fileName}
+          sheetName={view.sheet_names[sheet] ?? ""}
+          loadImages={loadPrintImages}
           onPrint={startPrint}
+          onPickArea={(options, form) => {
+            setDialog(null);
+            setPickingArea({ options, form });
+            focusGrid();
+          }}
           pdf={pdfDialog}
           onClose={() => {
             setDialog(null);
+            setPrintInitial(null);
             focusGrid();
           }}
         />
+      )}
+      {pickingArea && (
+        <div className="print-pick-bar" role="status">
+          <span>
+            Selecciona el área de impresión en la hoja: <b>{selectionLabel}</b>
+          </span>
+          <button type="button" className="btn" onClick={() => finishPicking(false)}>
+            Cancelar
+          </button>
+          <button type="button" className="btn btn-primary" onClick={() => finishPicking(true)}>
+            Listo
+          </button>
+        </div>
       )}
       {printJob && (
         <PrintSheet job={printJob} view={view} cols={baseCols} rows={baseRows} merged={merged} decorations={decorations} />

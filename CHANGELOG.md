@@ -4,6 +4,13 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ## Próxima versión (sin publicar)
 
+### Imprimir en WEPO Sheets, como en Excel
+- Nueva pantalla de impresión con vista previa: las páginas se ven tal como van a salir (impresas o en PDF) y cambian con cada opción.
+- Papel (Carta, A4, Oficio), orientación, márgenes y escala: tamaño real, todas las columnas en una página o toda la hoja en una página.
+- El área de impresión se elige con el mouse («Seleccionar en la hoja…») o desde el menú de la celda («Establecer área de impresión»).
+- Encabezado y pie con número de página («Página [Página] de [Páginas]»), y filas que se repiten arriba en cada página.
+- Si convertir un PDF falla, el aviso aparece en el visor y el PDF sigue abierto.
+
 ### Exportar como PDF
 - Nuevo botón «PDF» y opción *Archivo → Exportar como PDF…* en Sheets, Write y Present: pide el nombre y guarda el PDF directo, igual que se vería impreso (sin pasar por el diálogo de impresión). Usa el motor de impresión de cada sistema (macOS, Windows y Linux).
 - En Sheets y Present, el diálogo de impresión tiene «Exportar PDF…» junto a «Imprimir…», con las mismas opciones (área, orientación, notas).
