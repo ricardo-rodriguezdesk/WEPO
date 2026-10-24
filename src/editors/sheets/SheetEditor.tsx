@@ -119,6 +119,8 @@ type Assist = {
   /** Desde dónde se reemplaza el texto al elegir una sugerencia. */
   replaceStart: number;
   signature: { fn: FunctionInfo; arg: number } | null;
+  /** El texto para el que se calcularon (el motor contesta un poco después de cada tecla). */
+  value: string;
 };
 
 /** Referencia insertada con el mouse o las flechas mientras se escribe una fórmula. */
@@ -438,7 +440,7 @@ export default function SheetEditor(props: Props) {
           }
         }
         // Las posiciones del motor no cuentan el "=" inicial.
-        setAssist({ suggestions, selected: 0, replaceStart: ctx.replace_from + 1, signature });
+        setAssist({ suggestions, selected: 0, replaceStart: ctx.replace_from + 1, signature, value: editing.value });
       })
       .catch(() => !cancelled && setAssist(null));
     return () => {
@@ -1687,7 +1689,8 @@ export default function SheetEditor(props: Props) {
 
   function onEditorKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const quick = editing?.quick;
-    const suggestions = assist?.suggestions ?? [];
+    // Sugerencias viejas (de antes de la última tecla) no cuentan: Enter guarda la fórmula como está.
+    const suggestions = assist && assist.value === editingRef.current?.value ? assist.suggestions : [];
 
     // Lista de funciones sugeridas abierta: las flechas eligen, Tab o Enter insertan.
     if (suggestions.length && !assistDismissed) {
@@ -2680,7 +2683,7 @@ export default function SheetEditor(props: Props) {
         <ZoomControl zoom={zoom} onChange={(z) => setZoom(z)} />
       </SheetTabs>
 
-      {editing && assist && !assistDismissed && (assist.suggestions.length > 0 || assist.signature) && (
+      {editing && assist && !assistDismissed && assist.value === editing.value && (assist.suggestions.length > 0 || assist.signature) && (
         <FormulaAssist
           anchor={(() => {
             const box = activeInput()?.getBoundingClientRect();

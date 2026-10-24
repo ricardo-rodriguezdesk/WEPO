@@ -6,6 +6,7 @@ import {
   BlendMode,
   PDFArray,
   PDFCheckBox,
+  PDFDict,
   PDFDocument,
   PDFDropdown,
   PDFName,
@@ -16,14 +17,31 @@ import {
   PDFString,
   PDFTextField,
   StandardFonts,
+  TextRenderingMode,
+  beginText,
   degrees,
+  endText,
+  popGraphicsState,
+  pushGraphicsState,
   rgb,
+  setCharacterSqueeze,
+  setFontAndSize,
+  setTextMatrix,
+  setTextRenderingMode,
+  showText,
 } from "pdf-lib";
 import type { PDFFont, PDFPage } from "pdf-lib";
 import type { PDFDocumentProxy } from "../../lib/pdf";
 
 /** Un PDF abierto: el original o uno que se insertó para combinar. */
-export type Source = { id: string; name: string; data: Uint8Array; doc: PDFDocumentProxy };
+export type Source = {
+  id: string;
+  name: string;
+  data: Uint8Array;
+  doc: PDFDocumentProxy;
+  /** Contraseña con la que se abrió (si tenía). */
+  password?: string;
+};
 
 /** Una página de la versión editada: de qué PDF viene, cuál es y cuánto se giró. */
 export type PageRef = {
@@ -229,14 +247,26 @@ function sameDocument(pages: PageRef[], original: string): boolean {
  * modifica el original (así conserva índice, formularios y datos); si se
  * reordenaron o combinaron, se arma un PDF nuevo con las páginas copiadas.
  */
-export async function savePdf(sources: Source[], pages: PageRef[], annotations: Annotation[], form: FormValues = {}): Promise<Uint8Array> {
+export async function savePdf(
+  sources: Source[],
+  pages: PageRef[],
+  annotations: Annotation[],
+  form: FormValues = {},
+  /** Con contraseña, el PDF que sale pide esa contraseña para abrirse. */
+  password: string | null = null,
+): Promise<Uint8Array> {
   const original = sources[0];
   const loaded = new Map<string, PDFDocument>();
   const load = async (id: string) => {
     const known = loaded.get(id);
     if (known) return known;
     const src = sources.find((s) => s.id === id)!;
-    const doc = await PDFDocument.load(src.data, { updateMetadata: false });
+    // Los PDF cifrados se abren con su contraseña (o con la vacía, si solo tenían permisos).
+    const doc = await PDFDocument.load(src.data, { updateMetadata: false, ...(src.password !== undefined ? { password: src.password } : {}) }).catch((e) => {
+      if (src.password === undefined && /encrypt/i.test(String(e?.name ?? e))) return PDFDocument.load(src.data, { updateMetadata: false, password: "" });
+      throw e;
+    });
+    dropOldEncryption(doc);
     loaded.set(id, doc);
     return doc;
   };
@@ -273,7 +303,25 @@ export async function savePdf(sources: Source[], pages: PageRef[], annotations: 
   }
   out.setProducer("WEPO PDF");
   out.setModificationDate(new Date());
+  // AES de 256 bits; quien tenga la contraseña puede hacer todo (imprimir, copiar, editar).
+  if (password)
+    out.encrypt({
+      userPassword: password,
+      ownerPassword: password,
+      permissions: { printing: "highResolution", modifying: true, copying: true, annotating: true, fillingForms: true, contentAccessibility: true, documentAssembly: true },
+    });
   return out.save();
+}
+
+/**
+ * Un PDF que venía cifrado ya se leyó descifrado, pero su diccionario de
+ * cifrado se queda entre los objetos: se quita para que el PDF guardado no
+ * parezca cifrado (si lleva contraseña, encrypt() pone uno nuevo).
+ */
+function dropOldEncryption(doc: PDFDocument) {
+  for (const [ref, obj] of doc.context.enumerateIndirectObjects()) {
+    if (obj instanceof PDFDict && obj.has(PDFName.of("O")) && obj.has(PDFName.of("U")) && obj.get(PDFName.of("Filter")) === PDFName.of("Standard")) doc.context.delete(ref);
+  }
 }
 
 function fillForm(doc: PDFDocument, values: FormValues) {
@@ -349,4 +397,50 @@ export function rectToView(p: PageRef, s: number, [x, y, w, h]: [number, number,
   const [ax, ay] = toView(p, s, x, y);
   const [bx, by] = toView(p, s, x + w, y + h);
   return { left: Math.min(ax, bx), top: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) };
+}
+
+// ───────────── texto reconocido (OCR) ─────────────
+
+/** Un renglón reconocido, ya en puntos del PDF: dónde empieza y termina su línea base, y su alto. */
+export type OcrText = { text: string; x0: number; y0: number; x1: number; y1: number; height: number };
+
+/**
+ * Agrega el texto reconocido como texto invisible sobre cada página escaneada
+ * (como hacen Acrobat o Vista Previa): se ve igual, pero se puede buscar,
+ * seleccionar, resaltar y convertir. Devuelve el PDF nuevo (sin cifrar).
+ */
+export async function addOcrText(source: Source, pages: { index: number; lines: OcrText[] }[]): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(source.data, { updateMetadata: false, ...(source.password !== undefined ? { password: source.password } : {}) }).catch((e) => {
+    if (source.password === undefined && /encrypt/i.test(String(e?.name ?? e))) return PDFDocument.load(source.data, { updateMetadata: false, password: "" });
+    throw e;
+  });
+  dropOldEncryption(doc);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const { index, lines } of pages) {
+    const page = doc.getPage(index);
+    const name = page.node.newFontDictionary("WepoOcr", font.ref);
+    const ops = [pushGraphicsState(), beginText(), setTextRenderingMode(TextRenderingMode.Invisible)];
+    for (const line of lines) {
+      const text = latin(line.text.replace(/[“”„«»]/g, '"').replace(/[‘’‚]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/€/g, "EUR"))
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!text) continue;
+      const length = Math.hypot(line.x1 - line.x0, line.y1 - line.y0);
+      const size = Math.max(1, line.height * 0.92);
+      const natural = font.widthOfTextAtSize(text, size);
+      if (!natural || !length) continue;
+      const cos = (line.x1 - line.x0) / length;
+      const sin = (line.y1 - line.y0) / length;
+      ops.push(
+        setFontAndSize(name, size),
+        // Que el texto mida lo mismo que el renglón de la imagen (para seleccionar justo encima).
+        setCharacterSqueeze(Math.max(1, Math.min(1000, (length / natural) * 100))),
+        setTextMatrix(cos, sin, -sin, cos, line.x0, line.y0),
+        showText(font.encodeText(text)),
+      );
+    }
+    ops.push(endText(), popGraphicsState());
+    page.pushOperators(...ops);
+  }
+  return doc.save();
 }

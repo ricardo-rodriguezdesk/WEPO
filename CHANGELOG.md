@@ -24,6 +24,20 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Al presentar, cada clic hace entrar lo que sigue; ← regresa un paso.
 - Se abren y se guardan en .pptx con los efectos de PowerPoint. Las de salida, de énfasis o con trayectoria todavía no (avisa al abrir).
 
+### PDF con contraseña en WEPO PDF
+- Los PDF con contraseña ya se editan, se convierten y se guardan (antes solo se veían). Al guardar conservan su contraseña.
+- Botón del candado: proteger un PDF con contraseña (AES de 256 bits, se abre en Acrobat, Vista Previa y los navegadores), cambiarla o quitarla.
+- Combinar con un PDF que tiene contraseña: la pide y agrega sus páginas.
+- Si el autor del PDF no permite modificarlo (permisos del archivo), WEPO lo muestra pero no lo cambia, y lo dice.
+
+### Reconocer texto (OCR) en WEPO PDF
+- Botón *Reconocer texto* (y un aviso al abrir un PDF escaneado): lee el texto de las páginas que son solo imagen y lo pone invisible encima, como Acrobat o Vista Previa. Después se puede buscar, seleccionar, resaltar y convertir a Write o Sheets, y al guardar el PDF lleva ese texto.
+- Usa el reconocimiento de texto del sistema: Vision en Mac, el de Windows en Windows y tesseract en Linux (si está instalado). WEPO no pesa más ni necesita internet.
+- Las páginas giradas también se leen bien.
+
+### Arreglos
+- WEPO Sheets: al escribir rápido una fórmula y dar ↩, a veces se colaba una función de la lista de sugerencias (por ejemplo «=SUMA(B2:BUSCAR(» en vez de «=SUMA(B2:B7)»).
+
 ## 0.3.1 (24 de octubre de 2026)
 
 Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.

@@ -144,6 +144,7 @@ WEPO también funciona en Linux (Ubuntu 22.04 o más nuevo, Debian, Fedora y sim
   npm install
   npm run tauri dev
   ```
+- **Reconocer texto (OCR) en PDF escaneados:** en Mac y Windows usa el del sistema; en Linux hace falta tesseract: `sudo apt install tesseract-ocr tesseract-ocr-spa` (o `sudo dnf install tesseract tesseract-langpack-spa`).
 
 ## Atajos de WEPO Write
 
@@ -275,8 +276,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: índice automático y notas al pie
 - [x] WEPO Present: transiciones y gráficas
 - [x] WEPO Present: animaciones de entrada
-- [ ] WEPO PDF: abrir y guardar PDF con contraseña
-- [ ] WEPO PDF: reconocer texto en escaneos (OCR)
+- [x] WEPO PDF: abrir, editar y guardar PDF con contraseña (y poner o quitar la contraseña)
+- [x] WEPO PDF: reconocer texto en escaneos (OCR), con el del sistema (sin que WEPO pese más)
 
 ## Licencia
 

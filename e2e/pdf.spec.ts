@@ -143,4 +143,114 @@ test.describe("WEPO PDF", () => {
     await page.locator(".pdf-file-note button").click();
     await expect(page.locator(".pdf-file-note .pdf-note-text")).toHaveText("Revisar la categoría ñ");
   });
+
+  test("contraseñas: abrir, editar y guardar protegido; quitar o poner la contraseña", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "protegido.pdf");
+    const input = page.getByLabel("Contraseña del PDF");
+    await input.fill("mala");
+    await input.press("Enter");
+    await expect(page.getByText("La contraseña no es correcta.")).toBeVisible();
+    await input.fill("wepo");
+    await input.press("Enter");
+    const thumbs = page.locator(".pdf-thumb");
+    await expect(thumbs).toHaveCount(3);
+    await expect(page.locator(".sheet-notice")).toHaveCount(0);
+
+    // Se edita y se guarda con la misma contraseña.
+    await thumbs.nth(0).click();
+    await page.getByLabel("Girar a la derecha").click();
+    const out = outFile("protegido-editado.pdf");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfInfo(out, "wepo").catch(() => [])).length).toBe(3);
+    await expect(pdfInfo(out)).rejects.toThrow();
+    expect((await pdfInfo(out, "wepo"))[0].rotation).toBe(90);
+
+    // Quitar la contraseña.
+    await page.getByLabel(/^Contraseña: el PDF se guarda protegido/).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Quitar la contraseña" }).click();
+    const plain = outFile("sin-contrasena.pdf");
+    await saveAs(page, plain);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfInfo(plain).catch(() => [])).length).toBe(3);
+
+    // Poner una contraseña nueva a un PDF que no tenía.
+    await openPdf(page, "hojas-b.pdf");
+    await expect(page.locator(".pdf-thumb")).toHaveCount(2);
+    await page.getByLabel("Proteger con contraseña").click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Contraseña nueva").fill("nueva1");
+    await dialog.getByLabel("Repetir la contraseña").fill("nueva2");
+    await expect(dialog.getByText("Las dos no coinciden.")).toBeVisible();
+    await dialog.getByLabel("Repetir la contraseña").fill("nueva1");
+    await dialog.getByRole("button", { name: "Proteger" }).click();
+    const locked = outFile("nueva-contrasena.pdf");
+    await saveAs(page, locked);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfInfo(locked, "nueva1").catch(() => [])).length).toBe(2);
+    await expect(pdfInfo(locked)).rejects.toThrow();
+    expect((await pdfText(locked, "nueva1"))[0]).toContain("Hoja B1");
+    expect(errors).toEqual([]);
+  });
+
+  test("combinar con un PDF que tiene contraseña: la pide", async ({ page }) => {
+    await openPdf(page, "hojas-a.pdf");
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), fixture("protegido.pdf"));
+    await page.getByLabel("Combinar: agregar páginas de otro PDF").click();
+    const ask = page.getByLabel("Contraseña del PDF que se agrega");
+    await ask.fill("otra");
+    await ask.press("Enter");
+    await expect(page.getByText("La contraseña no es correcta.")).toBeVisible();
+    await page.getByLabel("Contraseña del PDF que se agrega").fill("wepo");
+    await page.getByLabel("Contraseña del PDF que se agrega").press("Enter");
+    await expect(page.locator(".pdf-thumb")).toHaveCount(6);
+    const out = outFile("combinado-protegido.pdf");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfInfo(out).catch(() => [])).length).toBe(6);
+  });
+
+  test("un PDF cuyo autor no permite cambios se ve, pero no se edita", async ({ page }) => {
+    await openPdf(page, "permisos.pdf");
+    await expect(page.locator(".sheet-notice")).toContainText("no permite modificarlo");
+    await page.locator(".pdf-thumb").first().click();
+    await page.getByLabel("Girar a la derecha").click();
+    await expect(page.locator(".pdf-footer .sheet-status, .sheet-status").first()).toContainText("no permite modificarlo");
+  });
+
+  test("OCR: un escaneo se vuelve texto que se busca, se resalta, se convierte y se guarda", async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = collectErrors(page);
+    await openFile(page, "escaneo-carta.pdf");
+    const notice = page.locator(".pdf-scan-notice");
+    await expect(notice).toContainText("parece escaneado");
+    await notice.getByRole("button", { name: "Reconocer texto" }).click();
+    await expect(page.locator(".sheet-status")).toContainText("Listo", { timeout: 90_000 });
+
+    // El texto reconocido está encima de la imagen (se puede seleccionar y resaltar).
+    const first = page.locator(".pdf-page").nth(0).locator(".textLayer");
+    await expect(first).toContainText("Factura de servicios");
+    await expect(first).toContainText("Cliente");
+    await expect(page.locator(".pdf-page").nth(1).locator(".textLayer")).toContainText("girada");
+    await page.locator("[aria-label^='Resaltar']").click();
+    const word = (await first.locator("span", { hasText: "Cliente" }).first().boundingBox())!;
+    await page.mouse.dblclick(word.x + 8, word.y + word.height / 2);
+    await expect.poll(async () => (await highlights(page)).length).toBe(1);
+
+    // Guardado: el PDF trae el texto (se busca en cualquier programa).
+    const out = outFile("escaneo-con-texto.pdf");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfText(out).catch(() => [""]))[0]).toContain("Factura de servicios");
+    expect((await pdfText(out))[1]).toContain("girada");
+
+    // Y se convierte en documento de Write con texto (sin la imagen del escaneo).
+    await page.locator("button.pdf-convert", { hasText: "Write" }).click();
+    const content = page.locator(".write-content");
+    await expect(content).toContainText("Factura de servicios", { timeout: 30_000 });
+    await expect(content).toContainText("Total a pagar");
+    await expect(content.locator("img")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });

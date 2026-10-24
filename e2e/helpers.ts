@@ -66,17 +66,17 @@ export async function finishExport(page: Page, path: string) {
 }
 
 /** Hojas de un PDF: cuántas, su tamaño en puntos y su giro. */
-export async function pdfInfo(path: string) {
+export async function pdfInfo(path: string, password?: string) {
   const { readFileSync } = await import("node:fs");
-  const doc = await PDFDocument.load(readFileSync(path));
+  const doc = await PDFDocument.load(readFileSync(path), password !== undefined ? { password } : {});
   return doc.getPages().map((p) => ({ width: Math.round(p.getWidth()), height: Math.round(p.getHeight()), rotation: p.getRotation().angle }));
 }
 
 /** Texto de cada hoja de un PDF (con pdf.js, el mismo de la app). */
-export async function pdfText(path: string): Promise<string[]> {
+export async function pdfText(path: string, password?: string): Promise<string[]> {
   const { readFileSync } = await import("node:fs");
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const doc = await getDocument({ data: new Uint8Array(readFileSync(path)) }).promise;
+  const doc = await getDocument({ data: new Uint8Array(readFileSync(path)), password }).promise;
   const out: string[] = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const content = await (await doc.getPage(i)).getTextContent();

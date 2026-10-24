@@ -15,9 +15,11 @@ import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import type { Annotation, FormValues, Highlight, PageRef, Source } from "./pdfEdit";
-import { mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import { addOcrText, mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import type { OcrText } from "./pdfEdit";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
 import { convertPdf } from "../../lib/pdfConvert";
+import PasswordDialog, { OpenPasswordDialog } from "./PasswordDialog";
 import type { Converted } from "../../lib/pdfConvert";
 import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
@@ -55,6 +57,53 @@ const HIGHLIGHTS = ["#FFE14D", "#7EE787", "#FF9ECF", "#7CC4FF", "#FFB366"];
 type Snapshot = { pages: PageRef[]; annotations: Annotation[]; form: FormValues };
 
 /** WEPO PDF: ver un PDF y editar sus páginas (ordenar, girar, quitar, combinar con otro PDF). */
+/** Las páginas (de la lista) que no tienen texto: escaneos o imágenes. */
+async function withoutText(source: Source, pages: PageRef[]): Promise<PageRef[]> {
+  const out: PageRef[] = [];
+  for (const p of pages) {
+    const page = await source.doc.getPage(p.index + 1);
+    const content = await page.getTextContent();
+    const letters = content.items.reduce((n, it) => n + ("str" in it ? it.str.trim().length : 0), 0);
+    if (letters < 3) out.push(p);
+  }
+  return out;
+}
+
+type OcrLine = { text: string; x: number; y: number; w: number; h: number };
+
+/** Dibuja la página (con su giro del archivo), la manda al OCR del sistema y pasa los renglones a puntos del PDF. */
+async function ocrPage(source: Source, index: number): Promise<OcrText[]> {
+  const page = await source.doc.getPage(index + 1);
+  const base = page.getViewport({ scale: 1 });
+  // Unos 200 puntos por pulgada, sin pasar de lo que acepta el OCR de Windows.
+  const scale = Math.min(200 / 72, 2400 / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvas, viewport }).promise;
+  const image = canvas.toDataURL("image/png").split(",")[1];
+  const lines = await invoke<OcrLine[]>("ocr_image", { image, langs: ["es", "en"] });
+  const W = canvas.width;
+  const H = canvas.height;
+  return lines.map((l) => {
+    // La línea base queda un poco arriba del borde de abajo (por las letras que bajan, como la g o la p).
+    const baseY = (l.y + l.h * 0.8) * H;
+    const [x0, y0] = viewport.convertToPdfPoint(l.x * W, baseY);
+    const [x1, y1] = viewport.convertToPdfPoint((l.x + l.w) * W, baseY);
+    const [tx, ty] = viewport.convertToPdfPoint(l.x * W, l.y * H);
+    const [bx, by] = viewport.convertToPdfPoint(l.x * W, (l.y + l.h) * H);
+    return { text: l.text, x0, y0, x1, y1, height: Math.hypot(tx - bx, ty - by) };
+  });
+}
+
+/** pdf.js: permiso de modificar el contenido (bit 4 de /P). */
+const PERMISSION_MODIFY = 8;
+const LOCKED_TEXT = "El autor de este PDF no permite modificarlo (permisos del archivo): WEPO lo muestra, pero no lo edita, convierte ni guarda.";
+
 export default function PdfViewer({ data, path: initialPath, fileName: initialName, onHome, onOpen, onDirtyChange, onSaved, onConvert }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [pages, setPagesState] = useState<PageRef[]>([]);
@@ -68,6 +117,9 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   formRef.current = form;
   const [fields, setFields] = useState<Record<string, FormField[]>>({});
   const [fileNotes, setFileNotes] = useState<Record<string, FileNote[]>>({});
+  /** El PDF parece escaneado (sus primeras páginas no tienen texto): se ofrece reconocerlo. */
+  const [scanned, setScanned] = useState(false);
+  const [recognizing, setRecognizing] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [toolStyle, setToolStyle] = useState<ToolStyle>({ highlight: HIGHLIGHTS[0], ink: "#C42B45", inkWidth: 2, textColor: "#1D1D1F", textSize: 14 });
   const [selectedAnnot, setSelectedAnnot] = useState<string | null>(null);
@@ -78,7 +130,13 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   const [needsPassword, setNeedsPassword] = useState<"ask" | "wrong" | null>(null);
   const [password, setPassword] = useState("");
   /** Con contraseña, el PDF solo se puede ver: pdf-lib no guarda PDF cifrados. */
+  /** El autor del PDF no permite cambiarlo (permisos): se ve, pero no se edita. */
   const [locked, setLocked] = useState(false);
+  /** Contraseña con la que se va a guardar (la que tenía al abrirlo, una nueva o ninguna). */
+  const [protection, setProtection] = useState<string | null>(null);
+  const [passwordDialog, setPasswordDialog] = useState(false);
+  /** Otro PDF con contraseña que se quiere agregar (combinar). */
+  const [insertAsk, setInsertAsk] = useState<{ bytes: Uint8Array; name: string; after: number; wrong: boolean } | null>(null);
   const [path, setPath] = useState(initialPath);
   const [fileName, setFileName] = useState(initialName);
   const [dirty, setDirty] = useState(false);
@@ -98,9 +156,12 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
     async (pass?: string) => {
       try {
         const doc = await loadPdf(data, pass);
-        const source: Source = { id: "original", name: initialName, data, doc };
+        const source: Source = { id: "original", name: initialName, data, doc, password: pass };
         setNeedsPassword(null);
-        setLocked(Boolean(pass));
+        // Permisos del autor: si no deja modificar el contenido, WEPO solo lo muestra.
+        const permissions = await doc.getPermissions().catch(() => null);
+        setLocked(Boolean(permissions && !permissions.has(PERMISSION_MODIFY)));
+        setProtection(pass ?? null);
         setSources([source]);
         const list = await pagesOf(source);
         setPagesState(list);
@@ -114,6 +175,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
         }
         setFields(found);
         setFileNotes(await notesOf(source, list));
+        setScanned(await withoutText(source, list.slice(0, 3)).then((empty) => empty.length === Math.min(3, list.length) && list.length > 0));
       } catch (e) {
         const name = (e as { name?: string })?.name;
         if (name === "PasswordException") setNeedsPassword(pass ? "wrong" : "ask");
@@ -202,7 +264,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   /** Cambia el documento y lo anota para deshacer (`record` = false: cambio en curso, sin anotar). */
   function change(next: Partial<Snapshot>, record = true, before?: Snapshot) {
     if (locked) {
-      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no editarlo." });
+      setStatus({ text: LOCKED_TEXT });
       return;
     }
     if (record) {
@@ -277,10 +339,63 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   // ───────────── convertir ─────────────
 
   const [converting, setConverting] = useState(false);
+  // ───────────── reconocer texto (OCR) ─────────────
+
+  /**
+   * Reconoce el texto de las páginas escaneadas (las que no tienen texto) con el
+   * OCR del sistema y lo agrega invisible encima: así se busca, se selecciona,
+   * se resalta y se convierte. El PDF cambia (se guarda con ese texto).
+   */
+  async function recognizeText() {
+    if (locked) return setStatus({ text: LOCKED_TEXT });
+    if (recognizing) return;
+    const list = pagesRef.current;
+    const todo: PageRef[] = [];
+    for (const p of list) if ((await withoutText(docs.get(p.source)!, [p])).length) todo.push(p);
+    if (!todo.length) {
+      setStatus({ text: "Este PDF ya tiene texto en todas sus páginas: no hace falta reconocerlo." });
+      return;
+    }
+    setRecognizing(true);
+    try {
+      const found = new Map<string, { index: number; lines: OcrText[] }[]>();
+      let count = 0;
+      for (const [k, p] of todo.entries()) {
+        setStatus({ text: `Reconociendo texto… página ${k + 1} de ${todo.length}` });
+        const lines = await ocrPage(docs.get(p.source)!, p.index);
+        count += lines.length;
+        found.set(p.source, [...(found.get(p.source) ?? []), { index: p.index, lines }]);
+      }
+      if (!count) {
+        setStatus({ text: "No se encontró texto en las páginas escaneadas.", error: true });
+        return;
+      }
+      // Cada PDF con texto nuevo se vuelve a abrir (las páginas, giros y anotaciones siguen igual).
+      const next = await Promise.all(
+        sources.map(async (src) => {
+          const pages = found.get(src.id);
+          if (!pages) return src;
+          const data = await addOcrText(src, pages);
+          return { ...src, data, doc: await loadPdf(data), password: undefined };
+        }),
+      );
+      for (const src of sources) if (!next.includes(src)) void src.doc.loadingTask.destroy();
+      setSources(next);
+      setScanned(false);
+      setDirty(true);
+      onDirtyChange(true);
+      setStatus({ text: `Listo: se reconoció el texto de ${todo.length} ${todo.length === 1 ? "página" : "páginas"}. Ya se puede buscar, seleccionar y convertir; guárdalo para conservarlo.` });
+    } catch (e) {
+      setStatus({ text: `No se pudo reconocer el texto: ${e}`, error: true });
+    } finally {
+      setRecognizing(false);
+    }
+  }
+
   async function convert(kind: "write" | "sheets") {
     if (!onConvert) return;
     if (locked) {
-      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no convertirlo." });
+      setStatus({ text: LOCKED_TEXT });
       return;
     }
     setConverting(true);
@@ -289,7 +404,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       const inputs = pagesRef.current.map((p) => ({ doc: docs.get(p.source)!.doc, index: p.index, rotation: p.rotation }));
       const converted = await convertPdf(inputs, (done, total) => setStatus({ text: `Convirtiendo… página ${done} de ${total}` }));
       const hasTables = converted.blocks.some((b) => b.kind === "table" && !b.boxes);
-      if (!converted.blocks.length) setStatus({ text: "Este PDF no tiene texto que se pueda convertir (puede ser un escaneo).", error: true });
+      if (!converted.blocks.length) setStatus({ text: "Este PDF no tiene texto que se pueda convertir (parece un escaneo): primero usa «Reconocer texto».", error: true });
       else if (kind === "sheets" && !hasTables) setStatus({ text: "No se encontraron tablas con bordes en este PDF.", error: true });
       else {
         setStatus(null);
@@ -304,7 +419,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
   function chooseTool(t: Tool) {
     if (locked) {
-      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no editarlo." });
+      setStatus({ text: LOCKED_TEXT });
       return;
     }
     if (t === "sign" && !signature) setSignDialog(true);
@@ -355,15 +470,24 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   /** Combinar: las páginas de otro PDF entran después de `after` (o al final). */
   async function insertPdf(after = pagesRef.current.length - 1) {
     if (locked) {
-      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no editarlo." });
+      setStatus({ text: LOCKED_TEXT });
       return;
     }
     const file = await openDialog({ multiple: false, filters: [{ name: "PDF", extensions: ["pdf"] }] });
     if (!file) return;
     try {
-      const bytes = await readPdf(file);
-      const doc = await loadPdf(bytes);
-      const source: Source = { id: pid("s"), name: fileNameOf(file), data: bytes, doc };
+      await addSource(await readPdf(file), fileNameOf(file), after);
+    } catch (e) {
+      setStatus({ text: `No se pudo agregar el PDF: ${e}`, error: true });
+    }
+  }
+
+  /** Agrega las páginas de otro PDF (si tiene contraseña, primero la pide). */
+  async function addSource(bytes: Uint8Array, name: string, after: number, password?: string) {
+    try {
+      const doc = await loadPdf(bytes, password);
+      setInsertAsk(null);
+      const source: Source = { id: pid("s"), name, data: bytes, doc, password };
       const added = await pagesOf(source);
       const notes = await notesOf(source, added);
       setFileNotes((known) => ({ ...known, ...notes }));
@@ -373,16 +497,20 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       commit(list);
       setStatus({ text: `Se agregaron ${added.length} ${added.length === 1 ? "página" : "páginas"} de ${source.name}` });
     } catch (e) {
-      const name = (e as { name?: string })?.name;
-      setStatus({ text: name === "PasswordException" ? "Ese PDF tiene contraseña: todavía no se puede combinar." : `No se pudo agregar el PDF: ${e}`, error: true });
+      if ((e as { name?: string })?.name === "PasswordException") setInsertAsk({ bytes, name, after, wrong: password !== undefined });
+      else throw e;
     }
   }
 
   // ───────────── guardar ─────────────
 
   async function saveTo(target: string, only?: PageRef[]) {
+    if (!sources.length) {
+      setStatus({ text: "El PDF todavía se está abriendo" });
+      return false;
+    }
     try {
-      const bytes = await savePdf(sources, only ?? pagesRef.current, annotationsRef.current, formRef.current);
+      const bytes = await savePdf(sources, only ?? pagesRef.current, annotationsRef.current, formRef.current, protection);
       let binary = "";
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       await invoke("file_write", { path: target, data: btoa(binary) });
@@ -403,7 +531,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
   async function saveDocument(saveAs = false) {
     if (locked) {
-      setStatus({ text: "Este PDF tiene contraseña: por ahora WEPO solo puede mostrarlo, no guardarlo." });
+      setStatus({ text: LOCKED_TEXT });
       return false;
     }
     if (!saveAs && path) return saveTo(path);
@@ -610,7 +738,19 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
             <path d="M12 10v7M9 14l3 3 3-3" />
           </svg>
         </ToolButton>
+        <ToolButton label={protection ? "Contraseña: el PDF se guarda protegido" : "Proteger con contraseña"} pressed={Boolean(protection)} onClick={() => (locked ? setStatus({ text: LOCKED_TEXT }) : setPasswordDialog(true))}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <rect x="5" y="11" width="14" height="10" rx="2" />
+            <path d={protection ? "M8 11V7a4 4 0 018 0v4" : "M8 11V7a4 4 0 017.5-2"} />
+          </svg>
+        </ToolButton>
         <Separator />
+        <ToolButton label={recognizing ? "Reconociendo texto…" : "Reconocer texto (OCR): para buscar, seleccionar y convertir un escaneo"} pressed={recognizing} onClick={() => void recognizeText()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3" />
+            <path d="M9 15l3-7 3 7M10.2 12.5h3.6" />
+          </svg>
+        </ToolButton>
         <span className="pdf-future-label">Convertir:</span>
         <button type="button" className="fb-button pdf-convert" disabled={converting || !onConvert || !total} onClick={() => void convert("write")} title="Abrir en WEPO Write para editarlo (títulos, párrafos, listas, tablas e imágenes)">
           Write
@@ -697,8 +837,40 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
 
       {locked && (
         <div className="sheet-notice" role="status">
-          Este PDF está protegido con contraseña: por ahora WEPO puede mostrarlo, pero no editarlo ni guardarlo.
+          {LOCKED_TEXT}
         </div>
+      )}
+      {scanned && !locked && (
+        <div className="sheet-notice pdf-scan-notice" role="status">
+          <span>Este PDF parece escaneado: su texto es una imagen y no se puede buscar, seleccionar ni convertir.</span>
+          <button type="button" className="btn btn-primary" disabled={recognizing} onClick={() => void recognizeText()}>
+            {recognizing ? "Reconociendo…" : "Reconocer texto"}
+          </button>
+          <button type="button" className="btn btn-icon" aria-label="Cerrar aviso" onClick={() => setScanned(false)}>
+            ×
+          </button>
+        </div>
+      )}
+      {passwordDialog && (
+        <PasswordDialog
+          current={protection}
+          onSave={(next) => {
+            setProtection(next);
+            setDirty(true);
+            onDirtyChange(true);
+            setStatus({ text: next ? "Al guardar, el PDF va a pedir la contraseña para abrirse" : "Al guardar, el PDF ya no va a pedir contraseña" });
+          }}
+          onClose={() => setPasswordDialog(false)}
+        />
+      )}
+      {insertAsk && (
+        <OpenPasswordDialog
+          key={String(insertAsk.wrong)}
+          name={insertAsk.name}
+          wrong={insertAsk.wrong}
+          onSubmit={(pw) => void addSource(insertAsk.bytes, insertAsk.name, insertAsk.after, pw).catch((e) => setStatus({ text: `No se pudo agregar el PDF: ${e}`, error: true }))}
+          onClose={() => setInsertAsk(null)}
+        />
       )}
 
       <div className="pdf-body">

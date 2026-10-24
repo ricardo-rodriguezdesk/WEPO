@@ -72,6 +72,10 @@ fn main() {
                 "user_name" => Ok(json!("Prueba")),
                 "file_read" => files::file_read(st("path")).map(Value::from),
                 "file_write" => files::file_write(st("path"), st("data")).map(|_| Value::Null),
+                "ocr_image" => {
+                    let langs: Vec<String> = serde_json::from_value(a["langs"].clone()).unwrap_or_default();
+                    wepo_lib::ocr::recognize(&files::decode(&st("image"))?, &langs).map(|lines| json!(lines))
+                }
                 "recovery_save_file" => {
                     let ext = a["ext"].as_str().unwrap_or("docx").to_string();
                     let (file, info) = recovery(&ext);

@@ -5,6 +5,7 @@
 pub mod files;
 mod mac;
 mod pdf_export;
+pub mod ocr;
 mod recovery;
 mod windows;
 mod sheet_format;
@@ -705,6 +706,7 @@ pub fn run() {
             mac::print_window,
             sheet_from_tables,
             pdf_export::export_pdf,
+            ocr::ocr_image,
             windows::quit_app,
             files::file_read,
             files::file_write,

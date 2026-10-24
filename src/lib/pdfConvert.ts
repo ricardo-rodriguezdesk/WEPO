@@ -60,7 +60,17 @@ type Line = {
   bullet: boolean;
   band: Fill | null;
 };
-type PageData = { width: number; height: number; items: Item[]; fills: Fill[]; segs: Seg[]; dots: Fill[]; images: Img[] };
+type PageData = {
+  width: number;
+  height: number;
+  items: Item[];
+  fills: Fill[];
+  segs: Seg[];
+  dots: Fill[];
+  images: Img[];
+  /** Tiene texto invisible (un escaneo con texto reconocido): la imagen de toda la hoja sobra. */
+  ocr: boolean;
+};
 
 const WHITE = /^#f[a-f0-9]f[a-f0-9]f[a-f0-9]$/i;
 
@@ -104,9 +114,11 @@ async function readPage(input: PageInput, sampleColors: boolean): Promise<PageDa
     else if (r.w <= 1.6 && r.h > 2) segs.push({ x1: r.x + r.w / 2, x2: r.x + r.w / 2, y1: r.y, y2: r.y + r.h, horizontal: false });
   };
   const imageJobs: Promise<void>[] = [];
+  let ocr = false;
   for (let i = 0; i < ops.fnArray.length; i++) {
     const fn = ops.fnArray[i];
     const args = ops.argsArray[i] as unknown[];
+    if (fn === OPS.setTextRenderingMode && args[0] === 3) ocr = true;
     if (fn === OPS.save) stack.push([ctm.slice(), fill, stroke]);
     else if (fn === OPS.restore) {
       const prev = stack.pop();
@@ -171,7 +183,7 @@ async function readPage(input: PageInput, sampleColors: boolean): Promise<PageDa
   }
   if (sampleColors && items.length) await sampleTextColors(page, viewport.rotation, items);
   page.cleanup();
-  return { width: viewport.width, height: viewport.height, items, fills, segs, dots, images };
+  return { width: viewport.width, height: viewport.height, items, fills, segs, dots, images, ocr };
 }
 
 function fontInfo(page: PDFPageProxy, name: string, styles: Record<string, { fontFamily?: string }>) {
@@ -712,8 +724,9 @@ export async function convertPdf(inputs: PageInput[], onProgress?: (done: number
       pageBlocks.push({ top, block: { kind: "table", rows: [cells], widths, header: false, boxes: true } });
     }
 
-    // 3. Imágenes.
+    // 3. Imágenes (sin la del escaneo cuando ya tiene su texto reconocido).
     for (const img of page.images) {
+      if (page.ocr && img.w * img.h > page.width * page.height * 0.6) continue;
       const mid = img.x + img.w / 2;
       const align: Align = Math.abs(mid - (contentLeft + contentRight) / 2) < (contentRight - contentLeft) * 0.08 ? "center" : "left";
       pageBlocks.push({ top: img.y, block: { kind: "image", src: img.src, width: img.w, height: img.h, align } });
