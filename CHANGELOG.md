@@ -2,7 +2,9 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
-## Próxima versión (sin publicar)
+## 0.3.0 (23 de octubre de 2026)
+
+WEPO PDF ya edita, y los documentos pasan de un formato a otro: exportar a PDF desde los tres editores y convertir un PDF en documento de Write o en hojas de Sheets.
 
 ### Imprimir en WEPO Sheets, como en Excel
 - Nueva pantalla de impresión con vista previa: las páginas se ven tal como van a salir (impresas o en PDF) y cambian con cada opción.
@@ -43,6 +45,7 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Elegir texto con la flecha también funciona como en Vista Previa: empezar en el margen o soltar fuera de la página ya no elige la hoja entera; doble clic elige la palabra y triple clic el renglón.
 - Las notas adhesivas se leen bien en modo oscuro, se ven en cualquier lector de PDF y, al volver a abrir el archivo en WEPO, se pueden leer.
 - Los resaltados quedan exactos también en PDFs hechos por programas que dejan el dibujo desplazado.
+- La ventanita de una nota cerca del borde derecho se abre hacia la izquierda (ya no se sale de la página).
 
 ### Seguridad
 - pdf.js actualizado a la 6.4.299: corrige una falla que permitía ejecutar código al abrir un PDF malicioso (CVE-2026-16633).

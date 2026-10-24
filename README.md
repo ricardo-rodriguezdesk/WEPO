@@ -2,7 +2,7 @@
 
 **Write · Edit · Present · Open**
 
-WEPO es una suite de oficina ligera y de código abierto para macOS, Windows y Linux. Abre y edita documentos, hojas de cálculo y presentaciones de Microsoft Office (y de LibreOffice), y muestra PDF, en una sola aplicación.
+WEPO es una suite de oficina ligera y de código abierto para macOS, Windows y Linux. Abre y edita documentos, hojas de cálculo y presentaciones de Microsoft Office (y de LibreOffice) y PDF, en una sola aplicación. Exporta cualquier documento a PDF y convierte un PDF en documento editable o en hoja de cálculo.
 
 ![WEPO Sheets: tabla con fórmulas y gráfica](docs/capturas/sheets.png)
 
@@ -10,7 +10,9 @@ WEPO es una suite de oficina ligera y de código abierto para macOS, Windows y L
 |---|---|
 | ![WEPO Write con comentarios y control de cambios](docs/capturas/write.png) | ![WEPO Present editando una diapositiva](docs/capturas/present.png) |
 | **WEPO PDF** | **Inicio** |
-| ![WEPO PDF con miniaturas](docs/capturas/pdf.png) | ![Pantalla de inicio de WEPO](docs/capturas/inicio.png) |
+| ![WEPO PDF con resaltados y notas](docs/capturas/pdf.png) | ![Pantalla de inicio de WEPO](docs/capturas/inicio.png) |
+| **Imprimir con vista previa** | **Un PDF convertido en documento de Write** |
+| ![Vista previa de impresión de WEPO Sheets](docs/capturas/imprimir.png) | ![Un PDF convertido en documento de WEPO Write](docs/capturas/convertir.png) |
 
 ## Descargar
 
@@ -25,7 +27,7 @@ La versión más reciente está en [**Releases**](../../releases): hay instalado
 | **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx |
-| **WEPO PDF** | Ver y editar PDF | .pdf |
+| **WEPO PDF** | Ver, editar y convertir PDF (a Write o a Sheets) | .pdf |
 
 ## Tecnología
 
@@ -103,7 +105,7 @@ npm run tauri build
 
 Al terminar quedan en `src-tauri/target/release/bundle/macos/WEPO.app` y `src-tauri/target/release/bundle/dmg/`. Abre el .dmg y arrastra WEPO a la carpeta Aplicaciones.
 
-También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.2.0 && git push origin v0.2.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
+También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.3.0 && git push origin v0.3.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
 
 **Primera vez que la abres:** WEPO todavía no está firmado por Apple, así que macOS no la deja abrir con doble clic. Haz clic derecho sobre WEPO en Aplicaciones → **Abrir** → **Abrir**. Solo hace falta una vez.
 
@@ -254,6 +256,14 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: gráficas apiladas y combinadas, títulos de ejes y valores en las barras
 - [x] WEPO Sheets: encabezado, pie, filas que se repiten y área de impresión
 - [x] WEPO Sheets: ventana «Insertar función», validación de números y fechas, filtros por condición, quitar duplicados
+- [x] Exportar como PDF desde Sheets, Write y Present, sin pasar por el diálogo de impresión
+- [x] WEPO Sheets: imprimir con vista previa (papel, orientación, márgenes, escala) y elegir el área de impresión con el mouse
+- [x] WEPO PDF: convertir un PDF en documento de Write (títulos, listas, tablas, imágenes, encabezado y pie)
+- [x] WEPO PDF: pasar las tablas de un PDF a Sheets, con números de verdad y celdas combinadas
+- [ ] Vista previa de impresión en Write y Present
+- [ ] WEPO Present: animaciones, transiciones y gráficas
+- [ ] WEPO Write: índice automático y notas al pie
+- [ ] WEPO PDF: reconocer texto en escaneos (OCR)
 
 ## Licencia
 

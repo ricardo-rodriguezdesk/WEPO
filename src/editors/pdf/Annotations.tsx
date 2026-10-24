@@ -355,7 +355,7 @@ export default function AnnotationLayer(props: Props) {
                 </svg>
               </button>
               {openNote === a.id && (
-                <div className="pdf-note-popup" onPointerDown={(e) => e.stopPropagation()}>
+                <div className="pdf-note-popup" style={popupSide(left, W)} onPointerDown={(e) => e.stopPropagation()}>
                   <textarea
                     className="textarea"
                     autoFocus
@@ -411,7 +411,7 @@ export default function AnnotationLayer(props: Props) {
               )}
             </button>
             {openNote === n.id && (
-              <div className="pdf-note-popup" style={{ top: box.height + 4 }} onPointerDown={(e) => e.stopPropagation()}>
+              <div className="pdf-note-popup" style={{ top: box.height + 4, ...popupSide(box.left, W) }} onPointerDown={(e) => e.stopPropagation()}>
                 {n.author && <span className="pdf-note-author">{n.author}</span>}
                 <p className="pdf-note-text">{n.text || "(nota vacía)"}</p>
                 <button type="button" className="btn" onClick={() => setOpenNote(null)}>
@@ -725,4 +725,9 @@ function wordAt(at: Caret): [Caret, Caret] {
     { node: at.node, offset: start },
     { node: at.node, offset: end },
   ];
+}
+
+/** La ventanita de la nota se abre hacia la izquierda si a la derecha no cabe en la página. */
+function popupSide(left: number, pageWidth: number): React.CSSProperties {
+  return left + 236 > pageWidth ? { left: "auto", right: -2 } : {};
 }
