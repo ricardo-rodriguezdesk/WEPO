@@ -2,7 +2,9 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
-## Próxima versión (sin publicar)
+## 0.3.1 (24 de octubre de 2026)
+
+Vista previa de impresión en Write y Present, igual que en Sheets, y pruebas automáticas de la interfaz.
 
 ### Imprimir en WEPO Write, con vista previa
 - Pantalla de impresión como la de Sheets: las páginas a la derecha, tal como van a salir.
@@ -14,6 +16,10 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 ### Imprimir en WEPO Present, con vista previa
 - Pantalla de impresión con vista previa: diapositivas (una por hoja), diapositivas con notas, o documentos con 2, 3 (con renglones para apuntes) o 6 diapositivas por hoja, en Carta o A4.
 - Todas las diapositivas, la actual o un rango («1-3, 5»), con o sin las ocultas.
+
+### Pruebas automáticas
+- 19 pruebas que usan WEPO como lo haría una persona: abren archivos, imprimen, exportan a PDF, convierten y guardan, y revisan los archivos que salen. GitHub las corre en cada cambio; en la computadora, con `npm run test:e2e`.
+- Arreglo: los botones *Convertir* del visor de PDF se podían pulsar antes de que el PDF terminara de cargar («El PDF no tiene páginas»).
 
 ## 0.3.0 (23 de octubre de 2026)
 
