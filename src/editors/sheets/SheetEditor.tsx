@@ -2201,7 +2201,8 @@ export default function SheetEditor(props: Props) {
   const manualRows = view.page?.row_breaks ?? [];
   const manualCols = view.page?.col_breaks ?? [];
 
-  function setPageBreaks(rows: number[], cols: number[], text: string) {
+  /** `before`: algo que se hace antes en el motor (agrandar el área de impresión), en orden, para que no se crucen las respuestas. */
+  function setPageBreaks(rows: number[], cols: number[], text: string, before?: () => Promise<unknown>) {
     // Como en Excel, con «ajustar todas las columnas en una página» los saltos de columna no
     // cuentan, y con «la hoja en una página» ninguno: al poner uno, la escala pasa a la que sí los respeta.
     const scaling = loadOptions(false).scaling;
@@ -2216,7 +2217,10 @@ export default function SheetEditor(props: Props) {
       note = " (la impresión quedó en «Ajustar todas las columnas en una página» para que cuenten los saltos de fila)";
     }
     if (note) setScalingTick((t) => t + 1);
-    mutate(() => sheetApi.pageBreaks(sheet, rows, cols));
+    mutate(async () => {
+      if (before) await before();
+      return sheetApi.pageBreaks(sheet, rows, cols);
+    });
     setShowBreaks(true);
     showStatus({ text: text + note });
   }
@@ -2237,13 +2241,14 @@ export default function SheetEditor(props: Props) {
     // Si el salto cae fuera de lo que se imprime (por ejemplo, en una columna vacía a la derecha),
     // el área de impresión crece hasta ahí para que la página nueva exista.
     const range = currentPrintRange();
+    let grow: (() => Promise<unknown>) | undefined;
     if (range && ((rows !== manualRows && r > range.r2) || (cols !== manualCols && c > range.c2))) {
       const area = { ...range, r2: rows !== manualRows ? Math.max(range.r2, r) : range.r2, c2: cols !== manualCols ? Math.max(range.c2, c) : range.c2 };
       const text = `${cellName({ r: area.r1, c: area.c1 })}:${cellName({ r: area.r2, c: area.c2 })}`;
       const form = pageForm(view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null });
-      mutate(() => sheetApi.pageSetup(sheet, form.header, form.footer, form.repeatRows, text));
+      grow = () => sheetApi.pageSetup(sheet, form.header, form.footer, form.repeatRows, text);
     }
-    setPageBreaks(rows, cols, "Salto de página insertado: lo que sigue se imprime en otra página");
+    setPageBreaks(rows, cols, "Salto de página insertado: lo que sigue se imprime en otra página", grow);
   }
 
   /** Vista previa: parte en dos la página donde está la celda activa (a lo ancho = línea vertical). */
