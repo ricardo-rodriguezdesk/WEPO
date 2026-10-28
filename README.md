@@ -273,6 +273,7 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] Vista previa de impresión en Write y Present
 - [x] Pruebas automáticas de la interfaz (en cada cambio, en GitHub)
 - [x] WEPO Sheets: cortes de página en la hoja y saltos de página a mano (se arrastran, como en Excel)
+- [x] WEPO Sheets: vista previa de salto de página (páginas numeradas, bordes azules que se arrastran)
 - [x] WEPO Write: índice automático y notas al pie
 - [x] WEPO Present: transiciones y gráficas
 - [x] WEPO Present: animaciones de entrada

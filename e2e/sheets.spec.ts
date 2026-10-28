@@ -172,4 +172,39 @@ test.describe("WEPO Sheets", () => {
     await expect(page.locator(".page-break.h.manual")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+  test("vista previa de salto de página: páginas numeradas y el borde azul cambia lo que se imprime", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "gastos.xlsx");
+    await page.getByRole("button", { name: "Vista previa de salto de página" }).click();
+    await expect(page.locator(".grid-scroll.break-preview")).toHaveCount(1);
+    const labels = page.locator(".break-preview-label");
+    await expect(labels).toHaveCount(4);
+    await expect(labels.first()).toHaveText("Página 1");
+    await expect(labels.last()).toHaveText("Página 4");
+    await expect(page.locator(".break-preview-area")).toHaveCount(1);
+    await expect(page.locator(".page-break.outer")).toHaveCount(4);
+
+    // Subir el borde de abajo 45 filas: se imprime menos y quedan menos páginas.
+    // (Ventana alta para que todo el arrastre quepa en pantalla.)
+    await page.setViewportSize({ width: 1400, height: 2600 });
+    const edge = page.locator(".page-break.h.outer[data-side='end']");
+    await edge.scrollIntoViewIfNeeded();
+    const endRow = Number(await edge.getAttribute("data-row"));
+    const goal = endRow - 45;
+    const box = (await edge.boundingBox())!;
+    const header = (await page.locator(".row-header").filter({ hasText: new RegExp(`^${goal + 1}$`) }).first().boundingBox())!;
+    await page.mouse.move(box.x + 40, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 40, header.y + 2, { steps: 10 });
+    await page.mouse.up();
+    await expect(page.locator(".sheet-status")).toHaveText(new RegExp(`Área de impresión: A1:[A-Z]+${goal}$`));
+    await expect(page.locator(".page-break.h.outer[data-side='end']")).toHaveAttribute("data-row", String(goal));
+    await expect(labels).toHaveCount(3);
+
+    // De regreso a la vista normal.
+    await page.getByRole("button", { name: "Normal", exact: true }).click();
+    await expect(labels).toHaveCount(0);
+    await expect(page.locator(".grid-scroll.break-preview")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });

@@ -9,6 +9,7 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - Saltos de página a mano, como en Excel: clic derecho → *Insertar salto de página* (arriba de la fila, a la izquierda de la columna, o los dos con una celda), *Quitar salto de página* y *Restablecer todos los saltos de página*. Se ven con línea continua.
 - Los cortes se arrastran con el mouse: uno puesto a mano se mueve (o se quita si se saca de lo que se imprime) y uno automático se vuelve salto a mano en su lugar nuevo.
 - La vista previa, la impresión y el PDF los respetan (con «toda la hoja en una página» no cuentan, y con «todas las columnas en una página», los de columna tampoco, igual que en Excel). Se guardan en el .xlsx y se leen los de Excel; al insertar o borrar filas o columnas se recorren.
+- *Vista previa de salto de página*, como en Excel (selector *Normal | Saltos de página* junto al zoom): cada página con línea azul (continua si el salto es a mano, punteada si es automático), un «Página 1», «Página 2»… grande de fondo y en gris lo que no se imprime. Arrastra las líneas azules para decidir dónde empieza cada página, y el borde de afuera para cambiar el área de impresión. La vista se recuerda.
 
 ### Índice y notas al pie en WEPO Write
 - Botón *Índice*: arma la tabla de contenido con los títulos (1, 2 y 3) y la página donde cae cada uno; se actualiza sola al escribir y un clic en una entrada lleva a ese título.

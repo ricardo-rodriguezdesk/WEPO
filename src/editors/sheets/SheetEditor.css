@@ -711,3 +711,43 @@
 .sheet-status + .page-break-toggle { margin-left: 12px; }
 .sheet-stats + .page-break-toggle { margin-left: 14px; }
 .page-break-toggle + .zoom-control { margin-left: 8px; }
+
+/* Vista previa de salto de página (como en Excel) */
+.sheet-views { display: inline-flex; flex-shrink: 0; margin-left: auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.sheet-views button { padding: 2px 8px; font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+.sheet-views button + button { border-left: 1px solid var(--border); }
+.sheet-views button:hover { color: var(--text); }
+.sheet-views button.on { color: #fff; background: var(--kind-accent, #1d7a4a); }
+.sheet-status + .sheet-views { margin-left: 12px; }
+.sheet-stats + .sheet-views { margin-left: 14px; }
+.sheet-views + .page-break-toggle { margin-left: 8px; }
+.sheet-views + .zoom-control { margin-left: 8px; }
+.break-preview-area {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  box-shadow: 0 0 0 100000px color-mix(in srgb, #808080 38%, transparent);
+}
+.break-preview-label {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: color-mix(in srgb, #8a8a8a 45%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+}
+.break-preview { --break-blue: #2f6fd6; }
+.break-preview .page-break::after { border-color: var(--break-blue); }
+.break-preview .page-break.v::after { left: 2px; border-left-width: 2.5px; }
+.break-preview .page-break.h::after { top: 2px; border-top-width: 2.5px; }
+.break-preview .page-break.manual::after,
+.break-preview .page-break.outer::after { border-style: solid; border-color: var(--break-blue); }
+.break-preview .page-break.v.outer::after { left: 1px; border-left-width: 4px; }
+.break-preview .page-break.h.outer::after { top: 1px; border-top-width: 4px; }
+.break-preview .page-break.drag:hover::after { border-color: #174ea6; }
+.break-preview .page-break.ghost::after { border-style: solid; border-color: #174ea6; }
