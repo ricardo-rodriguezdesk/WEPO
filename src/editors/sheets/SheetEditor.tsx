@@ -11,6 +11,11 @@ import type {
   BorderKind,
   Cell,
   ChartType,
+  CommentAction,
+  CommentCardAction,
+  CommentView,
+  OutlineAction,
+  PivotLayout,
   Decoration,
   DrawingPatch,
   FindMatch,
@@ -40,6 +45,12 @@ import PrintDialog, { loadOptions, pageForm, saveScaling } from "./PrintDialog";
 import type { PageForm } from "./PrintDialog";
 import LinkDialog from "./LinkDialog";
 import TableDialog from "./TableDialog";
+import PivotDialog from "./PivotDialog";
+import PivotPanel from "./PivotPanel";
+import CommentCard from "./CommentCard";
+import OutlineGutter, { gutterSize } from "./OutlineGutter";
+import ProtectSheetDialog from "./ProtectSheetDialog";
+import { loadAuthor } from "../../lib/write";
 import FunctionDialog from "./FunctionDialog";
 import DuplicatesDialog from "./DuplicatesDialog";
 import type { ColumnSpec } from "./FilterMenu";
@@ -195,9 +206,19 @@ export default function SheetEditor(props: Props) {
   const [painter, setPainter] = useState<{ source: Range; sticky: boolean } | null>(null);
   const [noteEdit, setNoteEdit] = useState<(NoteTarget & { text: string }) | null>(null);
   const [hoverNote, setHoverNote] = useState<NoteTarget | null>(null);
+  /** Comentario abierto a propósito (clic, menú o ⌘⌥M), para escribir o responder. */
+  const [commentOpen, setCommentOpen] = useState<NoteTarget | null>(null);
+  const [author, setAuthor] = useState("WEPO");
+  useEffect(() => {
+    loadAuthor().then(setAuthor);
+  }, []);
   const [linkDialog, setLinkDialog] = useState<NoteTarget | null>(null);
   const [sortDialog, setSortDialog] = useState<Range | null>(null);
   const [tableDialog, setTableDialog] = useState<{ range: Range; table: TableView | null } | null>(null);
+  const [protectDialog, setProtectDialog] = useState<{ mode: "protect" | "unprotect"; wrong: boolean } | null>(null);
+  const [pivotDialog, setPivotDialog] = useState<{ source: string; here: string } | null>(null);
+  /** Tabla dinámica cuyo panel cerró la persona (se vuelve a abrir al entrar a otra o con el botón). */
+  const [pivotClosed, setPivotClosed] = useState<string | null>(null);
   const [fnDialog, setFnDialog] = useState(false);
   const [dupDialog, setDupDialog] = useState<Range | null>(null);
   const [stats, setStats] = useState<SelectionStats | null>(null);
@@ -293,6 +314,11 @@ export default function SheetEditor(props: Props) {
     for (const n of view.notes ?? []) map.set(`${n.row - 1},${n.col - 1}`, n);
     return map;
   }, [view.notes]);
+  const comments = useMemo(() => {
+    const map = new Map<string, CommentView>();
+    for (const t of view.comments ?? []) map.set(`${t.row - 1},${t.col - 1}`, t);
+    return map;
+  }, [view.comments]);
   const links = useMemo(() => {
     const map = new Map<string, LinkView>();
     for (const l of view.links ?? []) map.set(`${l.row - 1},${l.col - 1}`, l);
@@ -573,6 +599,10 @@ export default function SheetEditor(props: Props) {
   // ───────────── edición ─────────────
 
   function startEditing(value: string, quick: boolean, source: "cell" | "bar" = "cell") {
+    if (isLocked(active.r, active.c)) {
+      showStatus({ text: "La hoja está protegida: esta celda no se puede cambiar. Para hacerlo, quita la protección (clic derecho en la pestaña de la hoja)", error: true });
+      return;
+    }
     const next: Editing = { value, source, quick, cell: active, original: input };
     editingRef.current = next;
     setEditing(next);
@@ -1022,6 +1052,103 @@ export default function SheetEditor(props: Props) {
     if (table) mutate(() => sheetApi.updateTable(sheet, table.name, table.style, table.banded, table.totals, true));
   }
 
+  // ───────────── tablas dinámicas ─────────────
+
+  const pivots = view.pivots ?? [];
+  const activePivot = pivots.find((p) => active.r + 1 >= p.row1 && active.r + 1 <= p.row2 && active.c + 1 >= p.col1 && active.c + 1 <= p.col2);
+  // Al entrar a otra tabla dinámica, su panel se abre aunque se haya cerrado el de otra.
+  useEffect(() => {
+    if (activePivot && pivotClosed && pivotClosed !== activePivot.name) setPivotClosed(null);
+  }, [activePivot?.name]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Insertar tabla dinámica (o, dentro de una, volver a mostrar su panel). */
+  function openPivot() {
+    if (activePivot) return setPivotClosed(null);
+    const range = isMultiSelection && !wholeCols && !wholeRows ? selection : currentRegion(rows, active);
+    if (range.r2 <= range.r1) return showStatus({ text: "Selecciona los datos con su fila de encabezados", error: true });
+    const label = `${cellName({ r: range.r1, c: range.c1 })}:${cellName({ r: range.r2, c: range.c2 })}`;
+    setPivotDialog({ source: label, here: cellName({ r: range.r1, c: range.c2 + 2 }) });
+  }
+
+  async function createPivot(source: string, at: string | null) {
+    const range = parseRange(source);
+    if (!range) return showStatus({ text: "Escribe los datos como «A1:D20»", error: true });
+    const cell = at ? parseRange(`${at}:${at}`) : null;
+    const target = cell ? { r: cell.r1, c: cell.c1 } : null;
+    const ok = await mutate(() => sheetApi.createPivot(sheet, range, sheet, target));
+    if (!ok) return;
+    // La celda activa queda en la tabla dinámica, así se abre su panel.
+    const anchor = target ?? { r: 2, c: 0 };
+    setActive(anchor);
+    setEnd(anchor);
+    setPivotClosed(null);
+    showStatus({ text: "Tabla dinámica creada: marca en el panel los campos que quieres ver" });
+  }
+
+  // ───────────── hoja protegida ─────────────
+
+  const protection = view.protection;
+  const sheetProtected = Boolean(protection?.protected);
+  /** ¿La celda (desde 0) está bloqueada? Solo cuenta con la hoja protegida. */
+  function isLocked(r: number, c: number) {
+    if (!protection?.protected) return false;
+    return !protection.unlocked.some(([r1, c1, r2, c2]) => r + 1 >= r1 && r + 1 <= r2 && c + 1 >= c1 && c + 1 <= c2);
+  }
+  const unlockedCount = (protection?.unlocked ?? []).reduce((n, [r1, c1, r2, c2]) => n + (r2 - r1 + 1) * (c2 - c1 + 1), 0);
+  const selectionUnlocked = (protection?.unlocked ?? []).some(
+    ([r1, c1, r2, c2]) => selection.r1 + 1 <= r2 && selection.r2 + 1 >= r1 && selection.c1 + 1 <= c2 && selection.c2 + 1 >= c1,
+  );
+
+  async function submitProtection(password: string | null) {
+    if (!protectDialog) return;
+    const unprotect = protectDialog.mode === "unprotect";
+    try {
+      const result = await sheetApi.protect(sheet, { kind: protectDialog.mode, password });
+      setView(result);
+      markDirty();
+      setProtectDialog(null);
+      showStatus({ text: unprotect ? "Se quitó la protección de la hoja" : "Hoja protegida: sus celdas ya no se pueden cambiar" });
+    } catch (e) {
+      if (unprotect && String(e).includes("contraseña")) setProtectDialog({ mode: "unprotect", wrong: true });
+      else showStatus({ text: String(e), error: true });
+    }
+  }
+
+  function toggleProtection() {
+    if (!sheetProtected) return setProtectDialog({ mode: "protect", wrong: false });
+    if (protection?.password) return setProtectDialog({ mode: "unprotect", wrong: false });
+    mutate(() => sheetApi.protect(sheet, { kind: "unprotect", password: null })).then((ok) => ok && showStatus({ text: "Se quitó la protección de la hoja" }));
+  }
+
+  function setCellsUnlocked(unlocked: boolean) {
+    const r = selection;
+    mutate(() => sheetApi.protect(sheet, { kind: "unlock", row1: r.r1 + 1, col1: r.c1 + 1, row2: r.r2 + 1, col2: r.c2 + 1, unlocked })).then(
+      (ok) => ok && showStatus({ text: unlocked ? "Estas celdas se podrán llenar aunque la hoja esté protegida" : "Estas celdas quedan bloqueadas al proteger la hoja" }),
+    );
+  }
+
+  // ───────────── grupos (esquema) ─────────────
+
+  function outlineAction(action: OutlineAction) {
+    mutate(() => sheetApi.outline(sheet, action));
+  }
+
+  /** Agrupar o desagrupar: columnas si están elegidas columnas completas; si no, las filas de la selección. */
+  function groupSelection(ungroup: boolean, columns = wholeCols) {
+    const [start, end] = columns ? [selection.c1 + 1, selection.c2 + 1] : [selection.r1 + 1, selection.r2 + 1];
+    mutate(() => sheetApi.outline(sheet, { kind: ungroup ? "ungroup" : "group", columns, start, end })).then(
+      (ok) =>
+        ok &&
+        showStatus({
+          text: `${ungroup ? "Desagrupadas" : "Agrupadas"} las ${columns ? `columnas ${columnName(selection.c1)}–${columnName(selection.c2)}` : `filas ${start}–${end}`}${ungroup ? "" : ": usa el − de la orilla para contraerlas"}`,
+        }),
+    );
+  }
+
+  function changePivot(name: string, layout: PivotLayout) {
+    mutate(() => sheetApi.updatePivot(sheet, name, layout));
+  }
+
   /** Inserta la función elegida en la fórmula que se escribe, o empieza una en la celda activa. */
   function insertFunction(fn: FunctionInfo) {
     setFnDialog(false);
@@ -1122,6 +1249,30 @@ export default function SheetEditor(props: Props) {
     focusGrid();
     if (text.trim() === before.trim()) return;
     await mutate(() => sheetApi.setNote(sheet, r, c, text));
+  }
+
+  /** Abre el comentario de la celda (o uno nuevo) para escribir. */
+  function openComment(cell: Cell = active) {
+    const at = anchorOf(cell);
+    if (!comments.has(`${at.r},${at.c}`) && notes.has(`${at.r},${at.c}`)) {
+      return showStatus({ text: "Esta celda ya tiene una nota: bórrala para poner un comentario", error: true });
+    }
+    setHoverNote(null);
+    setNoteEdit(null);
+    setCommentOpen(at);
+  }
+
+  async function commentAction(at: NoteTarget, action: CommentCardAction) {
+    const full: CommentAction = action.kind === "add" ? { kind: "add", row: at.r + 1, col: at.c + 1, author, text: action.text } : action;
+    const ok = await mutate(() => sheetApi.comment(sheet, full));
+    if (!ok) return;
+    if (action.kind === "delete" && action.message === action.thread) {
+      setCommentOpen(null);
+      setHoverNote(null);
+      focusGrid();
+      showStatus({ text: "Se eliminó el comentario" });
+    }
+    if (action.kind === "resolve") showStatus({ text: action.done ? "Conversación resuelta" : "Conversación abierta otra vez" });
   }
 
   function deleteNote(cell: Cell = active) {
@@ -1611,6 +1762,18 @@ export default function SheetEditor(props: Props) {
       }
     }
 
+    // ⌥⇧→ agrupa y ⌥⇧← desagrupa (Alt+Mayús en Windows), como en Excel.
+    if (e.altKey && e.shiftKey && !hasModifier(e) && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      return groupSelection(e.key === "ArrowLeft");
+    }
+
+    // ⌘⌥M (Ctrl+Alt+M en Windows): comentario nuevo, como en Excel.
+    if (hasModifier(e) && e.altKey && e.code === "KeyM") {
+      e.preventDefault();
+      return openComment();
+    }
+
     if (e.metaKey || e.ctrlKey) {
       const key = e.key.toLowerCase();
       const shortcuts: Record<string, () => void> = {
@@ -1644,7 +1807,6 @@ export default function SheetEditor(props: Props) {
       e.preventDefault();
       return setListOpen(true);
     }
-
     switch (e.key) {
       case "ArrowUp":
         e.preventDefault();
@@ -1794,7 +1956,17 @@ export default function SheetEditor(props: Props) {
     const anchor = anchorOf(active);
     const activeNote = notes.get(`${anchor.r},${anchor.c}`);
     const activeLink = links.get(`${anchor.r},${anchor.c}`);
-    const noteItems: MenuItem[] = activeNote
+    const activeComment = comments.get(`${anchor.r},${anchor.c}`);
+    const commentItems: MenuItem[] = activeComment
+      ? [
+          { label: "Responder al comentario", shortcut: keys("⌘⌥M"), action: () => openComment() },
+          { label: activeComment.done ? "Volver a abrir el comentario" : "Resolver el comentario", action: () => commentAction(anchor, { kind: "resolve", thread: activeComment.id, done: !activeComment.done }) },
+          { label: "Eliminar comentario", action: () => commentAction(anchor, { kind: "delete", thread: activeComment.id, message: activeComment.id }) },
+        ]
+      : activeNote
+        ? []
+        : [{ label: "Nuevo comentario", shortcut: keys("⌘⌥M"), action: () => openComment() }];
+    const noteItems: MenuItem[] = activeComment ? [] : activeNote
       ? [
           { label: "Editar nota", shortcut: "⇧F2", action: () => editNote() },
           { label: "Eliminar nota", action: () => deleteNote() },
@@ -1842,6 +2014,30 @@ export default function SheetEditor(props: Props) {
       ...(filter ? [{ label: "Quitar todos los filtros", action: clearAllFilters }] : []),
       { label: "Quitar duplicados…", action: openDuplicates },
       { label: activeTable ? "Opciones de la tabla…" : "Dar formato como tabla…", action: openTableDialog },
+      activePivot
+        ? { label: "Actualizar la tabla dinámica", action: () => mutate(() => sheetApi.refreshPivot(sheet, activePivot.name)) }
+        : { label: "Insertar tabla dinámica…", action: openPivot },
+    ];
+
+    const rowSpanText = selection.r1 === selection.r2 ? `fila ${selection.r1 + 1}` : `filas ${selection.r1 + 1}–${selection.r2 + 1}`;
+    const colSpanText = selection.c1 === selection.c2 ? `columna ${columnName(selection.c1)}` : `columnas ${columnName(selection.c1)}–${columnName(selection.c2)}`;
+    const outlineRowItems: MenuItem[] = [
+      { label: `Agrupar ${rowSpanText}`, shortcut: "⌥⇧→", action: () => groupSelection(false, false) },
+      ...((view.outline?.row_levels ?? 0) > 0
+        ? [
+            { label: `Desagrupar ${rowSpanText}`, shortcut: "⌥⇧←", action: () => groupSelection(true, false) },
+            { label: "Borrar el esquema de filas", action: () => outlineAction({ kind: "clear", columns: false }) },
+          ]
+        : []),
+    ];
+    const outlineColItems: MenuItem[] = [
+      { label: `Agrupar ${colSpanText}`, shortcut: "⌥⇧→", action: () => groupSelection(false, true) },
+      ...((view.outline?.col_levels ?? 0) > 0
+        ? [
+            { label: `Desagrupar ${colSpanText}`, shortcut: "⌥⇧←", action: () => groupSelection(true, true) },
+            { label: "Borrar el esquema de columnas", action: () => outlineAction({ kind: "clear", columns: true }) },
+          ]
+        : []),
     ];
 
     if (kind === "row") {
@@ -1852,6 +2048,8 @@ export default function SheetEditor(props: Props) {
         "separator",
         { label: `Ocultar ${plural(rowSpan, "fila", "filas")}`, action: () => setRowsHidden(true) },
         { label: "Mostrar filas ocultas", action: () => setRowsHidden(false) },
+        "separator",
+        ...outlineRowItems,
         "separator",
         freezeItem,
       ];
@@ -1866,6 +2064,8 @@ export default function SheetEditor(props: Props) {
         "separator",
         { label: `Ocultar ${plural(colSpan, "columna", "columnas")}`, action: () => setColumnsHidden(true) },
         { label: "Mostrar columnas ocultas", action: () => setColumnsHidden(false) },
+        "separator",
+        ...outlineColItems,
         "separator",
         freezeItem,
       ];
@@ -1885,10 +2085,19 @@ export default function SheetEditor(props: Props) {
       },
       ...sortItems,
       "separator",
+      outlineRowItems[0],
+      outlineColItems[0],
+      "separator",
+      ...commentItems,
       ...noteItems,
       ...linkItems,
       "separator",
       freezeItem,
+      sheetProtected
+        ? { label: "Quitar la protección de la hoja…", action: toggleProtection }
+        : selectionUnlocked
+          ? { label: "Bloquear estas celdas otra vez", action: () => setCellsUnlocked(false) }
+          : { label: "Permitir editar estas celdas con la hoja protegida", action: () => setCellsUnlocked(true) },
       { label: "Establecer área de impresión", disabled: !isMultiSelection, action: () => setPrintArea(false) },
       ...(view.page?.print_area ? [{ label: "Quitar área de impresión", action: () => setPrintArea(true) }] : []),
       {
@@ -2165,6 +2374,7 @@ export default function SheetEditor(props: Props) {
     const table = tableAt(tables, r, c);
     const tableHeader = table && r + 1 === table.row1;
     const note = notes.get(`${r},${c}`);
+    const comment = comments.get(`${r},${c}`);
     const link = links.get(`${r},${c}`);
     // Dentro de una tabla, sus colores (encabezados, bandas, totales) completan el formato de la celda.
     const cellStyle = withTableStyle(view.styles[styleId] ?? view.styles[0], table, r);
@@ -2211,14 +2421,25 @@ export default function SheetEditor(props: Props) {
           if (fillTo) setFillTo({ r, c });
           else if (mouseSelecting.current === "ref" && pointing) pointTo(pointing.anchor, { r, c });
           else if (mouseSelecting.current === "cells") setEnd({ r, c });
-          showNoteSoon(note ? { r, c } : null);
+          showNoteSoon(note || comment ? { r, c } : null);
         }}
-        onMouseLeave={() => note && showNoteSoon(null)}
+        onMouseLeave={() => (note || comment) && showNoteSoon(null)}
         onDoubleClick={() => startEditing(input, false)}
         onContextMenu={(e) => openMenu(e, "cell", { r, c })}
-        title={note ? undefined : link ? `${link.target}\n${keys("⌘")}+clic para abrir` : text}
+        title={note || comment ? undefined : link ? `${link.target}\n${keys("⌘")}+clic para abrir` : text}
       >
         {note && <span className="note-mark" aria-label="Tiene nota" />}
+        {comment && (
+          <span
+            className={`comment-mark${comment.done ? " done" : ""}`}
+            aria-label={comment.done ? "Tiene un comentario resuelto" : "Tiene un comentario"}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              select({ r, c }, false);
+              openComment({ r, c });
+            }}
+          />
+        )}
         {tableHeader && (
           <button
             type="button"
@@ -2367,7 +2588,7 @@ export default function SheetEditor(props: Props) {
   );
 
   return (
-    <div className="editor kind-sheets">
+    <div className={`editor kind-sheets${sheetProtected ? " sheet-protected" : ""}`}>
       <EditorToolbar
         kind="sheets"
         fileName={fileName}
@@ -2412,6 +2633,13 @@ export default function SheetEditor(props: Props) {
             <rect x="3" y="4" width="18" height="16" rx="1.5" />
             <path d="M3 9h18M3 14h18M9 9v11" />
             <rect x="3" y="4" width="18" height="5" fill="currentColor" stroke="none" opacity="0.35" />
+          </svg>
+        </ToolButton>
+        <ToolButton label={activePivot ? "Campos de tabla dinámica" : "Insertar tabla dinámica"} pressed={Boolean(activePivot)} onClick={openPivot}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <rect x="3" y="3" width="18" height="18" rx="1.5" />
+            <path d="M3 9h18M9 3v18" />
+            <path d="M13 13h5M15.5 13v5" strokeLinecap="round" />
           </svg>
         </ToolButton>
         <ToolButton label="Quitar duplicados" onClick={openDuplicates}>
@@ -2546,6 +2774,13 @@ export default function SheetEditor(props: Props) {
         </button>
       </div>
 
+      <div
+        className="grid-area"
+        style={{ paddingLeft: gutterSize(view.outline?.row_levels ?? 0), paddingTop: gutterSize(view.outline?.col_levels ?? 0) }}
+      >
+      {view.outline && (view.outline.row_levels > 0 || view.outline.col_levels > 0) && (
+        <OutlineGutter outline={view.outline} rowAxis={rowAxis} colAxis={colAxis} scrollX={scrollX} scrollY={scrollY} onAction={outlineAction} />
+      )}
       <div
         className={`grid-scroll${fillTo ? " filling" : ""}${painter ? " painting" : ""}${breakView && pageBreaks ? " break-preview" : ""}`}
         ref={scrollRef}
@@ -2719,9 +2954,35 @@ export default function SheetEditor(props: Props) {
             zoom={zoom}
           />
 
+          {/* Comentario: abierto para escribir o responder, o al pasar el mouse */}
+          {(() => {
+            const target = commentOpen ?? (hoverNote && !editing && !noteEdit && comments.has(`${hoverNote.r},${hoverNote.c}`) ? hoverNote : null);
+            if (!target) return null;
+            const area = merged.at(target.r, target.c) ?? { r1: target.r, c1: target.c, r2: target.r, c2: target.c };
+            const box = rangeBox(area);
+            const thread = comments.get(`${target.r},${target.c}`) ?? null;
+            return (
+              <CommentCard
+                key={`cc-${target.r}-${target.c}-${commentOpen ? "p" : "h"}`}
+                style={{ left: box.left + box.width + 8, top: box.top }}
+                thread={thread}
+                author={author}
+                pinned={Boolean(commentOpen)}
+                onAction={(action) => commentAction(target, action)}
+                onClose={() => {
+                  setCommentOpen(null);
+                  setHoverNote(null);
+                  focusGrid();
+                }}
+                onMouseEnter={commentOpen ? undefined : () => showNoteSoon(target)}
+                onMouseLeave={commentOpen ? undefined : () => showNoteSoon(null)}
+              />
+            );
+          })()}
+
           {/* Nota: al pasar el mouse, o abierta para escribir */}
           {(() => {
-            const target = noteEdit ?? (hoverNote && !editing ? hoverNote : null);
+            const target = noteEdit ?? (hoverNote && !editing && !commentOpen ? hoverNote : null);
             if (!target) return null;
             const area = merged.at(target.r, target.c) ?? { r1: target.r, c1: target.c, r2: target.r, c2: target.c };
             const box = rangeBox(area);
@@ -2901,6 +3162,7 @@ export default function SheetEditor(props: Props) {
           )}
         </div>
       </div>
+      </div>
 
       <SheetTabs
         names={view.sheet_names}
@@ -2917,6 +3179,8 @@ export default function SheetEditor(props: Props) {
           mutate(() => sheetApi.deleteSheet(i));
         }}
         onMove={(i, to) => mutate(() => sheetApi.moveSheet(i, to))}
+        protectedActive={sheetProtected}
+        onProtect={toggleProtection}
       >
         {status && (
           <span className={`sheet-status ${status.error ? "error" : ""}`} role="status">
@@ -2990,6 +3254,31 @@ export default function SheetEditor(props: Props) {
           onPick={acceptSuggestion}
           signature={assist.signature}
         />
+      )}
+
+      {activePivot && pivotClosed !== activePivot.name && chartPanel === null && (
+        <PivotPanel
+          pivot={activePivot}
+          onChange={(layout) => changePivot(activePivot.name, layout)}
+          onRefresh={() => mutate(() => sheetApi.refreshPivot(sheet, activePivot.name)).then((ok) => ok && showStatus({ text: "Tabla dinámica actualizada" }))}
+          onDelete={() => mutate(() => sheetApi.deletePivot(sheet, activePivot.name)).then((ok) => ok && showStatus({ text: "Se eliminó la tabla dinámica" }))}
+          onClose={() => setPivotClosed(activePivot.name)}
+        />
+      )}
+
+      {protectDialog && (
+        <ProtectSheetDialog
+          sheetName={view.sheet_names[sheet] ?? ""}
+          mode={protectDialog.mode}
+          wrong={protectDialog.wrong}
+          unlockedCount={unlockedCount}
+          onSubmit={submitProtection}
+          onClose={() => setProtectDialog(null)}
+        />
+      )}
+
+      {pivotDialog && (
+        <PivotDialog source={pivotDialog.source} here={pivotDialog.here} onCreate={createPivot} onClose={() => setPivotDialog(null)} />
       )}
 
       {chartPanel !== null &&
@@ -3185,3 +3474,4 @@ function NoteEditor(props: { style: { left: number; top: number }; initial: stri
     </div>
   );
 }
+

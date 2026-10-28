@@ -33,6 +33,9 @@ ironcalc = "0.9.1"
 tauri-plugin-clipboard-manager = "2"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
+# Contraseña de las hojas protegidas (SHA-512, como Excel).
+sha2 = "0.10"
+base64 = "0.22"
 
 # Exportar como PDF con el motor de impresión de cada sistema (mismas versiones que usa Tauri).
 [target.'cfg(target_os = "macos")'.dependencies]

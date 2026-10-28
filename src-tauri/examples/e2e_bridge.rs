@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use wepo_lib::files;
-use wepo_lib::sheets::{ColumnFilter, ListSource, PasteMode, Rect, SheetDocument, SortKey, TableSheet};
+use wepo_lib::sheets::{ColumnFilter, CommentAction, OutlineAction, ProtectAction, ListSource, PasteMode, PivotLayout, Rect, SheetDocument, SortKey, TableSheet};
 
 fn work_dir() -> PathBuf {
     let dir = std::env::var("WEPO_E2E_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join("wepo-e2e"));
@@ -280,6 +280,39 @@ fn main() {
                         }
                         "sheet_page_setup" => {
                             d.set_page_setup(sheet, &st("header"), &st("footer"), &st("repeatRows"), &st("printArea"))?;
+                            view(d, sheet)
+                        }
+                        "sheet_protect" => {
+                            let action: ProtectAction = serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
+                            d.protect(sheet, action)?;
+                            view(d, sheet)
+                        }
+                        "sheet_outline" => {
+                            let action: OutlineAction = serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
+                            d.outline(sheet, action)?;
+                            view(d, sheet)
+                        }
+                        "sheet_comment" => {
+                            let action: CommentAction = serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
+                            d.comment(sheet, action)?;
+                            view(d, sheet)
+                        }
+                        "sheet_pivot_create" => {
+                            let at = a["atRow"].as_i64().zip(a["atCol"].as_i64()).map(|(r, c)| (r as i32, c as i32));
+                            let index = d.create_pivot(sheet, rect, u("target"), at)?;
+                            view(d, index)
+                        }
+                        "sheet_pivot_update" => {
+                            let layout: PivotLayout = serde_json::from_value(a["layout"].clone()).map_err(|e| e.to_string())?;
+                            d.update_pivot(sheet, &st("name"), layout)?;
+                            view(d, sheet)
+                        }
+                        "sheet_pivot_refresh" => {
+                            d.refresh_pivot(sheet, &st("name"))?;
+                            view(d, sheet)
+                        }
+                        "sheet_pivot_delete" => {
+                            d.delete_pivot(sheet, &st("name"))?;
                             view(d, sheet)
                         }
                         "sheet_page_breaks" => {

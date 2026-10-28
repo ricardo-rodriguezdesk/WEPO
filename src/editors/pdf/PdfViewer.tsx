@@ -14,12 +14,13 @@ import { fileNameOf } from "../../lib/documents";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
-import type { Annotation, FormValues, Highlight, PageRef, Source } from "./pdfEdit";
-import { addOcrText, mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
+import type { Annotation, FormValues, Highlight, PageRef, Source, Watermark } from "./pdfEdit";
+import { addOcrText, charOffsets, mergeLines, pagesOf, pid, savePdf, shownSize } from "./pdfEdit";
 import type { OcrText } from "./pdfEdit";
 import AnnotationLayer, { SignatureDialog, loadSignature } from "./Annotations";
 import { convertPdf } from "../../lib/pdfConvert";
 import PasswordDialog, { OpenPasswordDialog } from "./PasswordDialog";
+import WatermarkDialog from "./WatermarkDialog";
 import type { Converted } from "../../lib/pdfConvert";
 import type { FileNote, FormField, Tool, ToolStyle } from "./Annotations";
 import "../sheets/FormatBar.css";
@@ -49,6 +50,7 @@ const TOOLS: { id: Tool; label: string; icon: string[] }[] = [
   { id: "draw", label: "Dibujar a mano", icon: ["M4 20c3-1 4-4 7-7s6-4 7-7", "M15 4l5 5"] },
   { id: "note", label: "Nota adhesiva (clic donde va)", icon: ["M4 5h16v11H9l-5 4z"] },
   { id: "sign", label: "Firmar (clic donde va la firma)", icon: ["M3 17c2-4 4-9 6-9s-1 9 1 9 3-5 5-5 1 4 3 4h3", "M3 21h18"] },
+  { id: "redact", label: "Tachar información (arrastra un recuadro; al guardar se borra de verdad)", icon: ["M4 9h16v6H4z", "M4 12h16", "M7 9v6M11 9v6M15 9v6M19 9v6"] },
 ];
 
 const HIGHLIGHTS = ["#FFE14D", "#7EE787", "#FF9ECF", "#7CC4FF", "#FFB366"];
@@ -134,6 +136,11 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
   const [locked, setLocked] = useState(false);
   /** Contraseña con la que se va a guardar (la que tenía al abrirlo, una nueva o ninguna). */
   const [protection, setProtection] = useState<string | null>(null);
+  /** Marca de agua que se agrega al guardar (y ya se ve en las páginas). */
+  const [watermark, setWatermark] = useState<Watermark | null>(null);
+  const [watermarkDialog, setWatermarkDialog] = useState(false);
+  /** Texto para «Tachar todas las veces que aparece». */
+  const [redactTerm, setRedactTerm] = useState("");
   const [passwordDialog, setPasswordDialog] = useState(false);
   /** Otro PDF con contraseña que se quiere agregar (combinar). */
   const [insertAsk, setInsertAsk] = useState<{ bytes: Uint8Array; name: string; after: number; wrong: boolean } | null>(null);
@@ -423,6 +430,8 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       return;
     }
     if (t === "sign" && !signature) setSignDialog(true);
+    if (t === "redact")
+      setStatus({ text: "Arrastra un recuadro sobre lo que quieras tachar (o búscalo arriba). Al guardar se borra de verdad: esas páginas se guardan como imagen, con su texto para buscar, menos lo tachado." });
     setTool(t);
     setSelectedAnnot(null);
   }
@@ -502,6 +511,45 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
     }
   }
 
+  // ───────────── tachar y marca de agua ─────────────
+
+  /** Tacha todas las veces que aparece un texto (en todas las páginas). */
+  async function redactAll(term: string) {
+    const needle = term.trim().toLocaleLowerCase("es");
+    if (!needle) return;
+    const added: Annotation[] = [];
+    let count = 0;
+    for (const p of pagesRef.current) {
+      const source = docs.get(p.source);
+      if (!source) continue;
+      const page = await source.doc.getPage(p.index + 1);
+      const content = await page.getTextContent();
+      const rects: [number, number, number, number][] = [];
+      for (const item of content.items) {
+        if (!("str" in item) || !item.str) continue;
+        const [a, b, , d, e, f] = item.transform as number[];
+        // Solo texto derecho (el torcido es raro en documentos).
+        if (Math.abs(b) > 0.01 * Math.abs(a) || !item.width) continue;
+        const text = item.str.toLocaleLowerCase("es");
+        const height = item.height || Math.abs(d);
+        const offsets = charOffsets(item.str, item.width, content.styles[item.fontName]?.fontFamily);
+        for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+          const from = [...item.str.slice(0, at)].length;
+          const to = from + [...item.str.slice(at, at + needle.length)].length;
+          // Con un poco de orilla: mejor tachar de más que dejar asomar una letra.
+          const pad = height * 0.12;
+          rects.push([e + offsets[from] - pad, f - height * 0.25, offsets[to] - offsets[from] + 2 * pad, height * 1.3]);
+          count++;
+        }
+      }
+      if (rects.length) added.push({ id: pid("a"), page: p.id, kind: "redact", rects });
+    }
+    if (!count) return setStatus({ text: `No se encontró «${term.trim()}» en el texto del PDF` });
+    change({ annotations: [...annotationsRef.current, ...added] });
+    setRedactTerm("");
+    setStatus({ text: `Se tachó ${count === 1 ? "1 vez" : `${count} veces`} «${term.trim()}». Revísalo y guarda para borrarlo de verdad.` });
+  }
+
   // ───────────── guardar ─────────────
 
   async function saveTo(target: string, only?: PageRef[]) {
@@ -510,7 +558,9 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
       return false;
     }
     try {
-      const bytes = await savePdf(sources, only ?? pagesRef.current, annotationsRef.current, formRef.current, protection);
+      const redacted = annotationsRef.current.some((a) => a.kind === "redact");
+      if (redacted) setStatus({ text: "Guardando… borrando lo tachado" });
+      const bytes = await savePdf(sources, only ?? pagesRef.current, annotationsRef.current, formRef.current, protection, watermark);
       let binary = "";
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       await invoke("file_write", { path: target, data: btoa(binary) });
@@ -744,6 +794,12 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
             <path d={protection ? "M8 11V7a4 4 0 018 0v4" : "M8 11V7a4 4 0 017.5-2"} />
           </svg>
         </ToolButton>
+        <ToolButton label={watermark ? `Marca de agua: «${watermark.text}»` : "Marca de agua"} pressed={Boolean(watermark)} onClick={() => (locked ? setStatus({ text: LOCKED_TEXT }) : setWatermarkDialog(true))}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <rect x="4" y="3" width="16" height="18" rx="1.5" />
+            <path d="M8 16l8-8M9 9h.01M15 15h.01" />
+          </svg>
+        </ToolButton>
         <Separator />
         <ToolButton label={recognizing ? "Reconociendo texto…" : "Reconocer texto (OCR): para buscar, seleccionar y convertir un escaneo"} pressed={recognizing} onClick={() => void recognizeText()}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -808,6 +864,20 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
             </select>
           </>
         )}
+        {tool === "redact" && (
+          <form
+            className="pdf-redact-search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void redactAll(redactTerm);
+            }}
+          >
+            <input className="fb-input" placeholder="Tachar todas las veces que aparece…" value={redactTerm} aria-label="Texto que se tacha en todo el PDF" onChange={(e) => setRedactTerm(e.target.value)} />
+            <button type="submit" className="fb-button" disabled={!redactTerm.trim()}>
+              Tachar
+            </button>
+          </form>
+        )}
         {tool === "sign" && signature && (
           <Popover
             button={(toggle, open) => (
@@ -850,6 +920,18 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
             ×
           </button>
         </div>
+      )}
+      {watermarkDialog && (
+        <WatermarkDialog
+          current={watermark}
+          onSave={(next) => {
+            setWatermark(next);
+            setDirty(true);
+            onDirtyChange(true);
+            setStatus({ text: next ? `Marca de agua «${next.text}» en todas las páginas: se agrega al guardar` : "Se quitó la marca de agua" });
+          }}
+          onClose={() => setWatermarkDialog(false)}
+        />
       )}
       {passwordDialog && (
         <PasswordDialog
@@ -945,6 +1027,7 @@ export default function PdfViewer({ data, path: initialPath, fileName: initialNa
                     onForm={(name, value) => change({ form: { ...formRef.current, [name]: value } })}
                     onNeedSignature={() => setSignDialog(true)}
                   />
+                  {watermark && <WatermarkPreview page={p} scale={scale} mark={watermark} />}
                 </PageView>
               ))}
             </div>
@@ -1163,4 +1246,18 @@ function Thumbnail({ page, source }: { page: PageRef; source: Source }) {
   }, [visible, source, page.index, scale, rotation]);
 
   return <canvas ref={canvas} style={{ width, height }} />;
+}
+
+/** Cómo se verá la marca de agua (la de verdad se agrega al guardar). */
+function WatermarkPreview({ page, scale, mark }: { page: PageRef; scale: number; mark: Watermark }) {
+  const shown = shownSize(page);
+  const angle = mark.diagonal ? (Math.atan2(shown.height, shown.width) * 180) / Math.PI : 0;
+  const span = mark.diagonal ? Math.hypot(shown.width, shown.height) * 0.7 : shown.width * 0.8;
+  // Helvetica en negritas mide, en promedio, unos 0.62 de su tamaño por letra.
+  const size = Math.max(14, Math.min(220, span / Math.max(1, mark.text.length * 0.62), shown.height * 0.3));
+  return (
+    <div className="pdf-watermark" aria-hidden="true">
+      <span style={{ fontSize: size * scale, color: mark.color, opacity: mark.opacity, transform: `translate(-50%, -50%) rotate(${-angle}deg)` }}>{mark.text}</span>
+    </div>
+  );
 }

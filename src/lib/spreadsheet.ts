@@ -31,6 +31,60 @@ export type StyleView = {
 };
 
 /** "Foto" de una hoja que devuelve Rust después de cada operación. */
+/** Función con que se resume un campo en «Valores». */
+export type PivotFunc = "sum" | "count" | "average" | "max" | "min";
+export type PivotLayout = {
+  /** Número de campo (columna de los datos, desde 0). */
+  rows: number[];
+  cols: number[];
+  values: { field: number; func: PivotFunc }[];
+  /** Filtros de arriba y los elementos que no se toman en cuenta. */
+  filters: { field: number; hidden: string[] }[];
+};
+export type PivotView = {
+  name: string;
+  /** Lo que ocupa en la hoja, desde 1. */
+  row1: number;
+  col1: number;
+  row2: number;
+  col2: number;
+  /** "Datos!A1:D40" */
+  source: string;
+  fields: string[];
+  numeric: boolean[];
+  layout: PivotLayout;
+  /** Elementos de los campos que están en «Filtros». */
+  items: [number, string[]][];
+};
+
+/** Un mensaje de un comentario (el primero) o una respuesta. */
+export type CommentMessage = { id: string; author: string; date: string; text: string };
+/** Comentario con respuestas, como los de Excel 365 (fila y columna desde 1). */
+export type CommentView = { row: number; col: number; id: string; done: boolean; messages: CommentMessage[] };
+export type CommentAction =
+  | { kind: "add"; row: number; col: number; author: string; text: string }
+  | { kind: "reply"; thread: string; author: string; text: string }
+  | { kind: "edit"; thread: string; message: string; text: string }
+  | { kind: "delete"; thread: string; message: string }
+  | { kind: "resolve"; thread: string; done: boolean };
+/** Lo que pide la tarjeta del comentario (la celda y el autor de uno nuevo los pone la hoja). */
+export type CommentCardAction = Exclude<CommentAction, { kind: "add" }> | { kind: "add"; text: string };
+
+/** Un grupo de filas (o columnas) del esquema, desde 1. */
+export type GroupView = { level: number; start: number; end: number; collapsed: boolean };
+export type OutlineView = { rows: GroupView[]; cols: GroupView[]; row_levels: number; col_levels: number };
+export type OutlineAction =
+  | { kind: "group" | "ungroup"; columns: boolean; start: number; end: number }
+  | { kind: "clear"; columns: boolean }
+  | { kind: "collapse"; columns: boolean; level: number; start: number; collapsed: boolean }
+  | { kind: "level"; columns: boolean; level: number };
+
+/** Protección de la hoja. Celdas editables: [fila1, col1, fila2, col2], desde 1. */
+export type ProtectionView = { protected: boolean; password: boolean; unlocked: [number, number, number, number][] };
+export type ProtectAction =
+  | { kind: "protect" | "unprotect"; password: string | null }
+  | { kind: "unlock"; row1: number; col1: number; row2: number; col2: number; unlocked: boolean };
+
 export type SheetView = {
   sheet_names: string[];
   sheet: number;
@@ -62,6 +116,14 @@ export type SheetView = {
   links: LinkView[];
   /** Tablas ("Dar formato como tabla"), desde 1; incluyen encabezados y totales. */
   tables: TableView[];
+  /** Tablas dinámicas de la hoja. */
+  pivots?: PivotView[];
+  /** Comentarios con respuestas. */
+  comments?: CommentView[];
+  /** Grupos de filas y columnas. */
+  outline?: OutlineView;
+  /** Si la hoja está protegida y qué celdas se pueden editar. */
+  protection?: ProtectionView;
   /** Encabezado, pie, filas que se repiten y área de impresión. */
   page: PageView;
 };
@@ -344,6 +406,19 @@ export const sheetApi = {
     invoke<SheetView>("sheet_page_setup", { sheet, header, footer, repeatRows, printArea }),
   /** Saltos de página a mano: fila o columna (desde 0) con que empieza cada página nueva. */
   pageBreaks: (sheet: number, rows: number[], cols: number[]) => invoke<SheetView>("sheet_page_breaks", { sheet, rows, cols }),
+  /** Proteger la hoja, quitarle la protección o marcar celdas editables. */
+  protect: (sheet: number, action: ProtectAction) => invoke<SheetView>("sheet_protect", { sheet, action }),
+  /** Grupos de filas y columnas: agrupar, desagrupar, contraer y expandir. */
+  outline: (sheet: number, action: OutlineAction) => invoke<SheetView>("sheet_outline", { sheet, action }),
+  /** Comentarios: agregar, responder, editar, borrar o marcar como resuelto. */
+  comment: (sheet: number, action: CommentAction) => invoke<SheetView>("sheet_comment", { sheet, action }),
+  /** Tabla dinámica con los datos de `range`: en una hoja nueva o, con `at`, en esa celda (desde 0) de la hoja `target`. */
+  createPivot: (sheet: number, range: Range, target: number, at: { r: number; c: number } | null) =>
+    invoke<SheetView>("sheet_pivot_create", { sheet, ...rect(range), target, atRow: at ? at.r + 1 : null, atCol: at ? at.c + 1 : null }),
+  updatePivot: (sheet: number, name: string, layout: PivotLayout) => invoke<SheetView>("sheet_pivot_update", { sheet, name, layout }),
+  /** «Actualizar»: con `name` vacío, todas las del libro. */
+  refreshPivot: (sheet: number, name: string) => invoke<SheetView>("sheet_pivot_refresh", { sheet, name }),
+  deletePivot: (sheet: number, name: string) => invoke<SheetView>("sheet_pivot_delete", { sheet, name }),
   /** Quita las filas repetidas según `cols` (desde 0). */
   removeDuplicates: (sheet: number, range: Range, cols: number[], header: boolean) =>
     invoke<{ removed: number; view: SheetView }>("sheet_remove_duplicates", {

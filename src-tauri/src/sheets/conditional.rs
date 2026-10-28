@@ -102,6 +102,7 @@ impl SheetDocument {
     /// Agrega una regla. `rule` es un `CfRuleInput` de IronCalc en JSON, por ejemplo:
     /// `{"type":"CellIs","operator":"GreaterThan","formula":"10",…}`.
     pub fn add_conditional_format(&mut self, sheet: u32, rect: Rect, rule: serde_json::Value) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let rule: CfRuleInput = serde_json::from_value(rule).map_err(|e| format!("Regla inválida: {e}"))?;
         let range = rect.to_a1();
         self.step(|m| m.add_conditional_formatting(sheet, &range, rule))
@@ -110,6 +111,7 @@ impl SheetDocument {
     /// Conjunto de íconos predefinido de Excel ("3Arrows", "3TrafficLights1", "3Symbols"…),
     /// repartido en partes iguales por percentil.
     pub fn add_icon_set(&mut self, sheet: u32, rect: Rect, preset: &str) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let icons = icon_set_icons(preset).ok_or_else(|| format!("Conjunto de íconos desconocido: {preset}"))?;
         let count = icons.len() as f64;
         let thresholds = icons
@@ -127,6 +129,7 @@ impl SheetDocument {
     }
 
     pub fn delete_conditional_format(&mut self, sheet: u32, index: u32) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         self.step(|m| m.delete_conditional_formatting(sheet, index))
     }
 }

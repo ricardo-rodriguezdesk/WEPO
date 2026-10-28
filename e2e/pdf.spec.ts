@@ -253,4 +253,46 @@ test.describe("WEPO PDF", () => {
     await expect(content.locator("img")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+  test("tachar información y marca de agua: lo tachado ya no está en el PDF guardado", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openPdf(page, "tablas.pdf");
+    const before = await pdfText(fixture("tablas.pdf"));
+    expect(before.join(" ")).toContain("WEPO");
+
+    // Buscar y tachar todas las veces que aparece.
+    await page.locator("[aria-label^='Tachar información']").click();
+    await page.getByLabel("Texto que se tacha en todo el PDF").fill("wepo");
+    await page.getByRole("button", { name: "Tachar", exact: true }).click();
+    await expect(page.locator(".sheet-status")).toContainText("Se tachó");
+    await expect(page.locator(".pdf-redact").first()).toBeAttached();
+    // Y un recuadro a mano sobre el título de la primera tabla.
+    const title = span(page, "Ventas del semestre");
+    const box = (await title.boundingBox())!;
+    await page.mouse.move(box.x - 4, box.y - 3);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width + 4, box.y + box.height + 3, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.locator(".pdf-page").first().locator(".pdf-redact")).toHaveCount(2);
+
+    // Marca de agua.
+    await page.locator("[aria-label^='Marca de agua']").click();
+    const dialog = page.getByRole("dialog", { name: "Marca de agua" });
+    await dialog.getByLabel("Texto de la marca de agua").fill("BORRADOR");
+    await dialog.getByRole("button", { name: "Agregar" }).click();
+    await expect(page.locator(".pdf-watermark").first()).toHaveText("BORRADOR");
+
+    const out = outFile("tachado.pdf");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect.poll(async () => (await pdfInfo(out).catch(() => [])).length, { timeout: 30_000 }).toBe(before.length);
+    const after = await pdfText(out);
+    const all = after.join(" ");
+    expect(all).not.toContain("WEPO");
+    expect(all).not.toContain("Ventas del semestre");
+    // Lo demás se sigue pudiendo buscar y copiar; la marca de agua va en cada página.
+    expect(after[0]).toContain("Reporte de prueba para");
+    expect(after[0]).toContain("Conversión de PDF a Sheets");
+    for (const text of after) expect(text).toContain("BORRADOR");
+    expect(errors).toEqual([]);
+  });
 });

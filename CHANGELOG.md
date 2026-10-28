@@ -4,6 +4,36 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ## Próxima versión (sin publicar)
 
+### Tachar información y marca de agua en WEPO PDF
+- Herramienta *Tachar información*: arrastra un recuadro sobre lo que quieras ocultar (texto, una foto, una firma) o escribe un texto en *Tachar todas las veces que aparece* (un RFC, un nombre, una cuenta) para tacharlo en todo el PDF.
+- Al guardar se borra de verdad, no solo se tapa: las páginas con tachones se guardan como imagen con los recuadros negros, y su texto (menos lo tachado) se vuelve a poner invisible para que se pueda seguir buscando y copiando.
+- *Marca de agua*: un texto (CONFIDENCIAL, BORRADOR, COPIA…) en todas las páginas, en diagonal u horizontal, con color y transparencia. Se ve antes de guardar y se puede quitar.
+
+### Proteger hojas en WEPO Sheets
+- Clic derecho en la pestaña → *Proteger hoja…*, con contraseña opcional para quitarla. Con la hoja protegida no se pueden cambiar sus celdas, su formato ni sus filas y columnas (la barra de formato se apaga y la pestaña lleva un candado).
+- Antes de proteger, marca las celdas que sí se pueden llenar: clic derecho → *Permitir editar estas celdas con la hoja protegida* (como quitar «Bloqueada» en Excel).
+- *Quitar la protección…* pide la contraseña si la tiene. Se puede deshacer.
+- Se guarda en el .xlsx como en Excel (contraseña con SHA-512 y celdas desbloqueadas) y se leen las hojas protegidas de Excel y LibreOffice, también con contraseñas del método viejo.
+
+### Agrupar filas y columnas en WEPO Sheets
+- Elige filas o columnas y presiona ⌥⇧→ (Alt+Mayús+→ en Windows), o clic derecho → *Agrupar*. A la orilla de los encabezados aparece la barra del grupo con su botón − para contraerlo (las filas se esconden) y + para volver a abrirlo, como en Excel.
+- Grupos dentro de grupos (hasta 7 niveles) y los botones 1, 2, 3… en la esquina para ver todo hasta ese nivel de una vez.
+- *Desagrupar* (⌥⇧←) y *Borrar el esquema* en el clic derecho. Los grupos crecen si insertas filas adentro. Todo se puede deshacer.
+- Se guardan en el .xlsx como los de Excel (niveles y lo que está contraído) y se leen los de Excel y LibreOffice.
+
+### Comentarios en WEPO Sheets
+- Comentarios con respuestas, como los de Excel 365: clic derecho → *Nuevo comentario* (o ⌘⌥M / Ctrl+Alt+M). La celda lleva una esquina morada; al pasar el mouse se ve la conversación con quién escribió y cuándo.
+- Responder, editar, borrar una respuesta o toda la conversación, y marcarla como *Resuelta* (la esquina se pone gris; responder la vuelve a abrir). Todo se puede deshacer.
+- Se guardan en el .xlsx como los de Excel (con respuestas, autores y «resuelto») y se leen los de Excel. LibreOffice y los Excel viejitos ven la conversación como una nota. Antes, al abrir un archivo con comentarios de Excel, salían como notas con un aviso en inglés.
+- Siguen a su celda al insertar o borrar filas y columnas. Las notas de siempre siguen igual (⇧F2).
+
+### Tablas dinámicas en WEPO Sheets
+- Botón *Insertar tabla dinámica* (y en el clic derecho): eliges los datos con sus encabezados y si va en una hoja nueva o en una celda de esta hoja.
+- Panel *Campos de tabla dinámica*, como el de Excel: marca un campo (el texto va a Filas y los números a Valores) o arrástralo a Filtros, Columnas, Filas o Valores. Cada valor se resume con Suma, Cuenta, Promedio, Máx. o Mín.; los filtros de arriba se eligen con casillas.
+- Totales por fila, por columna y general; los valores salen con el formato de los datos (pesos, por ejemplo) y las columnas se ensanchan para que se lea todo.
+- *Actualizar* vuelve a leer los datos si cambiaron; *Eliminar tabla dinámica* la quita. Todo se puede deshacer.
+- Se guarda como tabla dinámica de verdad en el .xlsx (Excel y LibreOffice la reconocen y la pueden seguir moviendo) y se leen las de Excel y LibreOffice: un archivo con tablas dinámicas ya no obliga a guardar una copia. Las que tienen campos calculados o agrupados (por ejemplo, fechas por mes) todavía se conservan solo como copia.
+
 ### Cortes de página en WEPO Sheets
 - Botón *Cortes de página* junto al zoom: líneas punteadas en la hoja donde termina cada página al imprimir, con las últimas opciones de impresión (papel, orientación, márgenes, escala, área y filas que se repiten). Como en Excel, aparecen solas después de imprimir o exportar a PDF.
 - Saltos de página a mano, como en Excel: clic derecho → *Insertar salto de página* (arriba de la fila, a la izquierda de la columna, o los dos con una celda), *Quitar salto de página* y *Restablecer todos los saltos de página*. Se ven con línea continua.

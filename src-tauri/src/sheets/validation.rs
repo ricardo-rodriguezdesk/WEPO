@@ -273,6 +273,7 @@ impl SheetDocument {
     /// Pone una lista desplegable en `rect`, o la quita si `source` es None.
     /// Una lista que ya cubría parte del rango se recorta.
     pub fn set_validation(&mut self, sheet: u32, rect: Rect, source: Option<ListSource>, message: Option<String>) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
         match &source {
             Some(ListSource::Items { items }) if items.iter().all(|i| i.trim().is_empty()) => {

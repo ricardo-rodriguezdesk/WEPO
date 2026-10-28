@@ -5,7 +5,7 @@ import type { Annotation, FormValues, Ink, PageRef } from "./pdfEdit";
 import { mergeLines, pid, rectToPdf, rectToView, shownSize, toPdf, toView } from "./pdfEdit";
 import { selectedTextRects } from "./textSelection";
 
-export type Tool = "select" | "highlight" | "text" | "draw" | "note" | "sign";
+export type Tool = "select" | "highlight" | "text" | "draw" | "note" | "sign" | "redact";
 
 /** Campo de formulario de una página, como lo describe pdf.js. */
 export type FormField = {
@@ -84,6 +84,11 @@ export default function AnnotationLayer(props: Props) {
       const a: Annotation = { id: pid("a"), page: page.id, kind: "note", x, y, text: "" };
       props.onAdd(a);
       setOpenNote(a.id);
+    } else if (tool === "redact") {
+      // Tachar: se dibuja un recuadro sobre lo que sea (texto, fotos, firmas).
+      e.preventDefault();
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      setBox({ x: vx, y: vy, w: 0, h: 0 });
     } else if (tool === "sign") {
       e.preventDefault();
       if (!props.signature) return props.onNeedSignature();
@@ -122,7 +127,8 @@ export default function AnnotationLayer(props: Props) {
       if (Math.abs(box.w) > 4 && Math.abs(box.h) > 4) {
         const x = Math.min(box.x, box.x + box.w);
         const y = Math.min(box.y, box.y + box.h);
-        props.onAdd({ id: pid("a"), page: page.id, kind: "highlight", rects: [rectToPdf(page, s, x, y, Math.abs(box.w), Math.abs(box.h))], color: props.style.highlight });
+        const rects = [rectToPdf(page, s, x, y, Math.abs(box.w), Math.abs(box.h))];
+        props.onAdd(tool === "redact" ? { id: pid("a"), page: page.id, kind: "redact", rects } : { id: pid("a"), page: page.id, kind: "highlight", rects, color: props.style.highlight });
       }
       setBox(null);
     } else if (drag.current) {
@@ -143,7 +149,7 @@ export default function AnnotationLayer(props: Props) {
     const [px, py] = toPdf(page, 1, dx, dy);
     const mx = px - ox;
     const my = py - oy;
-    if (a.kind === "highlight") return { ...a, rects: a.rects.map(([x, y, w, h]) => [x + mx, y + my, w, h]) };
+    if (a.kind === "highlight" || a.kind === "redact") return { ...a, rects: a.rects.map(([x, y, w, h]) => [x + mx, y + my, w, h]) };
     if (a.kind === "ink") return { ...a, paths: a.paths.map((path) => path.map(([x, y]) => [x + mx, y + my])) };
     return { ...a, x: a.x + mx, y: a.y + my };
   }
@@ -264,7 +270,7 @@ export default function AnnotationLayer(props: Props) {
   const shown = shownSize(page);
   const W = shown.width * s;
   const H = shown.height * s;
-  const capture = tool === "draw" || tool === "text" || tool === "note" || tool === "sign";
+  const capture = tool === "draw" || tool === "text" || tool === "note" || tool === "sign" || tool === "redact";
 
   return (
     <div
@@ -276,6 +282,16 @@ export default function AnnotationLayer(props: Props) {
     >
       <svg className="pdf-annot-svg" width="100%" height="100%" viewBox={`0 0 ${W || 1} ${H || 1}`} preserveAspectRatio="none">
         {annotations.map((a) => {
+          if (a.kind === "redact") {
+            return (
+              <g key={a.id} data-annot={a.id} className={`pdf-redact${selected === a.id ? " selected" : ""}`} onPointerDown={(e) => startDrag(e, a)}>
+                {a.rects.map((r, i) => {
+                  const v = rectToView(page, s, r);
+                  return <rect key={i} x={v.left} y={v.top} width={v.width} height={v.height} fill="#000" stroke="#d93025" strokeWidth={1.5} strokeDasharray="4 3" />;
+                })}
+              </g>
+            );
+          }
           if (a.kind === "highlight") {
             return (
               <g key={a.id} data-annot={a.id} className={selected === a.id ? "selected" : ""} onPointerDown={(e) => startDrag(e, a)}>
@@ -307,7 +323,7 @@ export default function AnnotationLayer(props: Props) {
         })}
         {drawing && <polyline points={drawing.map((p) => p.join(",")).join(" ")} fill="none" stroke={props.style.ink} strokeWidth={props.style.inkWidth * s} strokeLinecap="round" strokeLinejoin="round" />}
         {box && (
-          <rect x={Math.min(box.x, box.x + box.w)} y={Math.min(box.y, box.y + box.h)} width={Math.abs(box.w)} height={Math.abs(box.h)} fill={props.style.highlight} fillOpacity={0.4} />
+          <rect x={Math.min(box.x, box.x + box.w)} y={Math.min(box.y, box.y + box.h)} width={Math.abs(box.w)} height={Math.abs(box.h)} fill={tool === "redact" ? "#000" : props.style.highlight} fillOpacity={tool === "redact" ? 0.7 : 0.4} />
         )}
       </svg>
 

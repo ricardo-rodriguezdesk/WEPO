@@ -104,7 +104,11 @@ impl SheetDocument {
 
     /// Escribe (o borra, si `text` está vacío) la nota de una celda.
     pub fn set_note(&mut self, sheet: u32, row: i32, col: i32, text: &str) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let id = self.sheet_id(sheet).ok_or("Hoja no encontrada")?;
+        if !text.trim().is_empty() && self.extras.comments.iter().any(|t| t.sheet_id == id && t.row == row && t.col == col) {
+            return Err("Esta celda ya tiene un comentario: responde en él o bórralo para poner una nota".into());
+        }
         let before = self.extras.clone();
         let text = text.trim_end();
         let position = self.extras.notes.iter().position(|n| n.sheet_id == id && n.row == row && n.col == col);
@@ -160,9 +164,11 @@ impl SheetDocument {
         let before = self.extras.clone();
         action(&mut self.model)?;
         let notes = self.shift_notes(sheet, columns, at, delta);
+        let comments = self.shift_comments(sheet, columns, at, delta);
+        let outline = self.shift_outline(sheet, columns, at, delta);
         // Los saltos de página a mano también se recorren con sus filas o columnas (como en Excel).
         let breaks = self.shift_breaks(sheet, columns, at, delta);
-        if notes || breaks {
+        if notes || breaks || comments || outline {
             self.history.push(Step::Both(1, before));
             self.future.clear();
         } else {
@@ -264,12 +270,14 @@ impl SheetDocument {
 
     /// Pone un vínculo en la celda. Si `label` viene, es el texto que se ve.
     pub fn set_link(&mut self, sheet: u32, row: i32, col: i32, target: &str, label: Option<&str>) -> Result<(), String> {
+        self.check_cells(sheet, Rect { row1: row, col1: col, row2: row, col2: col })?;
         let link = link_from(target)?;
         let label = label.map(str::trim).filter(|l| !l.is_empty());
         self.step(|m| m.set_cell_link(sheet, row, col, link, label))
     }
 
     pub fn delete_link(&mut self, sheet: u32, row: i32, col: i32) -> Result<(), String> {
+        self.check_cells(sheet, Rect { row1: row, col1: col, row2: row, col2: col })?;
         if self.model.get_cell_link(sheet, row, col)?.is_none() {
             return Ok(());
         }
@@ -313,6 +321,14 @@ impl SheetDocument {
 
     /// Pega lo último que se copió en WEPO: solo valores, solo formato o transpuesto.
     pub fn paste_special(&mut self, sheet: u32, row: i32, col: i32, mode: PasteMode) -> Result<(), String> {
+        let clip = self.clipboard.as_ref().ok_or("Primero copia algo en WEPO")?;
+        let (h, w) = (clip.range.2 - clip.range.0, clip.range.3 - clip.range.1);
+        let (h, w) = if mode == PasteMode::Transpose { (w, h) } else { (h, w) };
+        if mode == PasteMode::Formats {
+            self.check_sheet(sheet)?;
+        } else {
+            self.check_cells(sheet, Rect { row1: row, col1: col, row2: row + h, col2: col + w })?;
+        }
         let clip = self.clipboard.as_ref().ok_or("Primero copia algo en WEPO")?;
         let (source_sheet, (r1, c1, r2, c2)) = (clip.sheet, clip.range);
         let (height, width) = (r2 - r1 + 1, c2 - c1 + 1);
@@ -372,6 +388,7 @@ impl SheetDocument {
 
     /// Copia el formato de `source` sobre `target`, repitiéndolo si `target` es más grande.
     pub fn paste_styles_from(&mut self, sheet: u32, source: Rect, target: Rect) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let (source, target) = (source.normalized(), target.normalized());
         let mut styles = Vec::new();
         for r in source.row1..=source.row2 {

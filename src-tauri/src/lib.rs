@@ -11,6 +11,10 @@ mod windows;
 mod sheet_format;
 pub mod sheets;
 mod xlsx_extras;
+mod xlsx_pivots;
+mod xlsx_comments;
+mod xlsx_outline;
+mod xlsx_protection;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -339,6 +343,60 @@ fn sheet_page_setup(
 }
 
 /// Saltos de página puestos a mano: fila o columna (desde 0) con que empieza cada página nueva.
+/// Tabla dinámica nueva con los datos de `sheet` (en una hoja nueva, o en la celda indicada de `target`).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_pivot_create(
+    window: tauri::Window, state: State<OpenSheet>,
+    sheet: u32,
+    row1: i32,
+    col1: i32,
+    row2: i32,
+    col2: i32,
+    target: u32,
+    at_row: Option<i32>,
+    at_col: Option<i32>,
+) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.get_mut(window.label()).ok_or(NO_SHEET)?;
+    let index = doc.create_pivot(sheet, Rect { row1, col1, row2, col2 }, target, at_row.zip(at_col))?;
+    doc.view(index)
+}
+
+#[tauri::command]
+fn sheet_pivot_update(window: tauri::Window, state: State<OpenSheet>, sheet: u32, name: String, layout: sheets::PivotLayout) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.update_pivot(sheet, &name, layout))
+}
+
+/// «Actualizar»: con `name` vacío, todas las tablas dinámicas del libro.
+#[tauri::command]
+fn sheet_pivot_refresh(window: tauri::Window, state: State<OpenSheet>, sheet: u32, name: String) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.refresh_pivot(sheet, &name))
+}
+
+#[tauri::command]
+fn sheet_pivot_delete(window: tauri::Window, state: State<OpenSheet>, sheet: u32, name: String) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.delete_pivot(sheet, &name))
+}
+
+/// Comentarios con respuestas: agregar, responder, editar, borrar o marcar como resuelto.
+#[tauri::command]
+fn sheet_comment(window: tauri::Window, state: State<OpenSheet>, sheet: u32, action: sheets::CommentAction) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.comment(sheet, action))
+}
+
+/// Grupos de filas y columnas: agrupar, desagrupar, contraer, expandir y los botones de nivel.
+#[tauri::command]
+fn sheet_outline(window: tauri::Window, state: State<OpenSheet>, sheet: u32, action: sheets::OutlineAction) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.outline(sheet, action))
+}
+
+/// Proteger o desproteger la hoja, y marcar las celdas que se pueden editar con ella protegida.
+#[tauri::command]
+fn sheet_protect(window: tauri::Window, state: State<OpenSheet>, sheet: u32, action: sheets::ProtectAction) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.protect(sheet, action))
+}
+
 #[tauri::command]
 fn sheet_page_breaks(window: tauri::Window, state: State<OpenSheet>, sheet: u32, rows: Vec<i32>, cols: Vec<i32>) -> Result<SheetView, String> {
     with_sheet(&state, &window, sheet, |doc| doc.set_page_breaks(sheet, &rows, &cols))
@@ -723,6 +781,13 @@ pub fn run() {
             sheet_table_update,
             sheet_page_setup,
             sheet_page_breaks,
+            sheet_pivot_create,
+            sheet_pivot_update,
+            sheet_pivot_refresh,
+            sheet_pivot_delete,
+            sheet_comment,
+            sheet_outline,
+            sheet_protect,
             sheet_remove_duplicates,
             sheet_link,
             sheet_stats,

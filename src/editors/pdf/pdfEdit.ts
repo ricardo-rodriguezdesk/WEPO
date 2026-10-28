@@ -69,7 +69,12 @@ export type TextNote = Base & { kind: "text"; x: number; y: number; text: string
 export type Ink = Base & { kind: "ink"; paths: [number, number][][]; color: string; width: number };
 export type Sticky = Base & { kind: "note"; x: number; y: number; text: string };
 export type Stamp = Base & { kind: "image"; x: number; y: number; w: number; h: number; src: string };
-export type Annotation = Highlight | TextNote | Ink | Sticky | Stamp;
+/** Información tachada: al guardar se borra de verdad (la página se vuelve imagen sin ese texto). */
+export type Redact = Base & { kind: "redact"; rects: [number, number, number, number][] };
+export type Annotation = Highlight | TextNote | Ink | Sticky | Stamp | Redact;
+
+/** Marca de agua de texto en todas las páginas. */
+export type Watermark = { text: string; color: string; opacity: number; diagonal: boolean };
 
 /** Valores escritos en los campos de un formulario del PDF (por nombre del campo). */
 export type FormValues = Record<string, string | boolean>;
@@ -140,7 +145,7 @@ const NOTE_ICON = [
 ].join("\n");
 
 async function drawAnnotations(page: PDFPage, list: Annotation[], out: PDFDocument, font: () => Promise<PDFFont>, rotation: number) {
-  if (list.some((a) => a.kind !== "note")) isolateContent(page, out);
+  if (list.some((a) => a.kind !== "note" && a.kind !== "redact")) isolateContent(page, out);
   for (const a of list) {
     if (a.kind === "highlight") {
       for (const [x, y, w, h] of mergeLines(a.rects)) {
@@ -254,6 +259,7 @@ export async function savePdf(
   form: FormValues = {},
   /** Con contraseña, el PDF que sale pide esa contraseña para abrirse. */
   password: string | null = null,
+  watermark: Watermark | null = null,
 ): Promise<Uint8Array> {
   const original = sources[0];
   const loaded = new Map<string, PDFDocument>();
@@ -296,10 +302,19 @@ export async function savePdf(
   const getFont = async () => (font ??= await out.embedFont(StandardFonts.Helvetica));
   for (let i = 0; i < pages.length; i++) {
     const p = pages[i];
+    const redacts = annotations.filter((a): a is Redact => a.page === p.id && a.kind === "redact").flatMap((a) => a.rects);
+    // Lo tachado se borra de verdad: la página se vuelve una imagen con los recuadros negros
+    // y su texto (menos lo tachado) se vuelve a poner invisible, para buscar y copiar.
+    if (redacts.length) {
+      const src = sources.find((s) => s.id === p.source)!;
+      const fresh = await redactPage(out, outPages[i], p, src.doc, redacts, getFont);
+      outPages[i] = fresh;
+    }
     const page = outPages[i];
     const total = (p.baseRotation + p.rotation) % 360;
     page.setRotation(degrees(total));
     await drawAnnotations(page, annotations.filter((a) => a.page === p.id), out, getFont, total);
+    if (watermark?.text.trim()) await drawWatermark(page, p, out, watermark, total);
   }
   out.setProducer("WEPO PDF");
   out.setModificationDate(new Date());
@@ -311,6 +326,128 @@ export async function savePdf(
       permissions: { printing: "highResolution", modifying: true, copying: true, annotating: true, fillingForms: true, contentAccessibility: true, documentAssembly: true },
     });
   return out.save();
+}
+
+let measurer: CanvasRenderingContext2D | null = null;
+/**
+ * Dónde empieza cada letra de un texto que mide `width` en total (y dónde termina la última),
+ * según lo ancho de cada letra en una fuente parecida: una «W» ocupa más que una «i».
+ */
+export function charOffsets(text: string, width: number, family = "sans-serif"): number[] {
+  const chars = [...text];
+  measurer ??= document.createElement("canvas").getContext("2d");
+  const ctx = measurer;
+  const out = [0];
+  if (!ctx) {
+    chars.forEach((_, k) => out.push(((k + 1) * width) / chars.length));
+    return out;
+  }
+  ctx.font = `100px ${family}`;
+  let acc = 0;
+  const widths = chars.map((c) => ctx.measureText(c).width || 50);
+  const total = widths.reduce((a, b) => a + b, 0) || 1;
+  for (const w of widths) {
+    acc += w;
+    out.push((acc / total) * width);
+  }
+  return out;
+}
+
+/** Resolución con que se guardan las páginas con información tachada (puntos → píxeles). */
+const REDACT_SCALE = 200 / 72;
+
+/** Cambia la página por una imagen de ella misma con los recuadros negros, más su texto invisible sin lo tachado. */
+async function redactPage(out: PDFDocument, old: PDFPage, p: PageRef, proxy: PDFDocumentProxy, rects: Rect[], getFont: () => Promise<PDFFont>): Promise<PDFPage> {
+  const page = await proxy.getPage(p.index + 1);
+  // Sin girar (rotation 0): la imagen va en el mismo espacio que el contenido original.
+  const viewport = page.getViewport({ scale: REDACT_SCALE, rotation: 0 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport, canvas } as Parameters<typeof page.render>[0]).promise;
+  ctx.fillStyle = "#000";
+  for (const [x, y, w, h] of rects) {
+    // Un poco más grande, para que no se asome nada de las orillas.
+    ctx.fillRect((x - p.x0) * REDACT_SCALE - 1, (p.y0 + p.height - (y + h)) * REDACT_SCALE - 1, w * REDACT_SCALE + 2, h * REDACT_SCALE + 2);
+  }
+  const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo dibujar la página"))), "image/jpeg", 0.9));
+  const image = await out.embedJpg(new Uint8Array(await blob.arrayBuffer()));
+
+  const index = out.getPages().indexOf(old);
+  const fresh = out.insertPage(index, [p.width, p.height]);
+  fresh.setMediaBox(p.x0, p.y0, p.width, p.height);
+  out.removePage(index + 1);
+  fresh.drawImage(image, { x: p.x0, y: p.y0, width: p.width, height: p.height });
+
+  // El texto que no quedó tachado, invisible (para buscar, seleccionar y copiar).
+  const content = await page.getTextContent();
+  const hit = (bx: number, by: number, bw: number, bh: number) => rects.some(([x, y, w, h]) => bx < x + w && bx + bw > x && by < y + h && by + bh > y);
+  const lines: OcrText[] = [];
+  for (const item of content.items) {
+    if (!("str" in item) || !item.str.trim()) continue;
+    const [a, b, , d, e, f] = item.transform as number[];
+    const height = item.height || Math.hypot(b, d) || Math.abs(d);
+    const length = item.width;
+    if (!length) continue;
+    const cos = a / (Math.hypot(a, b) || 1);
+    const sin = b / (Math.hypot(a, b) || 1);
+    const chars = [...item.str];
+    const offsets = charOffsets(item.str, length, content.styles[item.fontName]?.fontFamily);
+    // Rachas de letras que no tocan ningún tachón.
+    let run = "";
+    let start = 0;
+    const flush = (end: number) => {
+      if (run.trim()) lines.push({ text: run, x0: e + cos * offsets[start], y0: f + sin * offsets[start], x1: e + cos * offsets[end], y1: f + sin * offsets[end], height });
+      run = "";
+    };
+    chars.forEach((ch, k) => {
+      // Caja de la letra (aproximada: el texto torcido usa la caja de su renglón).
+      const step = offsets[k + 1] - offsets[k];
+      const cx = e + cos * offsets[k];
+      const cy = f + sin * offsets[k];
+      const box: Rect = Math.abs(sin) < 0.01 ? [cx, f - height * 0.25, step, height * 1.2] : [Math.min(cx, cx + cos * step) - height, Math.min(cy, cy + sin * step) - height, Math.abs(cos * step) + 2 * height, Math.abs(sin * step) + 2 * height];
+      if (hit(...box)) {
+        flush(k);
+        start = k + 1;
+      } else {
+        if (!run) start = k;
+        run += ch;
+      }
+    });
+    flush(chars.length);
+  }
+  if (lines.length) await writeInvisibleText(out, fresh, await getFont(), lines);
+  return fresh;
+}
+
+/** Marca de agua: el texto grande, en el centro, transparente y (si se pide) en diagonal tal como se ve la página. */
+async function drawWatermark(page: PDFPage, p: PageRef, out: PDFDocument, mark: Watermark, rotation: number) {
+  isolateContent(page, out);
+  const font = await out.embedFont(StandardFonts.HelveticaBold);
+  const text = latin(mark.text.trim().replace(/\s+/g, " "));
+  const shown = shownSize(p);
+  const angle = mark.diagonal ? (Math.atan2(shown.height, shown.width) * 180) / Math.PI : 0;
+  const span = mark.diagonal ? Math.hypot(shown.width, shown.height) * 0.7 : shown.width * 0.8;
+  const size = Math.max(14, Math.min(220, span / Math.max(1, font.widthOfTextAtSize(text, 1)), shown.height * 0.3));
+  const width = font.widthOfTextAtSize(text, size);
+  // En el espacio de la página, el giro de la vista se suma para que en pantalla quede como se pidió.
+  const theta = ((angle + rotation) * Math.PI) / 180;
+  const cx = p.x0 + p.width / 2;
+  const cy = p.y0 + p.height / 2;
+  const dx = width / 2;
+  const dy = size * 0.35;
+  page.drawText(text, {
+    x: cx - (dx * Math.cos(theta) - dy * Math.sin(theta)),
+    y: cy - (dx * Math.sin(theta) + dy * Math.cos(theta)),
+    size,
+    font,
+    color: hexColor(mark.color),
+    opacity: mark.opacity,
+    rotate: degrees(angle + rotation),
+  });
 }
 
 /**
@@ -416,31 +553,34 @@ export async function addOcrText(source: Source, pages: { index: number; lines: 
   });
   dropOldEncryption(doc);
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  for (const { index, lines } of pages) {
-    const page = doc.getPage(index);
-    const name = page.node.newFontDictionary("WepoOcr", font.ref);
-    const ops = [pushGraphicsState(), beginText(), setTextRenderingMode(TextRenderingMode.Invisible)];
-    for (const line of lines) {
-      const text = latin(line.text.replace(/[“”„«»]/g, '"').replace(/[‘’‚]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/€/g, "EUR"))
-        .replace(/\s+/g, " ")
-        .trim();
-      if (!text) continue;
-      const length = Math.hypot(line.x1 - line.x0, line.y1 - line.y0);
-      const size = Math.max(1, line.height * 0.92);
-      const natural = font.widthOfTextAtSize(text, size);
-      if (!natural || !length) continue;
-      const cos = (line.x1 - line.x0) / length;
-      const sin = (line.y1 - line.y0) / length;
-      ops.push(
-        setFontAndSize(name, size),
-        // Que el texto mida lo mismo que el renglón de la imagen (para seleccionar justo encima).
-        setCharacterSqueeze(Math.max(1, Math.min(1000, (length / natural) * 100))),
-        setTextMatrix(cos, sin, -sin, cos, line.x0, line.y0),
-        showText(font.encodeText(text)),
-      );
-    }
-    ops.push(endText(), popGraphicsState());
-    page.pushOperators(...ops);
-  }
+  for (const { index, lines } of pages) await writeInvisibleText(doc, doc.getPage(index), font, lines);
   return doc.save();
+}
+
+/** Texto invisible (como el de un escaneo con OCR): se puede buscar y copiar, pero no se ve. */
+async function writeInvisibleText(doc: PDFDocument, page: PDFPage, font: PDFFont, lines: OcrText[]) {
+  void doc;
+  const name = page.node.newFontDictionary("WepoOcr", font.ref);
+  const ops = [pushGraphicsState(), beginText(), setTextRenderingMode(TextRenderingMode.Invisible)];
+  for (const line of lines) {
+    const text = latin(line.text.replace(/[“”„«»]/g, '"').replace(/[‘’‚]/g, "'").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/€/g, "EUR"))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    const length = Math.hypot(line.x1 - line.x0, line.y1 - line.y0);
+    const size = Math.max(1, line.height * 0.92);
+    const natural = font.widthOfTextAtSize(text, size);
+    if (!natural || !length) continue;
+    const cos = (line.x1 - line.x0) / length;
+    const sin = (line.y1 - line.y0) / length;
+    ops.push(
+      setFontAndSize(name, size),
+      // Que el texto mida lo mismo que el renglón de la imagen (para seleccionar justo encima).
+      setCharacterSqueeze(Math.max(1, Math.min(1000, (length / natural) * 100))),
+      setTextMatrix(cos, sin, -sin, cos, line.x0, line.y0),
+      showText(font.encodeText(text)),
+    );
+  }
+  ops.push(endText(), popGraphicsState());
+  page.pushOperators(...ops);
 }

@@ -406,6 +406,7 @@ impl SheetDocument {
 
     /// Inserta una gráfica con los datos de `rect`, a la derecha de la tabla. Devuelve su id.
     pub fn add_chart(&mut self, sheet: u32, rect: Rect, kind: ChartType) -> Result<u32, String> {
+        self.check_sheet(sheet)?;
         let series = self.series_from(sheet, rect, kind)?;
         let sheet_id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
         let r = rect.normalized();
@@ -435,6 +436,7 @@ impl SheetDocument {
 
     /// Inserta una imagen en la posición (x, y), con un ancho máximo de 480 px. Devuelve su id.
     pub fn add_image(&mut self, sheet: u32, path: &str, x: f64, y: f64) -> Result<u32, String> {
+        self.check_sheet(sheet)?;
         let mime = mime_for(path).ok_or("WEPO acepta imágenes PNG, JPEG o GIF")?;
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
         let (w, h) = image_size(&data).ok_or("No se pudo leer el tamaño de la imagen")?;
@@ -457,6 +459,7 @@ impl SheetDocument {
     }
 
     pub fn update_drawing(&mut self, sheet: u32, id: u32, patch: DrawingPatch) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let new_series = match &patch.data {
             Some(range) => {
                 let rect = Rect::from_a1(range).ok_or("Escribe un rango como A1:C7")?;

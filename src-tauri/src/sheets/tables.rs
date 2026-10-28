@@ -144,7 +144,7 @@ fn quote_sheet(name: &str) -> String {
 
 impl SheetDocument {
     /// Cambios en el motor y en lo que WEPO guarda aparte, como una sola acción.
-    fn mixed(&mut self, action: impl FnOnce(&mut Self, &mut usize) -> Result<(), String>) -> Result<(), String> {
+    pub(super) fn mixed(&mut self, action: impl FnOnce(&mut Self, &mut usize) -> Result<(), String>) -> Result<(), String> {
         let before = self.extras.clone();
         let mut steps = 0;
         if let Err(e) = action(self, &mut steps) {
@@ -157,7 +157,7 @@ impl SheetDocument {
         if steps > 0 {
             self.history.push(Step::Both(steps, before));
             self.future.clear();
-        } else if self.extras.tables != before.tables || self.extras.pages != before.pages {
+        } else if self.extras.tables != before.tables || self.extras.pages != before.pages || self.extras.pivots != before.pivots || self.extras.outlines != before.outlines || self.extras.protections != before.protections {
             self.record_extras(before);
         }
         Ok(())
@@ -226,6 +226,7 @@ impl SheetDocument {
 
     /// "Dar formato como tabla": `rect` incluye la fila de encabezados.
     pub fn create_table(&mut self, sheet: u32, rect: Rect, style: &str, banded: bool, totals: bool) -> Result<String, String> {
+        self.check_sheet(sheet)?;
         let id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
         let rect = rect.normalized();
         if rect.row2 <= rect.row1 {
@@ -262,6 +263,7 @@ impl SheetDocument {
 
     /// Cambia el estilo, las bandas o la fila de totales de una tabla.
     pub fn update_table(&mut self, sheet: u32, name: &str, style: &str, banded: bool, totals: bool) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
         let index = self
             .extras
@@ -293,6 +295,7 @@ impl SheetDocument {
 
     /// Convierte la tabla en un rango normal (los datos se quedan).
     pub fn delete_table(&mut self, sheet: u32, name: &str) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
         self.mixed(|doc, _| {
             doc.extras.tables.retain(|t| !(t.sheet_id == id && t.name == name));

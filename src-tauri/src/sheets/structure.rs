@@ -9,26 +9,31 @@ impl SheetDocument {
     // Las notas se mueven junto con sus celdas (ver annotations.rs).
 
     pub fn insert_rows(&mut self, sheet: u32, row: i32, count: i32) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let count = count.max(1);
         self.step_moving_notes(sheet, false, row, count, |m| m.insert_rows(sheet, row, count))
     }
 
     pub fn delete_rows(&mut self, sheet: u32, row: i32, count: i32) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let count = count.max(1);
         self.step_moving_notes(sheet, false, row, -count, |m| m.delete_rows(sheet, row, count))
     }
 
     pub fn insert_columns(&mut self, sheet: u32, col: i32, count: i32) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let count = count.max(1);
         self.step_moving_notes(sheet, true, col, count, |m| m.insert_columns(sheet, col, count))
     }
 
     pub fn delete_columns(&mut self, sheet: u32, col: i32, count: i32) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let count = count.max(1);
         self.step_moving_notes(sheet, true, col, -count, |m| m.delete_columns(sheet, col, count))
     }
 
     pub fn set_rows_hidden(&mut self, sheet: u32, row1: i32, row2: i32, hidden: bool) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let (row1, row2) = (row1.min(row2), row1.max(row2));
         // Al ocultar, IronCalc mueve su selección a la primera celda de la fila
         // visible siguiente; si esa celda está dentro de una combinada, falla.
@@ -37,6 +42,7 @@ impl SheetDocument {
     }
 
     pub fn set_columns_hidden(&mut self, sheet: u32, col1: i32, col2: i32, hidden: bool) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let (col1, col2) = (col1.min(col2), col1.max(col2));
         let target = self.next_visible(sheet, col2, col1, true)?;
         self.around_merge(sheet, (1, target), hidden, |m| m.set_columns_hidden(sheet, col1, col2, hidden))
@@ -96,6 +102,7 @@ impl SheetDocument {
 
     /// Combina el rango en una sola celda (se conserva el contenido de la esquina superior izquierda).
     pub fn merge(&mut self, sheet: u32, rect: Rect) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let area = rect.area(sheet);
         if area.width == 1 && area.height == 1 {
             return Err("Selecciona al menos dos celdas para combinarlas".into());
@@ -104,6 +111,7 @@ impl SheetDocument {
     }
 
     pub fn unmerge(&mut self, sheet: u32, rect: Rect) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         self.step(|m| m.unmerge_cells(&rect.area(sheet)))
     }
 
@@ -164,6 +172,7 @@ impl SheetDocument {
     /// arrastrar la esquina de la selección en Excel: series (1, 2, 3…,
     /// lunes, martes…) y fórmulas con sus referencias ajustadas.
     pub fn auto_fill(&mut self, sheet: u32, source: Rect, target: Rect) -> Result<(), String> {
+        self.check_cells(sheet, target)?;
         let src = source.area(sheet);
         let dst = target.area(sheet);
         let (src_last_row, src_last_col) = (src.row + src.height - 1, src.column + src.width - 1);

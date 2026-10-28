@@ -24,7 +24,11 @@ use crate::sheet_format::{border_style, border_type, style_view, StyleView};
 
 mod annotations;
 mod conditional;
+mod comments;
 mod data;
+mod outline;
+mod protection;
+mod pivot;
 mod from_tables;
 pub use from_tables::TableSheet;
 pub mod drawings;
@@ -32,6 +36,10 @@ mod structure;
 mod tables;
 mod validation;
 
+pub use comments::{CommentAction, CommentView};
+pub use outline::{OutlineAction, OutlineView};
+pub use protection::{ProtectAction, ProtectionView};
+pub use pivot::{PivotLayout, PivotView};
 pub use annotations::{LinkView, NoteView, PasteMode, SelectionStats};
 pub use data::{ColumnFilter, FindMatch, SortKey};
 pub use tables::{PageView, TableView};
@@ -86,6 +94,14 @@ pub struct Extras {
     pub tables: Vec<tables::Table>,
     /// Encabezado, pie, filas que se repiten y área de impresión de cada hoja.
     pub pages: Vec<tables::PageSetup>,
+    /// Tablas dinámicas.
+    pub pivots: Vec<pivot::Pivot>,
+    /// Comentarios con respuestas (los de Excel 365).
+    pub comments: Vec<comments::Thread>,
+    /// Grupos de filas y columnas (esquema).
+    pub outlines: Vec<outline::Outline>,
+    /// Hojas protegidas y sus celdas editables.
+    pub protections: Vec<protection::Protection>,
 }
 
 struct InternalClipboard {
@@ -201,6 +217,14 @@ pub struct SheetView {
     pub tables: Vec<TableView>,
     /// Configuración de página de la hoja.
     pub page: PageView,
+    /// Tablas dinámicas que están en la hoja.
+    pub pivots: Vec<PivotView>,
+    /// Comentarios con respuestas (filas y columnas desde 1).
+    pub comments: Vec<CommentView>,
+    /// Grupos de filas y columnas.
+    pub outline: OutlineView,
+    /// Si la hoja está protegida y qué celdas se pueden editar.
+    pub protection: ProtectionView,
 }
 
 /// 1 → A, 26 → Z, 27 → AA.
@@ -278,6 +302,10 @@ impl SheetDocument {
                 doc.load_notes();
                 doc.load_tables(path);
                 doc.load_pages(path);
+                doc.load_pivots(path);
+                doc.load_comments(path);
+                doc.load_outline(path);
+                doc.load_protection(path);
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -488,6 +516,10 @@ impl SheetDocument {
             links: self.link_views(sheet),
             tables: self.table_views(sheet),
             page: self.page_view(sheet),
+            pivots: self.pivot_views(sheet),
+            comments: self.comment_views(sheet),
+            outline: self.outline_view(sheet),
+            protection: self.protection_view(sheet),
         })
     }
 
@@ -585,6 +617,7 @@ impl SheetDocument {
 
     /// Escribe en una celda (texto, número o fórmula) y recalcula el libro.
     pub fn set_cell(&mut self, sheet: u32, row: i32, col: i32, input: &str) -> Result<(), String> {
+        self.check_cells(sheet, Rect { row1: row, col1: col, row2: row, col2: col })?;
         if input.is_empty() {
             let rect = Rect { row1: row, col1: col, row2: row, col2: col };
             return self.clear_range(sheet, rect);
@@ -603,6 +636,7 @@ impl SheetDocument {
     }
 
     pub fn clear_range(&mut self, sheet: u32, rect: Rect) -> Result<(), String> {
+        self.check_cells(sheet, rect)?;
         self.step(|m| m.range_clear_contents(&rect.area(sheet)))
     }
 
@@ -674,6 +708,7 @@ impl SheetDocument {
     /// `font.color`, `fill.fg_color`, `alignment.horizontal`, `num_fmt`…
     /// Además aceptamos `font.name`, que IronCalc no expone directamente.
     pub fn set_style(&mut self, sheet: u32, rect: Rect, path: &str, value: &str) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let area = rect.area(sheet);
         if path == "font.name" {
             return self.set_font_name(&area, value);
@@ -701,6 +736,7 @@ impl SheetDocument {
     /// Bordes de un rango. `kind`: all, outer, inner, top, bottom, left, right, none.
     /// `style`: thin, medium, thick, double, dotted, dashed. `color`: #RRGGBB.
     pub fn set_border(&mut self, sheet: u32, rect: Rect, kind: &str, style: &str, color: &str) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         let item = BorderItem {
             style: border_style(style)?,
             color: Color::from_param(color)?,
@@ -712,11 +748,13 @@ impl SheetDocument {
 
     /// Ancho de una o varias columnas, en píxeles.
     pub fn set_column_width(&mut self, sheet: u32, col1: i32, col2: i32, width: f64) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         self.step(|m| m.set_columns_width(sheet, col1.min(col2), col1.max(col2), width.max(8.0)))
     }
 
     /// Alto de una o varias filas, en píxeles.
     pub fn set_row_height(&mut self, sheet: u32, row1: i32, row2: i32, height: f64) -> Result<(), String> {
+        self.check_sheet(sheet)?;
         self.step(|m| m.set_rows_height(sheet, row1.min(row2), row1.max(row2), height.max(8.0)))
     }
 
@@ -769,9 +807,10 @@ impl SheetDocument {
             .is_some_and(|c| c.text.trim() == text.trim());
 
         if internal {
+            let height = self.clipboard.as_ref().map_or(0, |c| c.range.2 - c.range.0);
+            let width = self.clipboard.as_ref().map_or(0, |c| c.range.3 - c.range.1);
+            self.check_cells(sheet, Rect { row1: row, col1: col, row2: row + height, col2: col + width })?;
             let clip = self.clipboard.take().expect("revisado arriba");
-            let height = clip.range.2 - clip.range.0;
-            let width = clip.range.3 - clip.range.1;
             self.select(sheet, row, col, row + height, col + width)?;
             self.step(|m| m.paste_from_clipboard(clip.sheet, clip.range, &clip.data, clip.is_cut))?;
             // Lo cortado solo se pega una vez; lo copiado se puede pegar de nuevo.
@@ -784,6 +823,7 @@ impl SheetDocument {
         let lines = text.lines().count().max(1) as i32;
         let columns = text.lines().map(|l| l.split('\t').count()).max().unwrap_or(1) as i32;
         let rect = Rect { row1: row, col1: col, row2: row + lines - 1, col2: col + columns - 1 };
+        self.check_cells(sheet, rect)?;
         self.select(sheet, rect.row1, rect.col1, rect.row2, rect.col2)?;
         self.step(|m| m.paste_csv_string(&rect.area(sheet), text))
     }
@@ -813,7 +853,15 @@ impl SheetDocument {
             .map(|_| ())
             .map_err(|e| format!("{e:?}"))?;
         // Después agregamos lo que IronCalc no escribe (listas desplegables…).
-        crate::xlsx_extras::write_extras(path, &self.extras_for_xlsx())
+        let mut extras = self.extras_for_xlsx();
+        // Los comentarios llevan su nota para otros programas (va con las notas) y su propia parte.
+        let threads = self.comments_for_xlsx(&mut extras);
+        crate::xlsx_extras::write_extras(path, &extras)?;
+        crate::xlsx_comments::write_threads(path, &threads)?;
+        crate::xlsx_outline::write_outline(path, &self.outline_for_xlsx())?;
+        crate::xlsx_protection::write_protection(path, &self.protection_for_xlsx())?;
+        // Y las tablas dinámicas, como las escribe Excel.
+        crate::xlsx_pivots::write_pivots(path, &self.pivots_for_xlsx())
     }
 
     /// Identificador estable de una hoja (no cambia al renombrarla ni moverla).

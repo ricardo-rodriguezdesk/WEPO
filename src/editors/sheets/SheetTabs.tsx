@@ -11,6 +11,10 @@ type Props = {
   onDuplicate: (index: number) => void;
   onDelete: (index: number) => void;
   onMove: (index: number, to: number) => void;
+  /** La hoja activa está protegida (lleva candado). */
+  protectedActive?: boolean;
+  /** Proteger la hoja activa o quitarle la protección. */
+  onProtect?: () => void;
   /** Mensaje a la derecha (guardado, errores…). */
   children?: ReactNode;
 };
@@ -64,6 +68,12 @@ export default function SheetTabs(props: Props) {
             }}
           >
             {name}
+            {i === active && props.protectedActive && (
+              <svg className="sheet-tab-lock" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-label="Hoja protegida" role="img">
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+                <path d="M8 11V7a4 4 0 018 0v4" />
+              </svg>
+            )}
           </button>
         ),
       )}
@@ -87,6 +97,12 @@ export default function SheetTabs(props: Props) {
               disabled: menu.index === names.length - 1,
               action: () => props.onMove(menu.index, menu.index + 1),
             },
+            ...(props.onProtect
+              ? ([
+                  "separator",
+                  { label: menu.index === active && props.protectedActive ? "Quitar la protección…" : "Proteger hoja…", action: () => props.onProtect?.() },
+                ] as const)
+              : []),
             "separator",
             { label: "Eliminar hoja", danger: true, disabled: names.length <= 1, action: () => props.onDelete(menu.index) },
           ]}

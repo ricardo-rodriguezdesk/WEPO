@@ -147,9 +147,9 @@ pub const EMU_PER_PIXEL: f64 = 9525.0;
 
 // ───────────── ZIP ─────────────
 
-type Entries = Vec<(String, Vec<u8>)>;
+pub(crate) type Entries = Vec<(String, Vec<u8>)>;
 
-fn read_zip(bytes: &[u8]) -> Result<Entries, String> {
+pub(crate) fn read_zip(bytes: &[u8]) -> Result<Entries, String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     let mut entries = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
@@ -162,7 +162,7 @@ fn read_zip(bytes: &[u8]) -> Result<Entries, String> {
     Ok(entries)
 }
 
-fn write_zip(path: &str, entries: &Entries) -> Result<(), String> {
+pub(crate) fn write_zip(path: &str, entries: &Entries) -> Result<(), String> {
     let file = fs::File::create(path).map_err(|e| e.to_string())?;
     let mut writer = zip::ZipWriter::new(file);
     let options =
@@ -175,7 +175,7 @@ fn write_zip(path: &str, entries: &Entries) -> Result<(), String> {
     Ok(())
 }
 
-fn entry<'a>(entries: &'a Entries, name: &str) -> Option<&'a [u8]> {
+pub(crate) fn entry<'a>(entries: &'a Entries, name: &str) -> Option<&'a [u8]> {
     entries.iter().find(|(n, _)| n == name).map(|(_, d)| d.as_slice())
 }
 
@@ -199,7 +199,7 @@ fn resolve(base: &str, target: &str) -> String {
 }
 
 /// Archivo de relaciones de una parte: xl/worksheets/sheet1.xml → xl/worksheets/_rels/sheet1.xml.rels
-fn rels_path(part: &str) -> String {
+pub(crate) fn rels_path(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),
@@ -207,7 +207,7 @@ fn rels_path(part: &str) -> String {
 }
 
 /// Relaciones de una parte: Id → (tipo, ruta resuelta).
-fn relationships(entries: &Entries, part: &str) -> HashMap<String, (String, String)> {
+pub(crate) fn relationships(entries: &Entries, part: &str) -> HashMap<String, (String, String)> {
     let mut map = HashMap::new();
     let Some(xml) = entry(entries, &rels_path(part)) else { return map };
     let mut reader = Reader::from_reader(xml);
@@ -232,7 +232,7 @@ fn relationships(entries: &Entries, part: &str) -> HashMap<String, (String, Stri
 // ───────────── XML ─────────────
 
 /// Atributos de una etiqueta como mapa nombre → valor (sin prefijo de espacio de nombres).
-fn attributes(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
+pub(crate) fn attributes(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
     e.attributes()
         .flatten()
         .filter_map(|a| {
@@ -248,7 +248,7 @@ fn attributes(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
 }
 
 /// Traduce una entidad como `quot` o `#34` a su carácter.
-fn entity(name: &str) -> String {
+pub(crate) fn entity(name: &str) -> String {
     match name {
         "quot" => "\"".into(),
         "amp" => "&".into(),
@@ -266,7 +266,7 @@ pub fn escape(text: &str) -> String {
 }
 
 /// Hojas del libro en orden: (nombre, ruta del XML dentro del ZIP).
-fn sheet_paths(entries: &Entries) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn sheet_paths(entries: &Entries) -> Result<Vec<(String, String)>, String> {
     let workbook = entry(entries, "xl/workbook.xml").ok_or("El archivo no tiene xl/workbook.xml")?;
     let rels = entry(entries, "xl/_rels/workbook.xml.rels").ok_or("El archivo no tiene relaciones del libro")?;
 
@@ -312,7 +312,7 @@ fn sheet_paths(entries: &Entries) -> Result<Vec<(String, String)>, String> {
 // ───────────── leer ─────────────
 
 /// "B8" → (8, 2).
-fn cell_ref(text: &str) -> Option<(i32, i32)> {
+pub(crate) fn cell_ref(text: &str) -> Option<(i32, i32)> {
     let letters: String = text.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
     let row: i32 = text[letters.len()..].parse().ok()?;
     let col = letters.bytes().fold(0i32, |n, b| n * 26 + (b.to_ascii_uppercase() - b'A' + 1) as i32);
@@ -427,14 +427,10 @@ pub fn read_drawings(path: &str) -> Result<(Vec<(String, Vec<RawDrawing>)>, bool
                 drawings.push(RawDrawing { anchor, content });
             }
         }
-        // Tablas dinámicas u otros dibujos "heredados" (VML) que no
-        // conservamos. El VML que acompaña a las notas sí: WEPO lo vuelve a escribir.
+        // Dibujos "heredados" (VML) que no conservamos. El VML que acompaña a las
+        // notas sí: WEPO lo vuelve a escribir. Las tablas dinámicas se revisan en xlsx_pivots.rs.
         let has_notes = sheet_rels.values().any(|(kind, _)| kind == "comments");
-        unsupported |= sheet_rels.values().any(|(kind, _)| match kind.as_str() {
-            "pivotTable" => true,
-            "vmlDrawing" => !has_notes,
-            _ => false,
-        });
+        unsupported |= sheet_rels.values().any(|(kind, _)| kind == "vmlDrawing" && !has_notes);
         if !drawings.is_empty() {
             result.push((name, drawings));
         }
@@ -1065,7 +1061,7 @@ const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
 const REL_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
-fn set_entry(entries: &mut Entries, name: &str, data: Vec<u8>) {
+pub(crate) fn set_entry(entries: &mut Entries, name: &str, data: Vec<u8>) {
     match entries.iter_mut().find(|(n, _)| n == name) {
         Some(e) => e.1 = data,
         None => entries.push((name.to_string(), data)),
@@ -1073,7 +1069,7 @@ fn set_entry(entries: &mut Entries, name: &str, data: Vec<u8>) {
 }
 
 /// Agrega una relación a un archivo .rels (lo crea si no existe) y devuelve su Id.
-fn add_relationship(entries: &mut Entries, part: &str, kind: &str, target: &str) -> String {
+pub(crate) fn add_relationship(entries: &mut Entries, part: &str, kind: &str, target: &str) -> String {
     let path = rels_path(part);
     let mut xml = entry(entries, &path)
         .map(|d| String::from_utf8_lossy(d).into_owned())
@@ -1089,7 +1085,7 @@ fn add_relationship(entries: &mut Entries, part: &str, kind: &str, target: &str)
     id
 }
 
-fn add_content_type(entries: &mut Entries, part: Option<&str>, extension: Option<(&str, &str)>, content_type: &str) {
+pub(crate) fn add_content_type(entries: &mut Entries, part: Option<&str>, extension: Option<(&str, &str)>, content_type: &str) {
     let Some(data) = entry(entries, "[Content_Types].xml") else { return };
     let mut xml = String::from_utf8_lossy(data).into_owned();
     if let Some(part) = part {

@@ -5107,6 +5107,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 name = "wepo"
 version = "0.3.1"
 dependencies = [
+ "base64 0.22.1",
  "calamine",
  "csv",
  "gtk",
@@ -5120,6 +5121,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

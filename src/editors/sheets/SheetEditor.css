@@ -761,3 +761,199 @@
 .split-icon::after { content: ""; position: absolute; background: #2f6fd6; }
 .split-icon.v::after { left: 50%; top: -1px; bottom: -1px; width: 2px; margin-left: -1px; }
 .split-icon.h::after { top: 50%; left: -1px; right: -1px; height: 2px; margin-top: -1px; }
+
+/* Tabla dinámica: panel de campos (como el de Excel) y diálogo para crearla */
+.pivot-panel {
+  position: fixed;
+  z-index: 30;
+  top: 150px;
+  right: 14px;
+  width: 300px;
+  max-height: calc(100vh - 200px);
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+}
+.pivot-panel header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.pivot-panel h3 { margin: 0; font-size: 14px; }
+.pivot-source { margin: 0 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pivot-fields {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.pivot-field { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 5px; cursor: grab; }
+.pivot-field:hover { background: var(--kind-soft); }
+.pivot-field small { margin-left: auto; font-size: 10px; color: var(--muted); }
+.pivot-areas { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; margin-top: 6px; }
+.pivot-area {
+  min-width: 0;
+  min-height: 74px;
+  padding: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pivot-area.over { border-color: var(--kind-accent); background: var(--kind-soft); }
+.pivot-area h4 { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.pivot-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: grab;
+}
+.pivot-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pivot-chip select { flex-shrink: 0; max-width: 70px; font: inherit; font-size: 11px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
+.pivot-chip-remove,
+.pivot-filter-btn { padding: 0 4px; font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; }
+.pivot-chip-remove:hover,
+.pivot-filter-btn:hover,
+.pivot-filter-btn.on { color: var(--kind-accent); }
+.pivot-filter-menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 220px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+  cursor: default;
+}
+.pivot-filter-list { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; margin: 6px 0; }
+.pivot-filter-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+.pivot-actions { display: flex; gap: 6px; margin-top: 10px; }
+.pivot-actions .btn { flex: 1; }
+.pivot-delete { color: var(--danger); }
+.pivot-dialog { display: flex; flex-direction: column; gap: 8px; }
+.pivot-dialog .field-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.pivot-cell { width: 80px; margin-left: 6px; }
+
+/* Comentarios con respuestas (como en Excel 365): esquina morada y tarjeta con la conversación */
+.comment-mark {
+  z-index: 1;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  background: linear-gradient(225deg, #7b4fd6 50%, transparent 50%);
+  cursor: pointer;
+}
+.comment-mark.done { background: linear-gradient(225deg, #9aa0a6 50%, transparent 50%); }
+.comment-card {
+  position: absolute;
+  z-index: 9;
+  width: 280px;
+  max-height: 380px;
+  overflow: auto;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid #7b4fd6;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  cursor: default;
+}
+.comment-card.done { border-left-color: #9aa0a6; }
+.comment-card header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.comment-done-label { font-size: 11px; font-weight: 600; color: var(--muted); }
+.comment-tools { display: flex; gap: 4px; }
+.comment-tool { padding: 2px 6px; font: inherit; font-size: 11.5px; color: #7b4fd6; background: none; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
+.comment-tool.danger { color: var(--danger); }
+.comment-message { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.comment-head { display: flex; align-items: center; gap: 6px; }
+.comment-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #7b4fd6;
+  border-radius: 50%;
+}
+.comment-author { font-weight: 600; }
+.comment-date { margin-left: auto; color: var(--muted); font-size: 11px; }
+.comment-text { margin: 4px 0 0 28px; white-space: pre-wrap; word-break: break-word; }
+.comment-actions { display: flex; gap: 8px; margin: 2px 0 0 28px; opacity: 0; transition: opacity 0.1s; }
+.comment-message:hover .comment-actions,
+.comment-message:focus-within .comment-actions { opacity: 1; }
+.comment-actions button { padding: 0; font: inherit; font-size: 11px; color: var(--muted); background: none; border: 0; cursor: pointer; }
+.comment-actions button:hover { color: var(--text); text-decoration: underline; }
+.comment-reply { margin-top: 8px; }
+.comment-input {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+.comment-input:focus { outline: 2px solid #7b4fd6; outline-offset: -1px; }
+.comment-buttons { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.comment-buttons .note-hint { margin-right: auto; }
+.comment-edit { margin: 4px 0 0 28px; }
+
+/* Grupos de filas y columnas (esquema): barras a la orilla de los encabezados */
+.grid-area { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.grid-area > .grid-scroll { min-height: 0; }
+.outline-gutter { position: absolute; z-index: 5; overflow: hidden; background: var(--chrome); }
+.outline-gutter.rows { left: 0; bottom: 0; border-right: 1px solid var(--border); }
+.outline-gutter.cols { top: 0; right: 0; border-bottom: 1px solid var(--border); }
+.outline-corner { position: absolute; left: 0; top: 0; z-index: 5; background: var(--chrome); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.outline-levels { position: absolute; display: flex; align-items: center; gap: 0; background: var(--chrome); z-index: 1; }
+.outline-levels.rows { top: 0; left: 0; right: 0; padding-left: 2px; }
+.outline-levels.cols { left: 0; top: 0; bottom: 0; flex-direction: column; justify-content: flex-start; padding-top: 2px; }
+.outline-level,
+.outline-toggle {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  font: 600 9.5px/1 var(--font, inherit);
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.outline-level { margin: 0 0.5px; }
+.outline-levels.cols .outline-level { margin: 0.5px 0; }
+.outline-level:hover,
+.outline-toggle:hover { color: var(--kind-accent); border-color: var(--kind-accent); }
+.outline-track { position: absolute; inset: 0; }
+.outline-toggle { position: absolute; font-size: 11px; }
+.outline-line { position: absolute; border-color: var(--muted); border-style: solid; border-width: 0; }
+.outline-line.v { width: 4px; border-left-width: 1.5px; border-bottom-width: 1.5px; }
+.outline-line.h { height: 4px; border-top-width: 1.5px; border-right-width: 1.5px; }
+
+/* Hoja protegida: el formato no se puede cambiar y la pestaña lleva candado */
+.sheet-protected .format-bar { opacity: 0.45; pointer-events: none; }
+.sheet-tab-lock { margin-left: 5px; vertical-align: -1px; color: var(--muted); }
+.protect-form { display: flex; flex-direction: column; gap: 8px; }

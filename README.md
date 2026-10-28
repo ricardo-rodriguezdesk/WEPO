@@ -274,6 +274,11 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] Pruebas automáticas de la interfaz (en cada cambio, en GitHub)
 - [x] WEPO Sheets: cortes de página en la hoja y saltos de página a mano (se arrastran, como en Excel)
 - [x] WEPO Sheets: vista previa de salto de página (páginas numeradas, bordes azules que se arrastran)
+- [x] WEPO Sheets: tablas dinámicas (filas, columnas, valores y filtros), compatibles con Excel
+- [x] WEPO Sheets: comentarios con respuestas y resueltos, compatibles con Excel 365
+- [x] WEPO Sheets: agrupar filas y columnas (esquema con − y +, varios niveles)
+- [x] WEPO Sheets: proteger hojas con contraseña, con celdas editables
+- [x] WEPO PDF: tachar información (se borra de verdad) y marca de agua
 - [x] WEPO Write: índice automático y notas al pie
 - [x] WEPO Present: transiciones y gráficas
 - [x] WEPO Present: animaciones de entrada

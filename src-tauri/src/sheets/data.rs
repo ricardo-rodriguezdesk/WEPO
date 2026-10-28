@@ -157,6 +157,7 @@ impl SheetDocument {
     /// Ordena las filas de `rect` según `keys`. Si `has_header`, la primera
     /// fila se queda en su lugar. Las fórmulas y el formato viajan con su fila.
     pub fn sort(&mut self, sheet: u32, rect: Rect, keys: &[SortKey], has_header: bool) -> Result<(), String> {
+        self.check_cells(sheet, rect)?;
         let area = rect.area(sheet);
         let (col1, col2) = (area.column, area.column + area.width - 1);
         let first = area.row + i32::from(has_header);
@@ -262,6 +263,7 @@ impl SheetDocument {
     /// fila anterior. Las que quedan suben, como en Excel; lo de fuera de `rect`
     /// no se mueve. Devuelve cuántas filas se quitaron.
     pub fn remove_duplicates(&mut self, sheet: u32, rect: Rect, cols: &[i32], has_header: bool) -> Result<usize, String> {
+        self.check_cells(sheet, rect)?;
         let area = rect.area(sheet);
         let (col1, col2) = (area.column, area.column + area.width - 1);
         let first = area.row + i32::from(has_header);
