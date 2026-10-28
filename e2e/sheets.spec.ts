@@ -201,6 +201,19 @@ test.describe("WEPO Sheets", () => {
     await expect(page.locator(".page-break.h.outer[data-side='end']")).toHaveAttribute("data-row", String(goal));
     await expect(labels).toHaveCount(3);
 
+    // Un salto de columna en una columna vacía a la derecha: el área crece hasta ahí, la escala
+    // pasa a «Tamaño real» (con «ajustar columnas» no contaría) y sale una página a la derecha.
+    await page.locator(".grid-scroll").evaluate((el) => (el.scrollTop = 0));
+    const e1 = await cellPoint(page, "E2");
+    await page.mouse.click(e1.x, e1.y);
+    await page.mouse.click(e1.x, e1.y, { button: "right" });
+    await page.locator(".context-item", { hasText: "Insertar salto de página" }).click();
+    await expect(page.locator(".sheet-status")).toContainText("Tamaño real");
+    await expect(page.locator(".page-break.v.manual")).toHaveAttribute("data-col", "4");
+    await expect(page.locator(".page-break.v.outer[data-side='end']")).toHaveAttribute("data-col", "5");
+    const lefts = await labels.evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).style.left))]);
+    expect(lefts.length).toBe(2);
+
     // De regreso a la vista normal.
     await page.getByRole("button", { name: "Normal", exact: true }).click();
     await expect(labels).toHaveCount(0);

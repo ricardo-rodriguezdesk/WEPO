@@ -30,6 +30,16 @@ export function loadOptions(hasArea: boolean): PrintOptions {
 /** Configuración de página tal como se escribe en el diálogo. */
 export type PageForm = { header: string; footer: string; repeatRows: string; printArea: string };
 
+/** Cambia solo la escala guardada (por ejemplo, al poner un salto de columna, que con «ajustar» no cuenta). */
+export function saveScaling(scaling: Scaling) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    localStorage.setItem(KEY, JSON.stringify({ ...saved, scaling, fit: undefined }));
+  } catch {
+    // Sin almacenamiento la escala no se recuerda.
+  }
+}
+
 export function pageForm(page: PageView): PageForm {
   return {
     header: page.header,
