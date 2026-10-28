@@ -201,6 +201,15 @@ test.describe("WEPO Sheets", () => {
     await expect(page.locator(".page-break.h.outer[data-side='end']")).toHaveAttribute("data-row", String(goal));
     await expect(labels).toHaveCount(3);
 
+    // «Dividir a lo ancho» parte la página de la celda elegida con una línea vertical.
+    await page.locator(".grid-scroll").evaluate((el) => (el.scrollTop = 0));
+    const a2 = await cellPoint(page, "A2");
+    await page.mouse.click(a2.x, a2.y);
+    await page.getByRole("button", { name: "Dividir a lo ancho" }).click();
+    await expect(page.locator(".sheet-status")).toContainText("Tamaño real");
+    await expect(page.locator(".page-break.v.manual")).toHaveAttribute("data-col", "1");
+    await expect(page.locator(".sheet-status")).toContainText("columna B");
+
     // Un salto de columna en una columna vacía a la derecha: el área crece hasta ahí, la escala
     // pasa a «Tamaño real» (con «ajustar columnas» no contaría) y sale una página a la derecha.
     await page.locator(".grid-scroll").evaluate((el) => (el.scrollTop = 0));
@@ -208,11 +217,11 @@ test.describe("WEPO Sheets", () => {
     await page.mouse.click(e1.x, e1.y);
     await page.mouse.click(e1.x, e1.y, { button: "right" });
     await page.locator(".context-item", { hasText: "Insertar salto de página" }).click();
-    await expect(page.locator(".sheet-status")).toContainText("Tamaño real");
-    await expect(page.locator(".page-break.v.manual")).toHaveAttribute("data-col", "4");
+    await expect(page.locator(".sheet-status")).toContainText("Salto de página insertado");
+    await expect(page.locator(".page-break.v.manual[data-col='4']")).toHaveCount(1);
     await expect(page.locator(".page-break.v.outer[data-side='end']")).toHaveAttribute("data-col", "5");
     const lefts = await labels.evaluateAll((els) => [...new Set(els.map((e) => (e as HTMLElement).style.left))]);
-    expect(lefts.length).toBe(2);
+    expect(lefts.length).toBe(3);
 
     // De regreso a la vista normal.
     await page.getByRole("button", { name: "Normal", exact: true }).click();

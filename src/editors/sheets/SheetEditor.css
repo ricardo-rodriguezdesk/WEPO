@@ -730,7 +730,7 @@
 }
 .break-preview-label {
   position: absolute;
-  z-index: 2;
+  z-index: 3; /* encima de las gráficas, como en Excel */
   pointer-events: none;
   display: flex;
   align-items: center;
@@ -751,3 +751,13 @@
 .break-preview .page-break.h.outer::after { top: 1px; border-top-width: 4px; }
 .break-preview .page-break.drag:hover::after { border-color: #174ea6; }
 .break-preview .page-break.ghost::after { border-style: solid; border-color: #174ea6; }
+.break-tools { display: inline-flex; flex-shrink: 0; gap: 4px; margin-left: auto; }
+.break-tools + .sheet-views { margin-left: 10px; }
+.sheet-status + .break-tools { margin-left: 12px; }
+.sheet-stats + .break-tools { margin-left: 14px; }
+.break-tools button { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font: inherit; font-size: 12px; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.break-tools button:hover { border-color: #2f6fd6; color: #2f6fd6; }
+.split-icon { position: relative; width: 12px; height: 10px; border: 1.5px solid currentColor; border-radius: 1px; }
+.split-icon::after { content: ""; position: absolute; background: #2f6fd6; }
+.split-icon.v::after { left: 50%; top: -1px; bottom: -1px; width: 2px; margin-left: -1px; }
+.split-icon.h::after { top: 50%; left: -1px; right: -1px; height: 2px; margin-top: -1px; }

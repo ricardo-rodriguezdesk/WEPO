@@ -2037,6 +2037,26 @@ export default function SheetEditor(props: Props) {
     setPageBreaks(rows, cols, "Salto de página insertado: lo que sigue se imprime en otra página");
   }
 
+  /** Vista previa: parte en dos la página donde está la celda activa (a lo ancho = línea vertical). */
+  function splitPage(axis: "row" | "col") {
+    if (!pageBreaks) return;
+    const rects = pageBreaks.rects;
+    const page = rects.find((p) => active.r >= p.r1 && active.r < p.r2 && active.c >= p.c1 && active.c < p.c2) ?? rects[0];
+    if (!page) return;
+    const [a, b] = axis === "col" ? [page.c1, page.c2] : [page.r1, page.r2];
+    if (b - a < 2)
+      return showStatus({
+        text: axis === "col" ? "Esta página tiene una sola columna: arrastra el borde azul de la derecha para incluir más" : "Esta página tiene una sola fila: arrastra el borde azul de abajo para incluir más",
+      });
+    const at = a + Math.floor((b - a) / 2);
+    const name = axis === "col" ? columnName(at) : `${at + 1}`;
+    setPageBreaks(
+      axis === "row" ? [...manualRows.filter((x) => x !== at), at] : manualRows,
+      axis === "col" ? [...manualCols.filter((x) => x !== at), at] : manualCols,
+      `Página dividida ${axis === "col" ? `a lo ancho (antes de la columna ${name})` : `a lo largo (antes de la fila ${name})`}: arrastra la línea azul para acomodarla`,
+    );
+  }
+
   function removePageBreak() {
     const rows = wholeCols ? manualRows : manualRows.filter((x) => x !== selection.r1);
     const cols = wholeRows ? manualCols : manualCols.filter((x) => x !== selection.c1);
@@ -2912,6 +2932,18 @@ export default function SheetEditor(props: Props) {
             <span>Recuento: {statsFormat.format(stats.count)}</span>
             {stats.numbers > 0 && <span>Suma: {statsFormat.format(stats.sum)}</span>}
           </span>
+        )}
+        {breakView && pageBreaks && (
+          <div className="break-tools" role="group" aria-label="Dividir la página">
+            <button type="button" title="Parte en dos, con una línea vertical, la página donde está la celda elegida" onClick={() => splitPage("col")}>
+              <span className="split-icon v" aria-hidden="true" />
+              Dividir a lo ancho
+            </button>
+            <button type="button" title="Parte en dos, con una línea horizontal, la página donde está la celda elegida" onClick={() => splitPage("row")}>
+              <span className="split-icon h" aria-hidden="true" />
+              Dividir a lo largo
+            </button>
+          </div>
         )}
         <div className="sheet-views" role="group" aria-label="Vista de la hoja">
           <button type="button" className={breakView ? "" : "on"} aria-pressed={!breakView} title="Normal" onClick={() => breakView && setBreakView(false)}>
