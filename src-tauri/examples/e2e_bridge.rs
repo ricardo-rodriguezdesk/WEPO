@@ -282,6 +282,12 @@ fn main() {
                             d.set_page_setup(sheet, &st("header"), &st("footer"), &st("repeatRows"), &st("printArea"))?;
                             view(d, sheet)
                         }
+                        "sheet_page_breaks" => {
+                            let rows: Vec<i32> = serde_json::from_value(a["rows"].clone()).map_err(|e| e.to_string())?;
+                            let cols: Vec<i32> = serde_json::from_value(a["cols"].clone()).map_err(|e| e.to_string())?;
+                            d.set_page_breaks(sheet, &rows, &cols)?;
+                            view(d, sheet)
+                        }
                         "sheet_remove_duplicates" => {
                             let cols: Vec<i32> = serde_json::from_value(a["cols"].clone()).map_err(|e| e.to_string())?;
                             let n = d.remove_duplicates(sheet, rect, &cols, a["header"].as_bool().unwrap_or(true))?;

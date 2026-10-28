@@ -338,6 +338,12 @@ fn sheet_page_setup(
     with_sheet(&state, &window, sheet, |doc| doc.set_page_setup(sheet, &header, &footer, &repeat_rows, &print_area))
 }
 
+/// Saltos de página puestos a mano: fila o columna (desde 0) con que empieza cada página nueva.
+#[tauri::command]
+fn sheet_page_breaks(window: tauri::Window, state: State<OpenSheet>, sheet: u32, rows: Vec<i32>, cols: Vec<i32>) -> Result<SheetView, String> {
+    with_sheet(&state, &window, sheet, |doc| doc.set_page_breaks(sheet, &rows, &cols))
+}
+
 #[derive(Serialize)]
 struct Deduplicated {
     removed: usize,
@@ -716,6 +722,7 @@ pub fn run() {
             sheet_table_create,
             sheet_table_update,
             sheet_page_setup,
+            sheet_page_breaks,
             sheet_remove_duplicates,
             sheet_link,
             sheet_stats,

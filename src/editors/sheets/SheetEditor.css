@@ -679,8 +679,20 @@
 
 /* Cortes de página: líneas punteadas donde termina cada página al imprimir */
 .page-break { position: absolute; z-index: 3; pointer-events: none; }
-.page-break.v { width: 0; border-left: 1.5px dashed var(--muted); }
-.page-break.h { height: 0; border-top: 1.5px dashed var(--muted); }
+/* Una franja de 7 px (para poder agarrarla) con la línea en medio. */
+.page-break.v { width: 7px; margin-left: -3px; }
+.page-break.h { height: 7px; margin-top: -3px; }
+.page-break::after { content: ""; position: absolute; border: 0 dashed var(--muted); }
+.page-break.v::after { left: 3px; top: 0; bottom: 0; border-left-width: 1.5px; }
+.page-break.h::after { top: 3px; left: 0; right: 0; border-top-width: 1.5px; }
+/* Los saltos puestos a mano van con línea continua, como en Excel. */
+.page-break.manual::after { border-style: solid; border-color: color-mix(in srgb, var(--text, #1d1d1f) 70%, transparent); }
+.page-break.drag { pointer-events: auto; }
+.page-break.v.drag { cursor: col-resize; }
+.page-break.h.drag { cursor: row-resize; }
+.page-break.drag:hover::after { border-color: var(--kind-accent, #1d7a4a); }
+.page-break.ghost { z-index: 4; }
+.page-break.ghost::after { border-style: solid; border-width: 2px; border-color: var(--kind-accent, #1d7a4a); }
 .page-break-toggle {
   margin-left: auto;
   flex-shrink: 0;

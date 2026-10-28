@@ -159,13 +159,52 @@ impl SheetDocument {
     ) -> Result<(), String> {
         let before = self.extras.clone();
         action(&mut self.model)?;
-        if self.shift_notes(sheet, columns, at, delta) {
+        let notes = self.shift_notes(sheet, columns, at, delta);
+        // Los saltos de página a mano también se recorren con sus filas o columnas (como en Excel).
+        let breaks = self.shift_breaks(sheet, columns, at, delta);
+        if notes || breaks {
             self.history.push(Step::Both(1, before));
             self.future.clear();
         } else {
             self.record(1);
         }
         Ok(())
+    }
+
+/// Recorre los saltos a mano cuando se insertan (`delta` > 0) o borran filas o columnas desde `at` (desde 1).
+    fn shift_breaks(&mut self, sheet: u32, columns: bool, at: i32, delta: i32) -> bool {
+        let Some(id) = self.sheet_id(sheet) else { return false };
+        let Some(page) = self.extras.pages.iter_mut().find(|p| p.sheet_id == id) else { return false };
+        let list = if columns { &mut page.col_breaks } else { &mut page.row_breaks };
+        if list.is_empty() {
+            return false;
+        }
+        let old = list.clone();
+        // Un salto `b` va antes de la fila (o columna) b + 1, contando desde 1.
+        let moved: Vec<i32> = old
+            .iter()
+            .filter_map(|&b| {
+                let first = b + 1;
+                if delta > 0 {
+                    Some(if first >= at { b + delta } else { b })
+                } else {
+                    let count = -delta;
+                    if first >= at + count {
+                        Some(b - count)
+                    } else if first >= at {
+                        Some(at - 1)
+                    } else {
+                        Some(b)
+                    }
+                }
+            })
+            .filter(|&b| b > 0)
+            .collect();
+        let mut moved = moved;
+        moved.sort_unstable();
+        moved.dedup();
+        *list = moved;
+        *list != old
     }
 
     pub(super) fn load_notes(&mut self) {

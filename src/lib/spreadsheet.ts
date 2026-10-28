@@ -85,6 +85,9 @@ export type PageView = {
   repeat_rows: [number, number] | null;
   /** [fila1, columna1, fila2, columna2], desde 1. */
   print_area: [number, number, number, number] | null;
+  /** Saltos de página puestos a mano: fila o columna (desde 0) con que empieza cada página nueva. */
+  row_breaks?: number[];
+  col_breaks?: number[];
 };
 
 export type CompareOp = "between" | "not_between" | "equal" | "not_equal" | "greater" | "less" | "greater_or_equal" | "less_or_equal";
@@ -339,6 +342,8 @@ export const sheetApi = {
     invoke<SheetView>("sheet_table_update", { sheet, name, style, banded, totals, remove }),
   pageSetup: (sheet: number, header: string, footer: string, repeatRows: string, printArea: string) =>
     invoke<SheetView>("sheet_page_setup", { sheet, header, footer, repeatRows, printArea }),
+  /** Saltos de página a mano: fila o columna (desde 0) con que empieza cada página nueva. */
+  pageBreaks: (sheet: number, rows: number[], cols: number[]) => invoke<SheetView>("sheet_page_breaks", { sheet, rows, cols }),
   /** Quita las filas repetidas según `cols` (desde 0). */
   removeDuplicates: (sheet: number, range: Range, cols: number[], header: boolean) =>
     invoke<{ removed: number; view: SheetView }>("sheet_remove_duplicates", {

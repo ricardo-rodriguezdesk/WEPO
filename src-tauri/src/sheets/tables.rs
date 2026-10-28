@@ -67,6 +67,10 @@ pub struct PageSetup {
     /// Filas que se repiten arriba en cada página (desde 1).
     pub repeat_rows: Option<(i32, i32)>,
     pub print_area: Option<Rect>,
+    /// Saltos de página puestos a mano: la fila o columna (desde 0) con que empieza la página nueva,
+    /// como el `id` de <brk> en Excel.
+    pub row_breaks: Vec<i32>,
+    pub col_breaks: Vec<i32>,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -76,6 +80,9 @@ pub struct PageView {
     pub repeat_rows: Option<(i32, i32)>,
     /// (fila1, columna1, fila2, columna2), desde 1.
     pub print_area: Option<(i32, i32, i32, i32)>,
+    /// Saltos de página a mano: fila o columna (desde 0) con que empieza cada página nueva.
+    pub row_breaks: Vec<i32>,
+    pub col_breaks: Vec<i32>,
 }
 
 /// Encabezado o pie de Excel ("&L…&CTexto &D&R…") → texto de WEPO ("Texto [Fecha]").
@@ -371,7 +378,31 @@ impl SheetDocument {
                 let r = r.normalized();
                 (r.row1, r.col1, r.row2, r.col2)
             }),
+            row_breaks: page.row_breaks.clone(),
+            col_breaks: page.col_breaks.clone(),
         }
+    }
+
+    /// Cambia los saltos de página puestos a mano de la hoja (fila o columna desde 0 con que empieza la página).
+    pub fn set_page_breaks(&mut self, sheet: u32, rows: &[i32], cols: &[i32]) -> Result<(), String> {
+        let id = self.sheet_id(sheet).ok_or("Hoja inválida")?;
+        let clean = |list: &[i32], max: i32| {
+            let mut v: Vec<i32> = list.iter().copied().filter(|&i| i > 0 && i < max).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let (rows, cols) = (clean(rows, 1_048_576), clean(cols, 16_384));
+        self.mixed(|doc, _| {
+            let mut page = doc.extras.pages.iter().find(|p| p.sheet_id == id).cloned().unwrap_or(PageSetup { sheet_id: id, ..Default::default() });
+            page.row_breaks = rows.clone();
+            page.col_breaks = cols.clone();
+            doc.extras.pages.retain(|p| p.sheet_id != id);
+            if page != (PageSetup { sheet_id: id, ..Default::default() }) {
+                doc.extras.pages.push(page);
+            }
+            Ok(())
+        })
     }
 
     /// `repeat_rows` como "1:2" (o "1"); `print_area` como "A1:F20". Vacíos los quitan.
@@ -394,7 +425,15 @@ impl SheetDocument {
         } else {
             Some(Rect::from_a1(area).ok_or("Escribe el área de impresión como «A1:F20»")?)
         };
-        let page = PageSetup { sheet_id: id, header: header.trim().into(), footer: footer.trim().into(), repeat_rows, print_area };
+        // Los saltos de página no cambian aquí (tienen su propia orden).
+        let (row_breaks, col_breaks) = self
+            .extras
+            .pages
+            .iter()
+            .find(|p| p.sheet_id == id)
+            .map(|p| (p.row_breaks.clone(), p.col_breaks.clone()))
+            .unwrap_or_default();
+        let page = PageSetup { sheet_id: id, header: header.trim().into(), footer: footer.trim().into(), repeat_rows, print_area, row_breaks, col_breaks };
         self.mixed(|doc, _| {
             doc.extras.pages.retain(|p| p.sheet_id != id);
             if page != (PageSetup { sheet_id: id, ..Default::default() }) {
@@ -429,6 +468,8 @@ impl SheetDocument {
                 footer: from_excel_codes(&raw.footer),
                 repeat_rows,
                 print_area,
+                row_breaks: raw.row_breaks.clone(),
+                col_breaks: raw.col_breaks.clone(),
             };
             if page != (PageSetup { sheet_id: id, ..Default::default() }) {
                 self.extras.pages.push(page);
@@ -457,6 +498,8 @@ impl SheetDocument {
                     )
                 }),
                 sheet_index: index,
+                row_breaks: page.row_breaks.clone(),
+                col_breaks: page.col_breaks.clone(),
             };
             match sheets.iter_mut().find(|(s, _)| *s == name) {
                 Some((_, extras)) => extras.page = Some(raw),
@@ -522,5 +565,44 @@ mod tests {
         assert_eq!(page.repeat_rows, Some((1, 1)));
         assert_eq!(page.print_area, Some((1, 1, 4, 2)));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn saltos_de_pagina_a_mano() {
+        let mut doc = SheetDocument::new_empty().unwrap();
+        for r in 1..=60 {
+            doc.set_cell(0, r, 1, &r.to_string()).unwrap();
+        }
+        doc.set_page_setup(0, "Encabezado", "", "", "").unwrap();
+        doc.set_page_breaks(0, &[40, 20, 20, 0], &[3]).unwrap();
+        let page = doc.page_view(0);
+        assert_eq!((page.row_breaks.clone(), page.col_breaks.clone()), (vec![20, 40], vec![3]), "ordenados y sin repetir (ni el 0)");
+        // Cambiar el encabezado no quita los saltos; deshacer sí regresa al anterior.
+        doc.set_page_setup(0, "Otro", "", "", "").unwrap();
+        assert_eq!(doc.page_view(0).row_breaks, vec![20, 40]);
+        doc.undo().unwrap();
+        doc.undo().unwrap();
+        assert!(doc.page_view(0).row_breaks.is_empty());
+        doc.redo().unwrap();
+
+        let path = std::env::temp_dir().join(format!("wepo-saltos-{}.xlsx", std::process::id()));
+        let path = path.to_str().unwrap();
+        doc.save(path, 0).unwrap();
+        let xml = crate::xlsx_extras::read_pages(path).unwrap();
+        assert_eq!(xml[0].1.row_breaks, vec![20, 40]);
+        let reopened = SheetDocument::open(path).unwrap();
+        let page = reopened.page_view(0);
+        assert_eq!((page.row_breaks, page.col_breaks, page.header.as_str()), (vec![20, 40], vec![3], "Encabezado"));
+        std::fs::remove_file(path).unwrap();
+
+        // Insertar 2 filas arriba de la 10 recorre los dos saltos; borrar la 1 los sube uno.
+        doc.insert_rows(0, 10, 2).unwrap();
+        assert_eq!(doc.page_view(0).row_breaks, vec![22, 42]);
+        doc.delete_rows(0, 1, 1).unwrap();
+        assert_eq!(doc.page_view(0).row_breaks, vec![21, 41]);
+        doc.undo().unwrap();
+        assert_eq!(doc.page_view(0).row_breaks, vec![22, 42]);
+        doc.insert_columns(0, 2, 1).unwrap();
+        assert_eq!(doc.page_view(0).col_breaks, vec![4]);
     }
 }

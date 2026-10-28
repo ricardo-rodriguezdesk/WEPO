@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { cellPoint, collectErrors, finishExport, openFile, outFile, pdfInfo, pdfText, readSheets, saveAs, sheetCell } from "./helpers";
+import { cellPoint, collectErrors, finishExport, home, openFile, outFile, pdfInfo, pdfText, readSheets, saveAs, sheetCell } from "./helpers";
 
 test.describe("WEPO Sheets", () => {
   test("abre un Excel, calcula una fórmula y la guarda", async ({ page }) => {
@@ -111,5 +111,65 @@ test.describe("WEPO Sheets", () => {
 
     await toggle.click();
     await expect(page.locator(".page-break")).toHaveCount(0);
+  });
+
+  test("saltos de página a mano: insertar, mover arrastrando, imprimir y guardar en Excel", async ({ page }) => {
+    const errors = collectErrors(page);
+    const copy = await openFile(page, "gastos.xlsx");
+    const menuAt = async (ref: string, item: string) => {
+      const p = await cellPoint(page, ref);
+      await page.mouse.click(p.x, p.y);
+      await page.mouse.click(p.x, p.y, { button: "right" });
+      await page.locator(".context-item", { hasText: item }).click();
+    };
+    // Salto arriba de la fila 11: la página 1 llega hasta la fila 10.
+    await menuAt("A11", "Insertar salto de página");
+    await expect(page.getByRole("button", { name: "Cortes de página" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".page-break.h.manual")).toHaveCount(1);
+    await expect(page.locator(".page-break.h.manual")).toHaveAttribute("data-row", "10");
+
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(page.locator(".print-count")).toHaveText("5 páginas");
+    await expect(page.locator(".print-preview .print-table tr").last()).toContainText("Gasto número 9");
+    await page.keyboard.press("Escape");
+
+    // Arrastrar el salto a mano hasta arriba de la fila 21.
+    const line = page.locator(".page-break.h.manual");
+    const box = (await line.boundingBox())!;
+    const target = await cellPoint(page, "A21");
+    await page.mouse.move(box.x + 40, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 40, target.y - 8, { steps: 8 });
+    await page.mouse.up();
+    await expect(page.locator(".page-break.h.manual")).toHaveAttribute("data-row", "20");
+
+    // Arrastrar un corte automático lo vuelve salto a mano.
+    const auto = page.locator(".page-break.h.drag:not(.manual)").first();
+    const autoRow = Number(await auto.getAttribute("data-row"));
+    await auto.scrollIntoViewIfNeeded();
+    const autoBox = (await auto.boundingBox())!;
+    await page.mouse.move(autoBox.x + 40, autoBox.y + autoBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(autoBox.x + 40, autoBox.y + autoBox.height / 2 - 100, { steps: 8 });
+    await page.mouse.up();
+    await expect(page.locator(".page-break.h.manual")).toHaveCount(2);
+    const rows = (await page.locator(".page-break.h.manual").evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-row"))))).sort((a, b) => a - b);
+    expect(rows[0]).toBe(20);
+    expect(rows[1]).toBeLessThan(autoRow);
+
+    // Se guarda en el .xlsx (como <rowBreaks> de Excel) y se vuelve a leer.
+    await page.locator("button[title^='Guardar']").first().click();
+    await expect(page.locator(".sheet-status")).toHaveText("Guardado");
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), copy);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".page-break.h.manual")).toHaveCount(2);
+
+    // Quitar uno con el menú y restablecer todos.
+    await menuAt("A21", "Quitar salto de página");
+    await expect(page.locator(".page-break.h.manual")).toHaveCount(1);
+    await menuAt("B5", "Restablecer todos los saltos de página");
+    await expect(page.locator(".page-break.h.manual")).toHaveCount(0);
+    expect(errors).toEqual([]);
   });
 });

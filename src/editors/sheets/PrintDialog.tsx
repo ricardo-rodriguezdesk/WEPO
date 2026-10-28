@@ -101,10 +101,11 @@ export default function PrintDialog({ selectionLabel, page, initial, rangeFor, d
             header: fillPageFields(form.header, fileName, sheetName),
             footer: fillPageFields(form.footer, fileName, sheetName),
             repeat: parseRepeat(form.repeatRows),
+            breaks: { rows: page.row_breaks ?? [], cols: page.col_breaks ?? [] },
           }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(effective), JSON.stringify(range), images, form, fileName, sheetName],
+    [JSON.stringify(effective), JSON.stringify(range), images, form, fileName, sheetName, page],
   );
   const layout = useMemo(() => (job ? printLayout(job, data) : null), [job, data]);
   const total = layout?.pages.length ?? 0;

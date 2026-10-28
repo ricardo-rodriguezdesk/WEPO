@@ -12,7 +12,7 @@ import { ICON_GLYPHS, cellCss } from "./cellStyle";
 import { tableAt, withTableStyle } from "./tables";
 import type { Axis } from "./layout";
 import type { MergedCells } from "./regions";
-import type { Layout, Margins, Paper, PrintPage, Scaling } from "./printLayout";
+import type { Layout, ManualBreaks, Margins, Paper, PrintPage, Scaling } from "./printLayout";
 import { HEADER_TEXT_HEIGHT, HEADING_HEIGHT, HEADING_WIDTH, layoutPages } from "./printLayout";
 import "./print.css";
 
@@ -36,6 +36,8 @@ export type PrintJob = PrintOptions & {
   footer: string;
   /** Filas que se repiten arriba en cada página (desde 0). */
   repeat: [number, number] | null;
+  /** Saltos de página puestos a mano. */
+  breaks?: ManualBreaks;
 };
 
 /** "[Archivo] · [Fecha]" → "Ventas.xlsx · 22/10/2026". [Página] y [Páginas] se llenan en cada página. */
@@ -103,7 +105,7 @@ export type SheetData = {
 };
 
 export function printLayout(job: PrintJob, data: SheetData): Layout {
-  return layoutPages(job.range, data.cols, data.rows, { ...job, header: Boolean(job.header), footer: Boolean(job.footer) }, job.repeat);
+  return layoutPages(job.range, data.cols, data.rows, { ...job, header: Boolean(job.header), footer: Boolean(job.footer) }, job.repeat, job.breaks);
 }
 
 /** Una página impresa, a tamaño real (px CSS). */

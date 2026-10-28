@@ -1478,6 +1478,7 @@ export default function SheetEditor(props: Props) {
       header: fillPageFields(page.header, fileName, sheetName),
       footer: fillPageFields(page.footer, fileName, sheetName),
       repeat: page.repeat_rows ? [page.repeat_rows[0] - 1, page.repeat_rows[1] - 1] : null,
+      breaks: { rows: page.row_breaks ?? [], cols: page.col_breaks ?? [] },
     });
   }
 
@@ -1889,6 +1890,17 @@ export default function SheetEditor(props: Props) {
       freezeItem,
       { label: "Establecer área de impresión", disabled: !isMultiSelection, action: () => setPrintArea(false) },
       ...(view.page?.print_area ? [{ label: "Quitar área de impresión", action: () => setPrintArea(true) }] : []),
+      {
+        label: "Insertar salto de página",
+        disabled: !((!wholeCols && selection.r1 > 0) || (!wholeRows && selection.c1 > 0)),
+        action: insertPageBreak,
+      },
+      ...((!wholeCols && (view.page?.row_breaks ?? []).includes(selection.r1)) || (!wholeRows && (view.page?.col_breaks ?? []).includes(selection.c1))
+        ? [{ label: "Quitar salto de página", action: removePageBreak }]
+        : []),
+      ...((view.page?.row_breaks ?? []).length || (view.page?.col_breaks ?? []).length
+        ? [{ label: "Restablecer todos los saltos de página", action: () => setPageBreaks([], [], "Se quitaron los saltos de página puestos a mano") }]
+        : []),
       { label: "Borrar contenido", shortcut: "⌫", action: clearSelection },
     ];
   }
@@ -1910,6 +1922,10 @@ export default function SheetEditor(props: Props) {
       // Sin almacenamiento la preferencia no se recuerda.
     }
   }
+  // Una hoja con saltos de página puestos a mano los muestra al abrirla (si no, no se notan).
+  useEffect(() => {
+    if (view.page?.row_breaks?.length || view.page?.col_breaks?.length) setShowBreaksState(true);
+  }, [sheet]); // eslint-disable-line react-hooks/exhaustive-deps
   const pageBreaks = useMemo(() => {
     if (!showBreaks || dialog === "print" || pickingArea) return null;
     const page = view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null };
@@ -1917,13 +1933,102 @@ export default function SheetEditor(props: Props) {
     const range = printRangeFor(options.area, pageForm(page).printArea);
     if (!range) return null;
     const repeat: [number, number] | null = page.repeat_rows ? [page.repeat_rows[0] - 1, page.repeat_rows[1] - 1] : null;
-    const layout = layoutPages(range, baseCols, baseRows, { ...options, header: Boolean(page.header), footer: Boolean(page.footer) }, repeat);
-    // Dónde termina cada grupo de columnas y de filas (la última columna o fila de la página).
-    const colEnds = [...new Set(layout.pages.map((p) => p.cols[p.cols.length - 1]).filter((c) => c !== undefined))];
-    const rowEnds = [...new Set(layout.pages.map((p) => p.rows[p.rows.length - 1]).filter((r) => r !== undefined))];
-    return { range, colEnds, rowEnds, pages: layout.pages.length };
+    const manual = { rows: page.row_breaks ?? [], cols: page.col_breaks ?? [] };
+    const layout = layoutPages(range, baseCols, baseRows, { ...options, header: Boolean(page.header), footer: Boolean(page.footer) }, repeat, manual);
+    // Dónde empieza cada grupo de filas y de columnas (ahí va el corte), si lo puso la persona,
+    // y dónde termina lo que se imprime.
+    const first = layout.pages[0];
+    const rowGroups = layout.pages.filter((p) => p.cols[0] === first?.cols[0]).map((p) => p.rows).filter((g) => g.length);
+    const colGroups = layout.pages.filter((p) => p.rows[0] === first?.rows[0]).map((p) => p.cols).filter((g) => g.length);
+    const cuts = (groups: number[][], list: number[]) =>
+      groups.slice(1).map((g, i) => {
+        const prevLast = groups[i][groups[i].length - 1];
+        return { at: g[0], manual: list.some((b) => b > prevLast && b <= g[0]) };
+      });
+    const rowCuts = cuts(rowGroups, manual.rows);
+    const colCuts = cuts(colGroups, manual.cols);
+    const lastRow = rowGroups.at(-1)?.at(-1);
+    const lastCol = colGroups.at(-1)?.at(-1);
+    return { range, rowCuts, colCuts, rowEdge: lastRow === undefined ? null : lastRow + 1, colEdge: lastCol === undefined ? null : lastCol + 1, pages: layout.pages.length };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBreaks, dialog, pickingArea, view, baseCols, baseRows, printJob]);
+  // ───────────── saltos de página a mano (como en Excel) ─────────────
+  const manualRows = view.page?.row_breaks ?? [];
+  const manualCols = view.page?.col_breaks ?? [];
+
+  function setPageBreaks(rows: number[], cols: number[], text: string) {
+    mutate(() => sheetApi.pageBreaks(sheet, rows, cols));
+    setShowBreaks(true);
+    showStatus({ text });
+  }
+
+  /** Como Excel: con filas elegidas, el salto va arriba de ellas; con columnas, a su izquierda; con una celda, las dos cosas. */
+  function insertPageBreak() {
+    const r = selection.r1;
+    const c = selection.c1;
+    const rows = !wholeCols && r > 0 && !manualRows.includes(r) ? [...manualRows, r] : manualRows;
+    const cols = !wholeRows && c > 0 && !manualCols.includes(c) ? [...manualCols, c] : manualCols;
+    if (rows === manualRows && cols === manualCols) return showStatus({ text: "Aquí no se puede poner un salto de página (está en la primera fila o columna, o ya hay uno)" });
+    setPageBreaks(rows, cols, "Salto de página insertado: lo que sigue se imprime en otra página");
+  }
+
+  function removePageBreak() {
+    const rows = wholeCols ? manualRows : manualRows.filter((x) => x !== selection.r1);
+    const cols = wholeRows ? manualCols : manualCols.filter((x) => x !== selection.c1);
+    setPageBreaks(rows, cols, "Se quitó el salto de página");
+  }
+
+  /** Arrastrar un corte: uno puesto a mano se mueve; uno automático se vuelve salto a mano en el lugar nuevo. */
+  const [breakDrag, setBreakDrag] = useState<{ axis: "row" | "col"; from: number; manual: boolean; to: number } | null>(null);
+  const breakDragRef = useRef(breakDrag);
+  breakDragRef.current = breakDrag;
+  function boundaryAt(axis: Axis, pos: number, limit: number): number {
+    let lo = 0;
+    let hi = limit;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (axis.start(mid) < pos) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 && Math.abs(axis.start(lo - 1) - pos) < Math.abs(axis.start(lo) - pos) ? lo - 1 : lo;
+  }
+  function startBreakDrag(e: React.PointerEvent, axis: "row" | "col", at: number, manual: boolean) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setBreakDrag({ axis, from: at, manual, to: at });
+    const el = scrollRef.current;
+    if (!el) return;
+    const move = (ev: PointerEvent) => {
+      const box = el.getBoundingClientRect();
+      const to =
+        axis === "row"
+          ? boundaryAt(rowAxis, ev.clientY - box.top + el.scrollTop - HEADER_HEIGHT, rowCount + 1)
+          : boundaryAt(colAxis, ev.clientX - box.left + el.scrollLeft - HEADER_WIDTH, colCount + 1);
+      setBreakDrag((d) => (d && d.to !== to ? { ...d, to } : d));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const d = breakDragRef.current;
+      setBreakDrag(null);
+      if (!d || !pageBreaks || d.to === d.from) return;
+      const range = pageBreaks.range;
+      const [lo, hi] = d.axis === "row" ? [range.r1, range.r2] : [range.c1, range.c2];
+      const list = d.axis === "row" ? manualRows : manualCols;
+      const next = (d.manual ? list.filter((x) => x !== d.from) : [...list]).filter((x) => x !== d.to);
+      const inside = d.to > lo && d.to <= hi;
+      if (inside) next.push(d.to);
+      setPageBreaks(
+        d.axis === "row" ? next : manualRows,
+        d.axis === "col" ? next : manualCols,
+        inside ? "Salto de página movido" : "Se quitó el salto de página",
+      );
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
   const selectionLabel = isMultiSelection
     ? wholeCols
       ? selection.c1 === selection.c2
@@ -2427,14 +2532,33 @@ export default function SheetEditor(props: Props) {
               const bottom = HEADER_HEIGHT + rowAxis.start(pageBreaks.range.r2 + 1);
               const left = HEADER_WIDTH + colAxis.start(pageBreaks.range.c1);
               const right = HEADER_WIDTH + colAxis.start(pageBreaks.range.c2 + 1);
+              const col = (at: number, cls: string, manual = false) => (
+                <div
+                  key={`pbc-${cls}-${at}`}
+                  className={`page-break v ${cls}`}
+                  style={{ left: HEADER_WIDTH + colAxis.start(at) - 1, top, height: bottom - top }}
+                  data-col={at}
+                  title={cls.startsWith("drag") ? (manual ? "Salto de página (puesto a mano): arrástralo para moverlo, o sácalo de lo que se imprime para quitarlo" : "Corte automático: arrástralo para poner el salto en otro lugar") : undefined}
+                  onPointerDown={cls.startsWith("drag") ? (e) => startBreakDrag(e, "col", at, manual) : undefined}
+                />
+              );
+              const row = (at: number, cls: string, manual = false) => (
+                <div
+                  key={`pbr-${cls}-${at}`}
+                  className={`page-break h ${cls}`}
+                  style={{ top: HEADER_HEIGHT + rowAxis.start(at) - 1, left, width: right - left }}
+                  data-row={at}
+                  title={cls.startsWith("drag") ? (manual ? "Salto de página (puesto a mano): arrástralo para moverlo, o sácalo de lo que se imprime para quitarlo" : "Corte automático: arrástralo para poner el salto en otro lugar") : undefined}
+                  onPointerDown={cls.startsWith("drag") ? (e) => startBreakDrag(e, "row", at, manual) : undefined}
+                />
+              );
               return (
                 <>
-                  {pageBreaks.colEnds.map((c) => (
-                    <div key={`pbc-${c}`} className="page-break v" style={{ left: HEADER_WIDTH + colAxis.start(c + 1) - 1, top, height: bottom - top }} />
-                  ))}
-                  {pageBreaks.rowEnds.map((r) => (
-                    <div key={`pbr-${r}`} className="page-break h" style={{ top: HEADER_HEIGHT + rowAxis.start(r + 1) - 1, left, width: right - left }} />
-                  ))}
+                  {pageBreaks.colCuts.map((c) => (breakDrag?.axis === "col" && breakDrag.from === c.at ? null : col(c.at, c.manual ? "drag manual" : "drag", c.manual)))}
+                  {pageBreaks.colEdge !== null && col(pageBreaks.colEdge, "edge")}
+                  {pageBreaks.rowCuts.map((r) => (breakDrag?.axis === "row" && breakDrag.from === r.at ? null : row(r.at, r.manual ? "drag manual" : "drag", r.manual)))}
+                  {pageBreaks.rowEdge !== null && row(pageBreaks.rowEdge, "edge")}
+                  {breakDrag && (breakDrag.axis === "row" ? row(breakDrag.to, "ghost") : col(breakDrag.to, "ghost"))}
                 </>
               );
             })()}

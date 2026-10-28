@@ -68,6 +68,9 @@ pub struct RawPage {
     pub area: Option<String>,
     /// Posición de la hoja en el libro (para localSheetId).
     pub sheet_index: u32,
+    /// Saltos de página a mano (<rowBreaks>/<colBreaks>): el `id` de cada <brk>.
+    pub row_breaks: Vec<i32>,
+    pub col_breaks: Vec<i32>,
 }
 
 /// Nota de una celda, lista para escribirla (fila y columna desde 0).
@@ -456,8 +459,24 @@ pub fn read_pages(path: &str) -> Result<Vec<(String, RawPage)>, String> {
         let mut reader = Reader::from_reader(xml);
         let mut buf = Vec::new();
         let mut inside: Option<&str> = None;
+        let mut breaks: Option<bool> = None; // dentro de <rowBreaks> (true) o <colBreaks> (false)
         loop {
             match reader.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+                Event::Start(e) if e.local_name().as_ref() == "rowBreaks" => breaks = Some(true),
+                Event::Start(e) if e.local_name().as_ref() == "colBreaks" => breaks = Some(false),
+                Event::End(e) if matches!(e.local_name().as_ref(), "rowBreaks" | "colBreaks") => breaks = None,
+                Event::Empty(e) | Event::Start(e) if e.local_name().as_ref() == "brk" && breaks.is_some() => {
+                    let a = attributes(&e);
+                    // Solo los puestos a mano (Excel no guarda los automáticos, pero otros programas sí).
+                    let manual = a.get("man").map(|m| m == "1" || m == "true").unwrap_or(false);
+                    if let (true, Some(id)) = (manual, a.get("id").and_then(|i| i.parse::<i32>().ok())) {
+                        if breaks == Some(true) {
+                            pages[i].1.row_breaks.push(id);
+                        } else {
+                            pages[i].1.col_breaks.push(id);
+                        }
+                    }
+                }
                 Event::Start(e) if e.local_name().as_ref() == "oddHeader" => inside = Some("header"),
                 Event::Start(e) if e.local_name().as_ref() == "oddFooter" => inside = Some("footer"),
                 Event::End(e) if matches!(e.local_name().as_ref(), "oddHeader" | "oddFooter") => inside = None,
@@ -512,7 +531,10 @@ pub fn read_pages(path: &str) -> Result<Vec<(String, RawPage)>, String> {
             buf.clear();
         }
     }
-    Ok(pages.into_iter().filter(|(_, p)| !p.header.is_empty() || !p.footer.is_empty() || p.titles.is_some() || p.area.is_some()).collect())
+    Ok(pages
+        .into_iter()
+        .filter(|(_, p)| !p.header.is_empty() || !p.footer.is_empty() || p.titles.is_some() || p.area.is_some() || !p.row_breaks.is_empty() || !p.col_breaks.is_empty())
+        .collect())
 }
 
 /// Estilo de cada tabla del archivo (nombre de la tabla → "TableStyleMedium2").
@@ -1338,6 +1360,19 @@ pub fn write_extras(path: &str, sheets: &[(String, SheetExtras)]) -> Result<(), 
                 }
                 hf.push_str("</headerFooter>");
                 xml = insert_before_first(&xml, &hf, AFTER_HEADER_FOOTER);
+            }
+            // Saltos de página a mano: <rowBreaks> y luego <colBreaks>, después de <headerFooter>.
+            xml = remove_element(&xml, "rowBreaks");
+            xml = remove_element(&xml, "colBreaks");
+            if !page.row_breaks.is_empty() {
+                let brks: String = page.row_breaks.iter().map(|id| format!(r#"<brk id="{id}" max="16383" man="1"/>"#)).collect();
+                let n = page.row_breaks.len();
+                xml = insert_before_first(&xml, &format!(r#"<rowBreaks count="{n}" manualBreakCount="{n}">{brks}</rowBreaks>"#), &AFTER_HEADER_FOOTER[1..]);
+            }
+            if !page.col_breaks.is_empty() {
+                let brks: String = page.col_breaks.iter().map(|id| format!(r#"<brk id="{id}" max="1048575" man="1"/>"#)).collect();
+                let n = page.col_breaks.len();
+                xml = insert_before_first(&xml, &format!(r#"<colBreaks count="{n}" manualBreakCount="{n}">{brks}</colBreaks>"#), &AFTER_HEADER_FOOTER[2..]);
             }
         }
 

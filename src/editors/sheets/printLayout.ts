@@ -38,6 +38,9 @@ export type PageSetup = {
   footer: boolean;
 };
 
+/** Saltos de página puestos a mano: fila o columna (desde 0) con que empieza cada página nueva. */
+export type ManualBreaks = { rows: number[]; cols: number[] };
+
 export type PrintPage = {
   /** Columnas y filas (visibles) de esta página. */
   cols: number[];
@@ -61,8 +64,12 @@ export function pageSize(setup: Pick<PageSetup, "paper" | "landscape">): { width
   return setup.landscape ? { width: p.height, height: p.width } : { width: p.width, height: p.height };
 }
 
-/** Reparte el rango en páginas: primero hacia abajo y luego a la derecha, como Excel. */
-export function layoutPages(range: Range, cols: Axis, rows: Axis, setup: PageSetup, repeat: [number, number] | null): Layout {
+/**
+ * Reparte el rango en páginas: primero hacia abajo y luego a la derecha, como Excel.
+ * Los saltos a mano también cortan (como en Excel: con «toda la hoja en una
+ * página» no cuentan, y con «todas las columnas en una página», los de columna tampoco).
+ */
+export function layoutPages(range: Range, cols: Axis, rows: Axis, setup: PageSetup, repeat: [number, number] | null, breaks: ManualBreaks = { rows: [], cols: [] }): Layout {
   const { width, height } = pageSize(setup);
   const margin = MARGINS[setup.margins].px;
   const contentW = width - margin * 2;
@@ -92,13 +99,13 @@ export function layoutPages(range: Range, cols: Axis, rows: Axis, setup: PageSet
 
   const capW = contentW / scale - headW;
   const capH = contentH / scale - fixedH;
-  const groups = (list: number[], size: (i: number) => number, cap: number): number[][] => {
+  const groups = (list: number[], size: (i: number) => number, cap: number, manual: Set<number>): number[][] => {
     const out: number[][] = [];
     let current: number[] = [];
     let used = 0;
     for (const i of list) {
       const s = size(i);
-      if (current.length && used + s > cap) {
+      if (current.length && (used + s > cap || manual.has(i))) {
         out.push(current);
         current = [];
         used = 0;
@@ -109,8 +116,12 @@ export function layoutPages(range: Range, cols: Axis, rows: Axis, setup: PageSet
     if (current.length) out.push(current);
     return out.length ? out : [[]];
   };
-  const colGroups = groups(visibleCols, (c) => cols.size(c), capW);
-  const rowGroups = groups(visibleRows, (r) => rows.size(r), capH);
+  const rowBreaks = new Set(setup.scaling === "page" ? [] : breaks.rows);
+  const colBreaks = new Set(setup.scaling === "none" ? breaks.cols : []);
+  // Un salto en una fila escondida corta en la siguiente que se ve.
+  const shift = (set: Set<number>, visible: number[]) => new Set([...set].map((b) => visible.find((i) => i >= b)).filter((i): i is number => i !== undefined));
+  const colGroups = groups(visibleCols, (c) => cols.size(c), capW, shift(colBreaks, visibleCols));
+  const rowGroups = groups(visibleRows, (r) => rows.size(r), capH, shift(rowBreaks, visibleRows));
   const pages: PrintPage[] = [];
   for (const cg of colGroups) for (const rg of rowGroups) pages.push({ cols: cg, rows: rg });
   return { width, height, margin, scale, pages, repeated };
