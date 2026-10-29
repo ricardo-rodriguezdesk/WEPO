@@ -2,7 +2,9 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
-## Próxima versión (sin publicar)
+## 0.4.0 (29 de octubre de 2026)
+
+Sheets se acerca a Excel —tablas dinámicas, comentarios con respuestas, agrupar, proteger hojas y acomodar las páginas a mano— y llegan el índice y las notas al pie en Write, transiciones, gráficas y animaciones en Present, y contraseñas, OCR, tachado y marca de agua en PDF. Ahora hay 35 pruebas automáticas de la interfaz.
 
 ### Tachar información y marca de agua en WEPO PDF
 - Herramienta *Tachar información*: arrastra un recuadro sobre lo que quieras ocultar (texto, una foto, una firma) o escribe un texto en *Tachar todas las veces que aparece* (un RFC, un nombre, una cuenta) para tacharlo en todo el PDF.

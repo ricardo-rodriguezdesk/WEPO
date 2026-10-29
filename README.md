@@ -113,7 +113,7 @@ npm run tauri build
 
 Al terminar quedan en `src-tauri/target/release/bundle/macos/WEPO.app` y `src-tauri/target/release/bundle/dmg/`. Abre el .dmg y arrastra WEPO a la carpeta Aplicaciones.
 
-También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.3.1 && git push origin v0.3.1`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
+También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.4.0 && git push origin v0.4.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
 
 **Primera vez que la abres:** WEPO todavía no está firmado por Apple, así que macOS no la deja abrir con doble clic. Haz clic derecho sobre WEPO en Aplicaciones → **Abrir** → **Abrir**. Solo hace falta una vez.
 
