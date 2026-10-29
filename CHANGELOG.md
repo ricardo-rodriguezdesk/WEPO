@@ -2,6 +2,16 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
+## Próxima versión (sin publicar)
+
+### Notas al final en WEPO Write
+- Botón *Nota al final* (⌘⌥D / Ctrl+Alt+D, como en Word): el número va volado en el texto con i, ii, iii… y todas las notas quedan juntas después del texto del documento (si no caben, empiezan en una hoja nueva). Clic en la nota para cambiarla o borrarla.
+- Conviven con las notas al pie (1, 2, 3…). Se guardan en .docx como las de Word (endnotes.xml) y se leen las de Word y las de LibreOffice (.odt); antes se perdían.
+
+### Columnas en WEPO Write
+- Botón *Columnas*: lo que elegiste (o el párrafo donde estás) pasa a 2 o 3 columnas que se emparejan solas, como un boletín; el resto del documento sigue igual. *Una columna* lo regresa.
+- Se guarda en .docx como sección continua con columnas (Word y LibreOffice lo abren igual) y se leen las secciones con columnas de Word. Por ahora, un bloque de columnas debe caber en una hoja.
+
 ## 0.4.0 (29 de octubre de 2026)
 
 Sheets se acerca a Excel —tablas dinámicas, comentarios con respuestas, agrupar, proteger hojas y acomodar las páginas a mano— y llegan el índice y las notas al pie en Write, transiciones, gráficas y animaciones en Present, y contraseñas, OCR, tachado y marca de agua en PDF. Ahora hay 35 pruebas automáticas de la interfaz.

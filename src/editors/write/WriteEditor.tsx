@@ -19,7 +19,7 @@ import { clampZoom, stepZoom } from "../sheets/layout";
 import type { HeaderFooterSet, PageSize, WriteDocument } from "./docx";
 import { LETTER, NO_HEADER_FOOTER } from "./docx";
 import type { PageLayout, ParagraphFormat } from "./extensions";
-import { ColoredCell, ColoredHeader, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, currentParagraphFormat, fillFields } from "./extensions";
+import { ColoredCell, ColoredHeader, Columns, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, columnsAt, currentParagraphFormat, fillFields } from "./extensions";
 import HeaderFooterDialog from "./HeaderFooterDialog";
 import FootnoteDialog from "./FootnoteDialog";
 import { Footnote, TableOfContents, footnoteAt, footnotePos, withTocCache } from "./notes";
@@ -146,7 +146,7 @@ export default function WriteEditor(props: Props) {
   };
 
   // Nota al pie que se está escribiendo (posición en el documento, número y texto).
-  const [noteEdit, setNoteEdit] = useState<{ pos: number; n: number; text: string } | null>(null);
+  const [noteEdit, setNoteEdit] = useState<{ pos: number; n: number; text: string; kind: "foot" | "end" } | null>(null);
   const editNote = useRef<(pos: number) => void>(() => {});
 
   const extensions = useMemo(
@@ -166,6 +166,7 @@ export default function WriteEditor(props: Props) {
       ColoredCell,
       CharacterCount,
       PageBreak,
+      Columns,
       Footnote.configure({ onEdit: (pos) => editNote.current(pos) }),
       TableOfContents,
       ParagraphFormatExtension,
@@ -507,8 +508,9 @@ export default function WriteEditor(props: Props) {
 
   const openFind = () => setFindOpen(true);
   const addFootnote = () => editor?.chain().focus().insertFootnote().run();
-  const commands = useRef({ saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, setTracking, tracking });
-  commands.current = { saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, setTracking, tracking };
+  const addEndnote = () => editor?.chain().focus().insertFootnote("", "end").run();
+  const commands = useRef({ saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, addEndnote, setTracking, tracking });
+  commands.current = { saveDocument, print, exportPdf, setZoom, zoom, openLinkDialog, openFind, addComment, addFootnote, addEndnote, setTracking, tracking };
   useEffect(() => {
     const stop = onCommand((command) => {
       const c = commands.current;
@@ -534,6 +536,12 @@ export default function WriteEditor(props: Props) {
       if (e.altKey && (e.code === "KeyF" || key === "f")) {
         e.preventDefault();
         commands.current.addFootnote();
+        return;
+      }
+      // ⌘⌥D: nota al final (como en Word).
+      if (e.altKey && (e.code === "KeyD" || key === "d")) {
+        e.preventDefault();
+        commands.current.addEndnote();
         return;
       }
       if (e.shiftKey && key === "e") {
@@ -569,7 +577,7 @@ export default function WriteEditor(props: Props) {
     // Clic en una nota al pie (abajo de la hoja): escribirla.
     const note = (e.target as HTMLElement).closest<HTMLElement>(".write-footnote[data-note]");
     if (note && editor) {
-      const pos = footnotePos(editor.state, Number(note.dataset.note));
+      const pos = footnotePos(editor.state, Number(note.dataset.note), note.dataset.kind === "end" ? "end" : "foot");
       if (pos !== null) {
         e.preventDefault();
         editNote.current(pos);
@@ -767,6 +775,7 @@ export default function WriteEditor(props: Props) {
         <FootnoteDialog
           key={noteEdit.pos}
           n={noteEdit.n}
+          kind={noteEdit.kind}
           text={noteEdit.text}
           onSave={saveNote}
           onDelete={deleteNote}
@@ -859,6 +868,7 @@ function WriteBar(props: {
       cellColor: (e.getAttributes("tableCell").backgroundColor ?? e.getAttributes("tableHeader").backgroundColor ?? null) as string | null,
       list: e.isActive("listItem"),
       format: currentParagraphFormat(e),
+      columns: columnsAt(e.state),
     }),
   });
   const indent = (step: number) => {
@@ -1082,6 +1092,41 @@ function WriteBar(props: {
             <path d="M4 6h10M4 10h10M4 14h6" />
             <path d="M17 4.5l1.6-.9V9" />
             <path d="M4 19h16" strokeDasharray="2 2" />
+          </svg>
+        </ToolButton>
+        <Popover
+          button={(toggle, open) => (
+            <ToolButton label={s.columns > 1 ? `Columnas: ${s.columns}` : "Columnas"} pressed={open || s.columns > 1} onClick={toggle}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+                <path d="M3 5h7M3 9h7M3 13h7M3 17h5M14 5h7M14 9h7M14 13h7M14 17h4" />
+              </svg>
+            </ToolButton>
+          )}
+        >
+          {(close) => (
+            <div className="write-menu" role="menu" aria-label="Columnas">
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={s.columns === n}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => (chain().setColumns(n).run(), close())}
+                >
+                  <span className="write-menu-check">{s.columns === n ? "✓" : ""}</span>
+                  {n === 1 ? "Una columna (normal)" : `${n} columnas`}
+                </button>
+              ))}
+              <p className="write-menu-hint">Lo que elegiste (o el párrafo) va en columnas; lo demás sigue igual.</p>
+            </div>
+          )}
+        </Popover>
+        <ToolButton label={keys("Nota al final (⌘⌥D)")} onClick={() => chain().insertFootnote("", "end").run()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M4 5h10M4 9h10M4 13h6" />
+            <path d="M16.5 4v5M19 4v5" />
+            <path d="M4 17h16M4 20.5h9" />
           </svg>
         </ToolButton>
         <ToolButton label="Índice (con los títulos y sus páginas)" onClick={() => chain().insertTableOfContents().run()}>

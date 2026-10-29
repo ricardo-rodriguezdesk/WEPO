@@ -1,6 +1,8 @@
 // Extensiones de TipTap propias de WEPO Write:
 //
 // - PageBreak: salto de página (⌘↩), que en el .docx es <w:br w:type="page"/>.
+// - Columns: un pedazo del documento a 2 o 3 columnas (como una sección continua
+//   de Word con columnas). Las columnas se emparejan solas.
 // - ParagraphFormat: interlineado, espacio antes y después, y sangrías.
 // - Search: resalta lo que se busca y permite ir de uno en uno o reemplazar.
 // - Pagination: corta el documento en páginas del tamaño real, con su
@@ -15,12 +17,13 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { TableCell, TableHeader } from "@tiptap/extension-table";
 import Strike from "@tiptap/extension-strike";
 import type { EditorView } from "@tiptap/pm/view";
-import { NoteMeasurer, notesBlock, notesIn } from "./notes";
+import { ENDNOTES_TOP, NoteMeasurer, endnotesBlock, endnotesOf, notesBlock, notesIn } from "./notes";
 import type { Note } from "./notes";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     pageBreak: { setPageBreak: () => ReturnType };
+    columns: { setColumns: (count: number) => ReturnType };
     paragraphFormat: { setParagraphFormat: (format: Partial<ParagraphFormat>) => ReturnType };
     search: {
       setSearch: (query: string, options?: SearchOptions) => ReturnType;
@@ -31,6 +34,62 @@ declare module "@tiptap/core" {
     };
     pagination: { refreshPages: () => ReturnType };
   }
+}
+
+// ───────────── columnas ─────────────
+
+export const Columns = Node.create({
+  name: "columns",
+  group: "block",
+  content: "block+",
+  defining: true,
+  addAttributes: () => ({
+    count: {
+      default: 2,
+      parseHTML: (el) => Math.min(3, Math.max(2, Number(el.getAttribute("data-count")) || 2)),
+      renderHTML: (attrs) => ({ "data-count": String(attrs.count), style: `column-count: ${attrs.count}` }),
+    },
+  }),
+  parseHTML: () => [{ tag: "div[data-columns]" }],
+  renderHTML: ({ HTMLAttributes }) => ["div", mergeAttributes(HTMLAttributes, { "data-columns": "", class: "write-columns" }), 0],
+  addCommands() {
+    return {
+      /** 2 o 3: lo elegido (o el párrafo) va en columnas; 1: deja de estar en columnas. */
+      setColumns:
+        (count: number) =>
+        ({ state, tr, dispatch }) => {
+          const { $from, $to } = state.selection;
+          // ¿Ya está dentro de un bloque de columnas?
+          for (let d = $from.depth; d > 0; d--) {
+            const node = $from.node(d);
+            if (node.type.name !== "columns") continue;
+            const pos = $from.before(d);
+            if (!dispatch) return true;
+            if (count <= 1) tr.replaceWith(pos, pos + node.nodeSize, node.content);
+            else tr.setNodeMarkup(pos, undefined, { ...node.attrs, count });
+            dispatch(tr);
+            return true;
+          }
+          if (count <= 1) return false;
+          // Los bloques de arriba que toca la selección.
+          const from = $from.before(1);
+          const to = $to.after(1);
+          const blocks = state.doc.slice(from, to).content;
+          if (!dispatch) return true;
+          tr.replaceWith(from, to, state.schema.nodes.columns.create({ count }, blocks));
+          tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(from + 2, tr.doc.content.size))));
+          dispatch(tr.scrollIntoView());
+          return true;
+        },
+    };
+  },
+});
+
+/** Cuántas columnas tiene el bloque donde está el cursor (1 si no está en columnas). */
+export function columnsAt(state: EditorState): number {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) if ($from.node(d).type.name === "columns") return Number($from.node(d).attrs.count) || 2;
+  return 1;
 }
 
 // ───────────── salto de página ─────────────
@@ -333,7 +392,7 @@ export type PageLayout = {
 
 /** Dónde empieza una página, cuánto espacio queda libre al pie de la anterior y sus notas al pie. */
 type Break = { pos: number; fill: number; notes: Note[]; notesHeight: number };
-type PageEnd = { fill: number; notes: Note[]; notesHeight: number };
+type PageEnd = { fill: number; notes: Note[]; notesHeight: number; endnotes?: Note[] };
 type PageState = { breaks: Break[]; end: PageEnd; pages: number; decorations: DecorationSet; stamp: string };
 
 export const pagesKey = new PluginKey<PageState>("wepo-pages");
@@ -371,6 +430,8 @@ function gapWidget(end: PageEnd, page: number, pages: number, layout: PageLayout
   const el = document.createElement("div");
   el.className = last ? "write-gap write-gap-end" : "write-gap";
   el.contentEditable = "false";
+  // Las notas al final van justo después del texto de la última hoja.
+  if (last && end.endnotes?.length) el.appendChild(endnotesBlock(end.endnotes));
   const space = document.createElement("div");
   space.className = "write-gap-fill";
   space.style.height = `${end.fill}px`;
@@ -407,7 +468,11 @@ function buildDecorations(doc: PMNode, breaks: Break[], end: PageEnd, layout: Pa
     Decoration.widget(b.pos, () => gapWidget(b, i + 1, pages, layout, false), { side: -1, ignoreSelection: true, key: `gap-${i}-${b.fill}-${pages}-${v}-${notesKey(b.notes)}` }),
   );
   decos.push(
-    Decoration.widget(doc.content.size, () => gapWidget(end, pages, pages, layout, true), { side: 1, ignoreSelection: true, key: `end-${end.fill}-${pages}-${v}-${notesKey(end.notes)}` }),
+    Decoration.widget(doc.content.size, () => gapWidget(end, pages, pages, layout, true), {
+      side: 1,
+      ignoreSelection: true,
+      key: `end-${end.fill}-${pages}-${v}-${notesKey(end.notes)}-${notesKey(end.endnotes ?? [])}`,
+    }),
   );
   return DecorationSet.create(doc, decos);
 }
@@ -462,8 +527,17 @@ function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): 
     while (bottom - pageStart > contentHeight + 0.5) pageStart += contentHeight;
     index++;
   });
+  // Las notas al final: si no caben en lo que queda de la última hoja, empiezan en una hoja nueva.
+  const endnotes = endnotesOf(view.state.doc);
+  const endHeight = endnotes.length ? measurer.height(root.parentElement ?? root, textWidth, zoom, endnotes) + ENDNOTES_TOP : 0;
+  if (endHeight && cursor + endHeight > pageStart + contentHeight - notesHeight(pageNotes) + 0.5 && cursor > pageStart + 1) {
+    const h = notesHeight(pageNotes);
+    breaks.push({ pos: view.state.doc.content.size, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h });
+    pageStart = cursor;
+    pageNotes = [];
+  }
   const h = notesHeight(pageNotes);
-  return { breaks, end: { fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h } };
+  return { breaks, end: { fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h - endHeight)), notes: pageNotes, notesHeight: h, endnotes } };
 }
 
 export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: (pages: number) => void }>({
@@ -485,7 +559,7 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
       new Plugin<PageState>({
         key: pagesKey,
         state: {
-          init: (_, state) => ({ breaks: [], end: { fill: 0, notes: [], notesHeight: 0 }, pages: 1, decorations: DecorationSet.create(state.doc, []), stamp: "" }),
+          init: (_, state) => ({ breaks: [], end: { fill: 0, notes: [], notesHeight: 0, endnotes: [] }, pages: 1, decorations: DecorationSet.create(state.doc, []), stamp: "" }),
           apply(tr, prev) {
             const meta = tr.getMeta(pagesKey) as { breaks?: Break[]; end?: PageEnd; stamp?: string; refresh?: boolean } | undefined;
             if (meta?.refresh) return { ...prev, stamp: "" };
@@ -524,6 +598,7 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
               breaks.length === prev.breaks.length &&
               Math.abs(end.fill - prev.end.fill) < 2 &&
               sameNotes(end.notes, prev.end.notes) &&
+              sameNotes(end.endnotes ?? [], prev.end.endnotes ?? []) &&
               breaks.every((b, i) => b.pos === prev.breaks[i].pos && Math.abs(b.fill - prev.breaks[i].fill) < 2 && sameNotes(b.notes, prev.breaks[i].notes));
             if (same || rounds > 6) return;
             rounds++;

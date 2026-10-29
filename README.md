@@ -280,6 +280,7 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Sheets: proteger hojas con contraseña, con celdas editables
 - [x] WEPO PDF: tachar información (se borra de verdad) y marca de agua
 - [x] WEPO Write: índice automático y notas al pie
+- [x] WEPO Write: notas al final y texto en columnas
 - [x] WEPO Present: transiciones y gráficas
 - [x] WEPO Present: animaciones de entrada
 - [x] WEPO PDF: abrir, editar y guardar PDF con contraseña (y poner o quitar la contraseña)

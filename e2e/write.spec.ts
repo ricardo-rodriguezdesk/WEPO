@@ -141,4 +141,115 @@ test.describe("WEPO Write", () => {
     expect(text[1]).toMatch(/2 Segunda nota\.$/);
     expect(errors).toEqual([]);
   });
+  test("notas al final: i, ii… después del texto, se guardan en Word y se vuelven a abrir", async ({ page }) => {
+    const errors = collectErrors(page);
+    await home(page);
+    await page.locator(".home-card.kind-write").click();
+    await page.locator(".write-content").click();
+    const k = page.keyboard;
+    await k.type("Primera idea");
+    await page.locator("[aria-label^='Nota al final']").click();
+    await expect(page.getByRole("dialog", { name: "Nota al final i" })).toBeVisible();
+    await page.getByLabel("Texto de la nota").fill("Ver el anexo A.");
+    await page.getByRole("dialog").getByRole("button", { name: "Listo" }).click();
+    await k.press("End");
+    await k.type(" y una nota al pie");
+    await k.press("ControlOrMeta+Alt+f");
+    await page.getByLabel("Texto de la nota").fill("Esta sí va al pie.");
+    await k.press("Enter");
+    await k.press("End");
+    await k.press("Enter");
+    await k.type("Segunda idea");
+    await k.press("ControlOrMeta+Alt+d");
+    await page.getByLabel("Texto de la nota").fill("Datos de 2025.");
+    await k.press("Enter");
+
+    const endnotes = page.locator(".write-endnotes .write-footnote");
+    await expect(endnotes).toHaveText(["i Ver el anexo A.", "ii Datos de 2025."]);
+    await expect(page.locator(".write-gap > .write-footnotes:not(.write-endnotes) .write-footnote")).toHaveText(["1 Esta sí va al pie."]);
+    // Las llamadas en el texto: al final, al pie, al final.
+    const refs = await page.locator(".write-content .write-fn-ref").evaluateAll((els) => els.map((e) => e.getAttribute("data-kind") ?? "foot"));
+    expect(refs).toEqual(["end", "foot", "end"]);
+
+    // Clic en la nota al final para cambiarla.
+    await endnotes.last().click();
+    await expect(page.getByRole("dialog", { name: "Nota al final ii" })).toBeVisible();
+    await page.getByLabel("Texto de la nota").fill("Datos de 2026.");
+    await page.getByRole("dialog").getByRole("button", { name: "Listo" }).click();
+
+    const out = outFile("notas-al-final.docx");
+    await saveAs(page, out);
+    await k.press("ControlOrMeta+s");
+    await expect(page.locator(".write-footer .sheet-status")).toContainText("Guardado");
+    const { readFileSync } = await import("node:fs");
+    const JSZip = (await import("jszip")).default;
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    const endXml = (await zip.file("word/endnotes.xml")?.async("string")) ?? "";
+    expect(endXml).toContain("Ver el anexo A.");
+    expect(endXml).toContain("Datos de 2026.");
+    expect((await zip.file("word/document.xml")!.async("string")).match(/<w:endnoteReference/g)).toHaveLength(2);
+
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(endnotes).toHaveText(["i Ver el anexo A.", "ii Datos de 2026."]);
+    await expect(page.locator(".write-notice")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+  test("columnas: un pedazo a dos columnas, se guarda en Word como sección y se vuelve a abrir", async ({ page }) => {
+    const errors = collectErrors(page);
+    await home(page);
+    await page.locator(".home-card.kind-write").click();
+    await page.locator(".write-content").click();
+    const k = page.keyboard;
+    await k.type("Título del boletín");
+    await k.press("Enter");
+    const long = "Este texto es largo para que se reparta en dos columnas parejas, como en un periódico o un boletín. ";
+    await k.type(long.repeat(3));
+    await k.press("Enter");
+    await k.type(long.repeat(3));
+    await k.press("Enter");
+    await k.type("Texto normal al final.");
+    // Elegir los dos párrafos largos y ponerlos a dos columnas.
+    const paras = page.locator(".write-content > p");
+    await paras.nth(1).click();
+    await k.press("Home");
+    await k.down("Shift");
+    await paras.nth(2).click();
+    await k.up("Shift");
+    await page.getByRole("button", { name: "Columnas" }).click();
+    await page.getByRole("menuitemradio", { name: "2 columnas" }).click();
+    const block = page.locator(".write-content > .write-columns");
+    await expect(block).toHaveAttribute("data-count", "2");
+    await expect(block.locator("p")).toHaveCount(2);
+    expect(await block.evaluate((e) => getComputedStyle(e).columnCount)).toBe("2");
+    await expect(page.locator(".write-content > p")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Columnas: 2" })).toBeVisible();
+
+    const out = outFile("columnas.docx");
+    await saveAs(page, out);
+    await k.press("ControlOrMeta+s");
+    await expect(page.locator(".write-footer .sheet-status")).toContainText("Guardado");
+    const { readFileSync } = await import("node:fs");
+    const JSZip = (await import("jszip")).default;
+    const xml = await (await JSZip.loadAsync(readFileSync(out))).file("word/document.xml")!.async("string");
+    expect(xml).toContain('<w:cols w:num="2" w:space="720"/>');
+    expect(xml.match(/<w:sectPr>/g)).toHaveLength(3);
+
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(block).toHaveAttribute("data-count", "2");
+    await expect(block.locator("p")).toHaveCount(2);
+    await expect(page.locator(".write-content > p")).toHaveText(["Título del boletín", "Texto normal al final."]);
+    await expect(page.locator(".write-notice")).toHaveCount(0);
+
+    // Volver a una columna.
+    await block.locator("p").first().click();
+    await page.getByRole("button", { name: "Columnas: 2" }).click();
+    await page.getByRole("menuitemradio", { name: "Una columna (normal)" }).click();
+    await expect(block).toHaveCount(0);
+    await expect(page.locator(".write-content > p")).toHaveCount(4);
+    expect(errors).toEqual([]);
+  });
 });

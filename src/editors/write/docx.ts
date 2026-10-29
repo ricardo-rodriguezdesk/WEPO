@@ -209,12 +209,19 @@ class Reader {
   openComments = new Set<string>();
   /** Texto de cada nota al pie, por su id en footnotes.xml. */
   footnotes = new Map<string, string>();
+  /** Texto de cada nota al final, por su id en endnotes.xml. */
+  endnotes = new Map<string, string>();
   constructor(private zip: JSZip) {}
 
-  /** Notas al pie (footnotes.xml): el texto de cada una, sin su número. */
+  /** Notas al pie (footnotes.xml) y al final (endnotes.xml): el texto de cada una, sin su número. */
   async loadFootnotes() {
-    const root = await this.part("footnotes");
-    for (const f of kids(root, "footnote")) {
+    await this.loadNotes("footnotes", "footnote", this.footnotes);
+    await this.loadNotes("endnotes", "endnote", this.endnotes);
+  }
+
+  private async loadNotes(part: string, tag: string, into: Map<string, string>) {
+    const root = await this.part(part);
+    for (const f of kids(root, tag)) {
       const type = attr(f, "type");
       if (type && type !== "normal") continue;
       const text = kids(f, "p")
@@ -225,7 +232,7 @@ class Reader {
         )
         .join("\n")
         .trim();
-      this.footnotes.set(attr(f, "id") ?? "", text);
+      into.set(attr(f, "id") ?? "", text);
     }
   }
 
@@ -427,7 +434,9 @@ class Reader {
               if (this.footnotes.has(id)) out.push({ type: "footnote", attrs: { text: this.footnotes.get(id) } });
               else this.unsupported.add("notas al pie");
             } else if (part.localName === "endnoteReference") {
-              this.unsupported.add("notas al final");
+              const id = attr(part, "id") ?? "";
+              if (this.endnotes.has(id)) out.push({ type: "footnote", attrs: { text: this.endnotes.get(id), kind: "end" } });
+              else this.unsupported.add("notas al final");
             } else if (part.localName === "commentReference" || part.localName === "annotationRef") {
               // La marca del comentario ya va sobre el texto.
             } else if (part.localName === "pict" || part.localName === "object") {
@@ -741,9 +750,37 @@ export async function readDocx(data: Uint8Array): Promise<WriteDocument> {
   await reader.loadFootnotes();
   const body = child(parse(xml).documentElement, "body");
   if (!body) throw new Error("El documento está vacío o dañado");
-  const content = await reader.blocks(body);
   const sectPr = child(body, "sectPr");
-  if (kids(body, "p").some((p) => child(child(p, "pPr"), "sectPr"))) reader.unsupported.add("varias secciones");
+  // El documento por secciones: las de 2 o más columnas van como bloque de columnas.
+  const groups: { els: Element[]; sect: Element | undefined }[] = [];
+  let current: Element[] = [];
+  for (const el of kids(body)) {
+    if (el.localName === "sectPr") continue;
+    const sect = el.localName === "p" ? child(child(el, "pPr"), "sectPr") : undefined;
+    if (!sect) {
+      current.push(el);
+      continue;
+    }
+    // El párrafo que solo marca el fin de la sección (sin texto) no se queda.
+    const hasContent = Array.from(el.getElementsByTagNameNS(W, "t")).some((t) => t.textContent) || el.getElementsByTagNameNS(W, "drawing").length > 0;
+    if (hasContent) current.push(el);
+    groups.push({ els: current, sect });
+    current = [];
+  }
+  groups.push({ els: current, sect: sectPr });
+  const columnsOf = (sect: Element | undefined) => Math.min(3, Math.max(1, Number(attr(child(sect, "cols"), "num")) || 1));
+  const finalPage = pageFrom(sectPr);
+  const content: JSONContent[] = [];
+  for (const group of groups) {
+    const container = body.ownerDocument.createElementNS(W, "w:body");
+    for (const el of group.els) container.appendChild(el.cloneNode(true));
+    const blocks = await reader.blocks(container);
+    const cols = columnsOf(group.sect);
+    if (cols > 1 && blocks.length) content.push({ type: "columns", attrs: { count: cols }, content: blocks });
+    else content.push(...blocks);
+    const p = pageFrom(group.sect);
+    if (group.sect && (p.width !== finalPage.width || p.height !== finalPage.height)) reader.unsupported.add("secciones con otro tamaño u orientación de hoja");
+  }
   const headerFooter = await readHeaderFooter(zip, reader, sectPr);
   return {
     content: { type: "doc", content: content.length ? content : [{ type: "paragraph" }] },
@@ -774,6 +811,8 @@ class Writer {
   liveComments: Comment[] = [];
   /** Texto de las notas al pie, en orden (en footnotes.xml van con id 1, 2, 3…). */
   footnotes: string[] = [];
+  /** Y el de las notas al final (endnotes.xml). */
+  endnotes: string[] = [];
 
   constructor(
     private page: PageSize,
@@ -927,27 +966,34 @@ class Writer {
       .join("");
   }
 
-  /** La llamada de una nota al pie (el número volado); el texto va en footnotes.xml. */
+  /** La llamada de una nota (el número volado); el texto va en footnotes.xml o endnotes.xml. */
   footnote(node: JSONContent): string {
+    if (node.attrs?.kind === "end") {
+      this.endnotes.push(String(node.attrs?.text ?? ""));
+      return `<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/></w:rPr><w:endnoteReference w:id="${this.endnotes.length}"/></w:r>`;
+    }
     this.footnotes.push(String(node.attrs?.text ?? ""));
     return `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="${this.footnotes.length}"/></w:r>`;
   }
 
-  /** word/footnotes.xml: las rayas de separación (como las pone Word) y cada nota. */
-  footnotesXml(): string {
-    const notes = this.footnotes
+  /** word/footnotes.xml (o endnotes.xml): las rayas de separación (como las pone Word) y cada nota. */
+  footnotesXml(kind: "foot" | "end" = "foot"): string {
+    const [tag, style, list] = kind === "end" ? ["endnote", "Endnote", this.endnotes] : ["footnote", "Footnote", this.footnotes];
+    const notes = list
       .map((text, i) => {
         const paragraphs = (text || " ")
           .split("\n")
           .map((line, k) => {
-            const ref = k === 0 ? '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>' : "";
-            return `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>${ref}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`;
+            const ref = k === 0 ? `<w:r><w:rPr><w:rStyle w:val="${style}Reference"/></w:rPr><w:${tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>` : "";
+            return `<w:p><w:pPr><w:pStyle w:val="${style}Text"/></w:pPr>${ref}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`;
           })
           .join("");
-        return `<w:footnote w:id="${i + 1}">${paragraphs}</w:footnote>`;
+        return `<w:${tag} w:id="${i + 1}">${paragraphs}</w:${tag}>`;
       })
       .join("");
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes xmlns:w="${W}" xmlns:r="${R}"><w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>${notes}</w:footnotes>`;
+    const sep = (type: string, id: number, inner: string) =>
+      `<w:${tag} w:type="${type}" w:id="${id}"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r>${inner}</w:r></w:p></w:${tag}>`;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${tag}s xmlns:w="${W}" xmlns:r="${R}">${sep("separator", -1, "<w:separator/>")}${sep("continuationSeparator", 0, "<w:continuationSeparator/>")}${notes}</w:${tag}s>`;
   }
 
   /**
@@ -1122,6 +1168,13 @@ class Writer {
         return (node.content ?? []).map((c) => this.paragraph(c, '<w:pStyle w:val="Quote"/>')).join("");
       case "pageBreak":
         return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+      case "columns": {
+        // Una sección continua de Word con columnas: antes, la sección de una columna termina;
+        // después, la de columnas (writeDocx pone los datos de la hoja en cada marca).
+        const n = Math.min(3, Math.max(2, Number(node.attrs?.count) || 2));
+        const inner = (node.content ?? []).map((b) => this.block(b)).join("");
+        return `${SECTION_MARK(1)}${inner}${SECTION_MARK(n)}`;
+      }
       case "tableOfContents":
         return this.tableOfContents(node);
       case "horizontalRule":
@@ -1194,11 +1247,16 @@ ${[1, 2, 3, 4, 5, 6]
 <w:style w:type="character" w:styleId="CommentReference"><w:name w:val="annotation reference"/><w:rPr><w:sz w:val="16"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="EndnoteText"><w:name w:val="endnote text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="EndnoteReference"><w:name w:val="endnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TOCHeading"><w:name w:val="TOC Heading"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:color w:val="1F3864"/><w:sz w:val="32"/></w:rPr></w:style>
 ${[1, 2, 3].map((n) => `<w:style w:type="paragraph" w:styleId="TOC${n}"><w:name w:val="toc ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="60"/><w:ind w:left="${(n - 1) * 220}"/></w:pPr>${n === 1 ? "<w:rPr><w:b/></w:rPr>" : ""}</w:style>`).join("")}
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
 </w:styles>`;
+
+/** Dónde termina una sección (con cuántas columnas): writeDocx lo cambia por el párrafo con <w:sectPr>. */
+const SECTION_MARK = (cols: number) => `<!--WEPO-SECCION:${cols}-->`;
 
 export async function writeDocx(
   content: JSONContent,
@@ -1224,10 +1282,22 @@ export async function writeDocx(
     add("ftr", "default", hf.footer);
     if (hf.skipFirst) add("ftr", "first", null);
   }
-  body += `<w:sectPr>${refs}<w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>${hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
+  const pageXml = `<w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>`;
+  // Secciones de columnas: sin secciones vacías (al principio o entre dos bloques de columnas seguidos).
+  body = body.replace(/^(?:<!--WEPO-SECCION:1-->)+/, "").replace(/(<!--WEPO-SECCION:\d-->)(?:<!--WEPO-SECCION:1-->)+/g, "$1");
+  let sections = 0;
+  body = body.replace(/<!--WEPO-SECCION:(\d)-->/g, (_m, cols: string) => {
+    const first = sections++ === 0;
+    // Cada sección lleva el encabezado y el pie (si no, la primera no tendría); la portada solo en la primera.
+    const sect = `<w:sectPr>${refs}${first ? "" : '<w:type w:val="continuous"/>'}${pageXml}<w:cols w:num="${cols}" w:space="720"/>${first && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>${sect}</w:pPr></w:p>`;
+  });
+  body += `<w:sectPr>${refs}${sections ? '<w:type w:val="continuous"/>' : ""}${pageXml}${!sections && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
   // Comentarios: comments.xml y commentsExtended.xml (resueltos y respuestas).
   const hasNotes = writer.footnotes.length > 0;
   if (hasNotes) writer.rel("footnotes", "footnotes.xml");
+  const hasEndnotes = writer.endnotes.length > 0;
+  if (hasEndnotes) writer.rel("endnotes", "endnotes.xml");
   const hasComments = writer.liveComments.length > 0;
   if (hasComments) {
     writer.rel("comments", "comments.xml");
@@ -1242,7 +1312,7 @@ export async function writeDocx(
     .join("");
   put(
     "[Content_Types].xml",
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${hasNotes ? '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>' : ""}${hasComments ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}${parts.map((p) => `<Override PartName="/word/${p.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${p.kind === "hdr" ? "header" : "footer"}+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${images}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${hasNotes ? '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>' : ""}${hasEndnotes ? '<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>' : ""}${hasComments ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}${parts.map((p) => `<Override PartName="/word/${p.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${p.kind === "hdr" ? "header" : "footer"}+xml"/>`).join("")}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
   );
   put(
     "_rels/.rels",
@@ -1258,6 +1328,7 @@ export async function writeDocx(
   for (const m of writer.media) put(`word/media/${m.name}`, m.data);
   for (const p of parts) put(`word/${p.name}`, p.xml);
   if (hasNotes) put("word/footnotes.xml", writer.footnotesXml());
+  if (hasEndnotes) put("word/endnotes.xml", writer.footnotesXml("end"));
   if (hasComments) {
     put("word/comments.xml", writer.commentsXml());
     put("word/commentsExtended.xml", writer.commentsExtendedXml());
@@ -1363,7 +1434,9 @@ export function writeMarkdown(doc: JSONContent): string {
       }
     });
   };
-  for (const block of doc.content ?? []) {
+  // Lo que está en columnas va en el texto como lo demás.
+  const blocks = (doc.content ?? []).flatMap((b) => (b.type === "columns" ? (b.content ?? []) : [b]));
+  for (const block of blocks) {
     if (block.type === "heading") lines.push(`${"#".repeat(Number(block.attrs?.level ?? 1))} ${markdownText(block.content)}`, "");
     else if (block.type === "paragraph") lines.push(markdownText(block.content), "");
     else if (block.type === "bulletList" || block.type === "orderedList") {

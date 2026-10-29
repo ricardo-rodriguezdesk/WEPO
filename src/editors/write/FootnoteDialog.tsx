@@ -1,8 +1,11 @@
 import { useState } from "react";
 import Dialog from "../../components/Dialog";
+import { roman } from "./notes";
 
 type Props = {
   n: number;
+  /** Nota al pie o al final (i, ii, iii…). */
+  kind?: "foot" | "end";
   text: string;
   onSave: (text: string) => void;
   onDelete: () => void;
@@ -10,7 +13,7 @@ type Props = {
 };
 
 /** Escribir o cambiar el texto de una nota al pie. */
-export default function FootnoteDialog({ n, text, onSave, onDelete, onClose }: Props) {
+export default function FootnoteDialog({ n, kind = "foot", text, onSave, onDelete, onClose }: Props) {
   const [value, setValue] = useState(text);
   const save = () => {
     onSave(value.trim());
@@ -18,7 +21,7 @@ export default function FootnoteDialog({ n, text, onSave, onDelete, onClose }: P
   };
   return (
     <Dialog
-      title={`Nota al pie ${n}`}
+      title={kind === "end" ? `Nota al final ${roman(n)}` : `Nota al pie ${n}`}
       onClose={onClose}
       width={460}
       footer={
@@ -57,7 +60,9 @@ export default function FootnoteDialog({ n, text, onSave, onDelete, onClose }: P
           }
         }}
       />
-      <p className="hint">La nota se ve al pie de la hoja donde está su número. Mayús + Intro para otro renglón.</p>
+      <p className="hint">
+        {kind === "end" ? "Las notas al final van todas juntas después del texto del documento." : "La nota se ve al pie de la hoja donde está su número."} Mayús + Intro para otro renglón.
+      </p>
     </Dialog>
   );
 }

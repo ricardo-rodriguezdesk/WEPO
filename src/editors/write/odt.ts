@@ -153,16 +153,13 @@ class OdtReader {
         else if (name === "tab") push("\t", marks);
         else if (name === "line-break") out.push({ type: "hardBreak" });
         else if (name === "note") {
-          // Notas al pie: el texto de la nota va en la llamada (las notas al final no se conservan).
-          if (get(e, "text", "note-class") === "endnote") this.unsupported.add("notas al final");
-          else {
-            const body = first(e, "text", "note-body");
-            const text = kids(body, "text")
-              .map((p) => (p.textContent ?? "").replace(/\s+/g, " ").trim())
-              .filter(Boolean)
-              .join("\n");
-            out.push({ type: "footnote", attrs: { text } });
-          }
+          // Notas al pie y al final: el texto de la nota va en la llamada.
+          const body = first(e, "text", "note-body");
+          const text = kids(body, "text")
+            .map((p) => (p.textContent ?? "").replace(/\s+/g, " ").trim())
+            .filter(Boolean)
+            .join("\n");
+          out.push({ type: "footnote", attrs: { text, kind: get(e, "text", "note-class") === "endnote" ? "end" : "foot" } });
         }
         else if (name === "tracked-changes" || name === "change-start") this.unsupported.add("control de cambios");
         else if (["bookmark", "bookmark-start", "bookmark-end", "soft-page-break", "change-end", "change"].includes(name)) continue;

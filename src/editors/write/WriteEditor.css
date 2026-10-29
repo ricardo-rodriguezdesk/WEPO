@@ -128,7 +128,7 @@
 .write-page-break.ProseMirror-selectednode { border-top-color: var(--kind-accent); }
 
 /* Notas al pie: el número volado en el texto y las notas al pie de la hoja */
-.write-content { counter-reset: wepo-footnote; }
+.write-content { counter-reset: wepo-footnote wepo-endnote; }
 .write-fn-ref {
   cursor: pointer;
   padding: 0 1px;
@@ -138,7 +138,10 @@
   color: var(--kind-accent);
   font-weight: 600;
 }
-.write-fn-ref::before { counter-increment: wepo-footnote; content: counter(wepo-footnote); }
+.write-fn-ref:not([data-kind="end"])::before { counter-increment: wepo-footnote; content: counter(wepo-footnote); }
+/* Notas al final: i, ii, iii… (como en Word), todas juntas después del texto */
+.write-fn-ref[data-kind="end"]::before { counter-increment: wepo-endnote; content: counter(wepo-endnote, lower-roman); }
+.write-endnotes { margin-top: 16px; overflow: visible; }
 .write-fn-ref.ProseMirror-selectednode { outline: 1.5px solid var(--kind-accent); border-radius: 2px; }
 .write-footnotes {
   box-sizing: border-box;
@@ -378,4 +381,22 @@
   .print-root .write-print-frame { break-after: page; page-break-after: always; }
   .print-root .write-print-frame:last-child { break-after: auto; page-break-after: auto; }
   .print-root.write-print-root { display: block; }
+}
+
+/* Columnas: un pedazo del documento a 2 o 3 columnas, que se emparejan solas */
+.write-columns {
+  column-gap: 0.5in;
+  column-fill: balance;
+  margin: 0 0 6px;
+  outline: 1px dashed transparent;
+  outline-offset: 4px;
+}
+.write-columns:hover,
+.write-columns:focus-within { outline-color: #c8c8c8; }
+.write-columns > * { break-inside: avoid-column; }
+.write-columns > p { break-inside: auto; }
+.write-columns > :first-child { margin-top: 0; }
+.write-menu-hint { margin: 6px 10px 2px; max-width: 220px; font-size: 11px; color: var(--muted); }
+@media print {
+  .write-columns { outline: none; }
 }
