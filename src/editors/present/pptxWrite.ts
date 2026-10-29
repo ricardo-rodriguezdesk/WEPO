@@ -11,6 +11,8 @@ import { isLine } from "./geometry";
 import { chartWorkbook, chartXml } from "./charts";
 import { transitionXml } from "./transitions";
 import { timingXml } from "./animations";
+import type { MediaTiming } from "./animations";
+import { mediaBytes, mediaContentType } from "./media";
 
 const NS = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"`;
 const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -116,7 +118,7 @@ class SlideWriter {
   private nextRel = 2; // rId1 es el diseño
   private nextId = 2;
   constructor(
-    private media: (bytes: Uint8Array, ext: string) => string,
+    private media: (bytes: Uint8Array, ext: string, prefix?: string) => string,
     /** Guarda la gráfica (chartN.xml, su libro y sus relaciones) y devuelve el nombre de su parte. */
     private chartPart: (el: ChartElement) => string = () => "",
   ) {}
@@ -128,6 +130,16 @@ class SlideWriter {
   }
 
   links = (url: string) => this.rel("hyperlink", url, true);
+
+  /** Relación con un tipo que no es de la norma (como la de los medios de Office 2010). */
+  rawRel(type: string, target: string): string {
+    const id = `rId${this.nextRel++}`;
+    this.rels.push(`<Relationship Id="${id}" Type="${type}" Target="${esc(target)}"/>`);
+    return id;
+  }
+
+  /** Videos y audios de la diapositiva (para su parte de <p:timing>). */
+  mediaIds = new Map<string, MediaTiming>();
 
   shape(el: ShapeElement): string {
     const id = this.nextId++;
@@ -147,7 +159,19 @@ class SlideWriter {
     const id = this.nextId++;
     this.spids.set(el.id, id);
     const rid = this.rel("image", `../media/${this.media(data.bytes, data.ext)}`);
-    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(el.name ?? `Imagen ${id}`)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm(el)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+    // Video o audio: el archivo va en ppt/media con sus dos relaciones (la de siempre y la de Office 2010).
+    const file = el.media ? mediaBytes(el.media.src) : null;
+    let nvPr = "<p:nvPr/>";
+    let click = "";
+    if (el.media && file) {
+      const target = `../media/${this.media(file.bytes, file.ext, "media")}`;
+      const link = this.rel(el.media.type, target);
+      const embed = this.rawRel("http://schemas.microsoft.com/office/2007/relationships/media", target);
+      this.mediaIds.set(el.id, { spid: id, type: el.media.type, autoplay: Boolean(el.media.autoplay), loop: Boolean(el.media.loop) });
+      click = '<a:hlinkClick r:id="" action="ppaction://media"/>';
+      nvPr = `<p:nvPr><a:${el.media.type}File r:link="${link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DA1C8E7AF24}"><p14:media xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" r:embed="${embed}"/></p:ext></p:extLst></p:nvPr>`;
+    }
+    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${esc(el.name ?? `Imagen ${id}`)}">${click}</p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr><p:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm(el)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
 
   table(el: TableElement): string {
@@ -260,14 +284,15 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
   const zip = new JSZip();
   const put = (name: string, data: string | Uint8Array) => zip.file(name, data, { createFolders: false });
   const mediaTypes = new Set<string>();
-  let mediaCount = 0;
   // La misma imagen en varias diapositivas se guarda una sola vez.
   const mediaByContent = new Map<string, string>();
-  const media = (bytes: Uint8Array, ext: string) => {
+  const counts: Record<string, number> = {};
+  const media = (bytes: Uint8Array, ext: string, prefix = "image") => {
     const key = `${ext}:${bytes.length}:${bytes.subarray(0, 64).join(",")}:${bytes.subarray(-64).join(",")}`;
     const known = mediaByContent.get(key);
     if (known) return known;
-    const name = `image${++mediaCount}.${ext}`;
+    counts[prefix] = (counts[prefix] ?? 0) + 1;
+    const name = `${prefix}${counts[prefix]}.${ext}`;
     put(`ppt/media/${name}`, bytes);
     mediaTypes.add(ext);
     mediaByContent.set(key, name);
@@ -306,7 +331,7 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
     const bg = backgroundXml(slide.background ?? (slide.backgroundImage ? null : null), bgRel);
     put(
       `ppt/slides/slide${n}.xml`,
-      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timingXml(slide, (id) => w.spids.get(id))}</p:sld>`,
+      `${XML}<p:sld ${NS}${slide.hidden ? ' show="0"' : ""}><p:cSld>${bg}<p:spTree>${GROUP}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(slide.transition)}${timingXml(slide, (id) => w.spids.get(id), [...w.mediaIds.values()])}</p:sld>`,
     );
     const rels = [`<Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout${layoutIndex}.xml"/>`, ...w.rels];
     if (slide.notes.trim()) {
@@ -372,6 +397,7 @@ export async function writePptx(deck: Deck, title = ""): Promise<Uint8Array> {
     `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`,
   );
   const mime: Record<string, string> = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml" };
+  for (const e of mediaTypes) mime[e] ??= mediaContentType(e);
   put(
     "[Content_Types].xml",
     `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${chartCount ? '<Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>' : ""}${[...mediaTypes].map((e) => `<Default Extension="${e}" ContentType="${mime[e]}"/>`).join("")}<Override PartName="/ppt/presentation.xml" ContentType="${CT}.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="${CT}.slideMaster+xml"/>${LAYOUT_ORDER.map((_, i) => `<Override PartName="/ppt/slideLayouts/slideLayout${i + 1}.xml" ContentType="${CT}.slideLayout+xml"/>`).join("")}${slideOverrides.join("")}<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="${CT}.notesMaster+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/theme/theme2.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/ppt/presProps.xml" ContentType="${CT}.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="${CT}.viewProps+xml"/><Override PartName="/ppt/tableStyles.xml" ContentType="${CT}.tableStyles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,

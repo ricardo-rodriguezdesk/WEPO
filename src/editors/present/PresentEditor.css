@@ -14,6 +14,17 @@
 .slide-el { position: absolute; box-sizing: border-box; transform-origin: center; }
 .slide-shape-svg { position: absolute; inset: 0; overflow: visible; }
 .slide-image img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+/* Video y audio: portada con una marca al editar; reproductor al presentar. */
+.slide-media { background: #000; }
+.slide-audio { background: transparent; }
+.slide-media video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.slide-media-badge { position: absolute; left: 50%; top: 50%; width: 22%; max-width: 72px; min-width: 18px; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; background: rgba(0, 0, 0, 0.55); display: grid; place-items: center; pointer-events: none; }
+.slide-audio .slide-media-badge { display: none; }
+.slide-media-badge svg { width: 55%; height: 55%; fill: #fff; }
+.slide-audio-button { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; transition: transform 0.15s; }
+.slide-audio-button audio { display: none; }
+.slide-audio-button.playing { animation: wepo-audio-beat 0.9s ease-in-out infinite; }
+@keyframes wepo-audio-beat { 50% { transform: scale(1.06); } }
 .slide-placeholder-border { position: absolute; inset: 0; border: 1.5px dashed rgba(128, 128, 128, 0.55); border-radius: 2px; pointer-events: none; }
 .slide-text {
   position: absolute;
@@ -379,3 +390,33 @@
 .present-anim-list button:hover:not(:disabled) { background: var(--border); color: inherit; }
 .present-anim-list button:disabled { opacity: 0.3; cursor: default; }
 @media print { .present-anim-badge { display: none; } }
+
+/* Entrada (verde), énfasis (amarillo) y salida (rojo), como las estrellas de PowerPoint */
+.present-animations { --anim-entr: #2e9d4a; --anim-emph: #d9a400; --anim-exit: #d6453d; }
+.present-anim-classes { display: flex; gap: 4px; margin-bottom: 8px; }
+.present-anim-classes button {
+  flex: 1;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.present-anim-classes button.has::after { content: " •"; }
+.present-anim-classes button.anim-cls-entr.current { color: #fff; background: var(--anim-entr); border-color: var(--anim-entr); }
+.present-anim-classes button.anim-cls-emph.current { color: #1d1d1f; background: var(--anim-emph); border-color: var(--anim-emph); }
+.present-anim-classes button.anim-cls-exit.current { color: #fff; background: var(--anim-exit); border-color: var(--anim-exit); }
+.present-transition-grid button.anim-cls-entr svg { color: var(--anim-entr); }
+.present-transition-grid button.anim-cls-emph svg { color: var(--anim-emph); }
+.present-transition-grid button.anim-cls-exit svg { color: var(--anim-exit); }
+.present-anim-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; }
+.present-anim-dot.anim-cls-entr { background: var(--anim-entr); }
+.present-anim-dot.anim-cls-emph { background: var(--anim-emph); }
+.present-anim-dot.anim-cls-exit { background: var(--anim-exit); }
+
+.present-media-menu { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; min-width: 260px; }
+.present-media-menu .hint { margin: 2px 0 0; font-size: 12px; color: var(--text-muted, #6e6e73); }
+.present-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

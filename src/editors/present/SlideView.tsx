@@ -1,9 +1,10 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type SyntheticEvent } from "react";
 import type { Deck, ImageElement, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody } from "./model";
 import { isEmptyText, placeholderHint } from "./model";
 import { isLine, shapePath } from "./geometry";
 import ChartSvg from "../sheets/ChartSvg";
 import { chartView } from "./charts";
+import { mediaUrl } from "./media";
 
 /** Las gráficas se dibujan a esta escala (letra de unos 16 px en la diapositiva). */
 const CHART_SCALE = 1.5;
@@ -202,12 +203,14 @@ type Props = {
   editingCell?: { id: string; r: number; c: number } | null;
   /** Para que el editor sepa en qué elemento se hizo clic. */
   interactive?: boolean;
+  /** Al presentar: los videos y audios se pueden reproducir (si no, se ve su portada). */
+  play?: boolean;
   className?: string;
   children?: ReactNode;
 };
 
 /** Una diapositiva dibujada con HTML y SVG, del tamaño que se pida. */
-export default function SlideView({ slide, deck, scale, hints = false, editingId, editingSlot, activeCell, editingCell, interactive = false, className, children }: Props) {
+export default function SlideView({ slide, deck, scale, hints = false, editingId, editingSlot, activeCell, editingCell, interactive = false, play = false, className, children }: Props) {
   const background = slide.background ?? deck.theme.background;
   return (
     <div className={`slide-frame ${className ?? ""}`} style={{ width: deck.width * scale, height: deck.height * scale }}>
@@ -224,13 +227,13 @@ export default function SlideView({ slide, deck, scale, hints = false, editingId
         {slide.elements.map((el) => (
           <div
             key={el.id}
-            className={`slide-el slide-${el.kind}${el.kind === "shape" && isLine(el.geom) ? " slide-line" : ""}`}
+            className={`slide-el slide-${el.kind}${el.kind === "image" && el.media ? ` slide-media slide-${el.media.type}` : ""}${el.kind === "shape" && isLine(el.geom) ? " slide-line" : ""}`}
             data-el={interactive ? el.id : undefined}
             data-anim={el.id}
             style={elementBoxStyle(el)}
           >
             {el.kind === "shape" && <ShapeView el={el} deck={deck} hints={hints} textSlot={el.id === editingId ? editingSlot : undefined} />}
-            {el.kind === "image" && <img src={(el as ImageElement).src} alt="" draggable={false} />}
+            {el.kind === "image" && (el.media ? <MediaView el={el} play={play} /> : <img src={(el as ImageElement).src} alt="" draggable={false} />)}
             {el.kind === "chart" && (
               // En una diapositiva la letra va más grande que en una hoja de cálculo: se dibuja más chica y se agranda.
               <div className="slide-chart-box" style={{ ["--chart-bg" as string]: background, ["--chart-text" as string]: deck.theme.text, ["--chart-muted" as string]: deck.theme.text, ["--chart-grid" as string]: "rgba(128,128,128,.3)" }}>
@@ -251,5 +254,51 @@ export default function SlideView({ slide, deck, scale, hints = false, editingId
         {children}
       </div>
     </div>
+  );
+}
+
+/** Video o audio: al editar se ve su portada (con una marca); al presentar se reproduce. */
+function MediaView({ el, play }: { el: ImageElement; play: boolean }) {
+  const media = el.media!;
+  const audio = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => {
+    // Al salir de la diapositiva se detiene (los clones de la transición no suenan).
+    const a = audio.current;
+    return () => a?.pause();
+  }, []);
+  if (!play) {
+    return (
+      <>
+        <img src={el.src} alt="" draggable={false} />
+        <span className="slide-media-badge" aria-label={media.type === "video" ? "Video" : "Audio"}>
+          <svg viewBox="0 0 24 24" aria-hidden>
+            {media.type === "video" ? <path d="M8 5v14l11-7z" /> : <path d="M4 9h4l5-4v14l-5-4H4z" />}
+          </svg>
+        </span>
+      </>
+    );
+  }
+  // Un clic en el video o en sus controles no pasa a la siguiente diapositiva.
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+  if (media.type === "video") {
+    return <video src={mediaUrl(media.src)} poster={el.src} controls autoPlay={media.autoplay} loop={media.loop} playsInline onClick={stop} onDoubleClick={stop} />;
+  }
+  return (
+    <button
+      type="button"
+      className={`slide-audio-button${playing ? " playing" : ""}`}
+      aria-label={playing ? "Pausar el audio" : "Reproducir el audio"}
+      onClick={(e) => {
+        stop(e);
+        const a = audio.current;
+        if (!a) return;
+        if (a.paused) void a.play();
+        else a.pause();
+      }}
+    >
+      <img src={el.src} alt="" draggable={false} />
+      <audio ref={audio} src={mediaUrl(media.src)} autoPlay={media.autoplay} loop={media.loop} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
+    </button>
   );
 }

@@ -4,6 +4,20 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ## Próxima versión (sin publicar)
 
+### Transiciones vistosas en WEPO Present
+- 13 transiciones nuevas, como las «llamativas» de PowerPoint: *Cubo*, *Voltear*, *Galería*, *Puertas*, *Cortinas*, *Caer*, *Remolino*, *Onda*, *Reloj*, *Persianas*, *Noticia*, *Destello* y *Rueda* (varias con dirección).
+- Se guardan en el .pptx como las de PowerPoint 2010 y 2013 (con una transición de respaldo para programas que no las conocen) y se leen las de PowerPoint.
+
+### Animaciones de énfasis y de salida en WEPO Present
+- El menú *Animación* ahora tiene tres pestañas, como las estrellas verde, amarilla y roja de PowerPoint: *Entrada*, *Énfasis* (Pulso, Girar, Crecer, Balancear y Transparencia) y *Salida* (Desaparecer, Desvanecer, Salir volando, Zoom y Barrido).
+- Un mismo elemento puede entrar, moverse y salir en distintos clics. La lista de orden marca cada una con su color.
+- Se guardan en el .pptx como las de PowerPoint y se leen las de PowerPoint y LibreOffice (antes las de énfasis y salida se perdían).
+
+### Video y audio en WEPO Present
+- Botón *Video o audio*: MP4, MOV, M4V o WebM, y MP3, M4A, WAV, AAC u OGG. El archivo va dentro de la presentación (como hace PowerPoint al insertarlo); el video lleva de portada un cuadro del principio y el audio un ícono de bocina.
+- Al presentar, el video tiene su reproductor y el audio se pausa o sigue con un clic en el ícono; un clic en ellos no pasa a la siguiente diapositiva. Menú *Reproducción*: empezar solo al llegar a la diapositiva y repetir.
+- Se guardan en el .pptx como los de PowerPoint (se reproducen allá y en LibreOffice) y se leen los videos y audios de PowerPoint (antes se perdían).
+
 ### Notas al final en WEPO Write
 - Botón *Nota al final* (⌘⌥D / Ctrl+Alt+D, como en Word): el número va volado en el texto con i, ii, iii… y todas las notas quedan juntas después del texto del documento (si no caben, empiezan en una hoja nueva). Clic en la nota para cambiarla o borrarla.
 - Conviven con las notas al pie (1, 2, 3…). Se guardan en .docx como las de Word (endnotes.xml) y se leen las de Word y las de LibreOffice (.odt); antes se perdían.

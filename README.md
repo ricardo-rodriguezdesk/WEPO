@@ -283,6 +283,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Write: notas al final y texto en columnas
 - [x] WEPO Present: transiciones y gráficas
 - [x] WEPO Present: animaciones de entrada
+- [x] WEPO Present: transiciones vistosas (cubo, puertas, cortinas…) y animaciones de énfasis y de salida
+- [x] WEPO Present: video y audio (se reproducen al presentar y se guardan en el .pptx)
 - [x] WEPO PDF: abrir, editar y guardar PDF con contraseña (y poner o quitar la contraseña)
 - [x] WEPO PDF: reconocer texto en escaneos (OCR), con el del sistema (sin que WEPO pese más)
 

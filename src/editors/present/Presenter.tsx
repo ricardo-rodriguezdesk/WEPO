@@ -62,6 +62,8 @@ export default function Presenter({ deck, start, onExit }: Props) {
   const steps = useMemo(() => (current && pos < visible.length ? animationSteps(current.s) : []), [current, pos, visible.length]);
   /** El paso que se tiene que animar en cuanto se dibuje (con su espera extra, p. ej. la transición). */
   const play = useRef<{ pos: number; step: number; offset: number } | null>(null);
+  /** El clic (desde 0) que se está animando: lo que sale en él no se esconde hasta que lo haga su animación. */
+  const [playing, setPlaying] = useState(-1);
   const transitionTime = (n: number) => {
     const t = visible[n]?.s.transition;
     return t && t.kind !== "none" ? t.duration : 0;
@@ -71,9 +73,11 @@ export default function Presenter({ deck, start, onExit }: Props) {
     setPos(n);
     if (n >= visible.length) return setStep(0);
     const st = animationSteps(visible[n].s);
+    setPlaying(-1);
     if (revealAll) return setStep(st.length);
     if (st[0]?.auto) {
       play.current = { pos: n, step: 1, offset: transitionTime(n) };
+      setPlaying(0);
       return setStep(1);
     }
     setStep(0);
@@ -89,7 +93,8 @@ export default function Presenter({ deck, start, onExit }: Props) {
     const st = steps[step - 1];
     if (!root || !st) return;
     const running = playStep(st, root, current.s, deck, p.offset);
-    return () => running.forEach((a) => a.finish());
+    // Al pasar al siguiente clic, lo que se estaba animando termina de golpe (lo cancelado se queda cancelado).
+    return () => running.forEach((a) => a.playState !== "idle" && a.finish());
   }, [pos, step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Transición: al avanzar, la diapositiva anterior se queda debajo mientras entra la nueva.
@@ -142,10 +147,14 @@ export default function Presenter({ deck, start, onExit }: Props) {
     // Primero los clics de la diapositiva (lo que falta por entrar), luego la siguiente.
     if (delta > 0 && pos < visible.length && step < steps.length) {
       play.current = { pos, step: step + 1, offset: 0 };
+      setPlaying(step);
       setStep(step + 1);
       return;
     }
     if (delta < 0 && pos < visible.length && step > (steps[0]?.auto ? 1 : 0)) {
+      // Lo que ya salió (o creció) vuelve a como estaba antes de ese clic.
+      document.querySelector(".presenter-scope")?.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+      setPlaying(-1);
       setStep(step - 1);
       return;
     }
@@ -234,12 +243,12 @@ export default function Presenter({ deck, start, onExit }: Props) {
     const mainH = size.h - 220;
     return (
       <div className="presenter presenter-view" onMouseMove={showControls}>
-        <style>{hiddenCss(steps, step, ".presenter-scope")}</style>
+        <style>{hiddenCss(steps, step, ".presenter-scope", playing)}</style>
         <div className="presenter-main presenter-scope">
           {finished ? (
             <div className="presenter-end">Fin de la presentación</div>
           ) : (
-            <SlideView slide={current.s} deck={deck} scale={fit(mainW, mainH)} />
+            <SlideView slide={current.s} deck={deck} scale={fit(mainW, mainH)} play />
           )}
         </div>
         <aside className="presenter-side">
@@ -262,7 +271,7 @@ export default function Presenter({ deck, start, onExit }: Props) {
 
   return (
     <div className={`presenter${controls ? "" : " hide-cursor"}`} onMouseMove={showControls} onClick={() => go(1)} onContextMenu={(e) => (e.preventDefault(), go(-1))}>
-      <style>{hiddenCss(steps, step, ".presenter-scope")}</style>
+      <style>{hiddenCss(steps, step, ".presenter-scope", playing)}</style>
       {finished ? (
         <div className="presenter-end">Fin de la presentación. Haz clic para salir.</div>
       ) : (
@@ -273,7 +282,7 @@ export default function Presenter({ deck, start, onExit }: Props) {
             </div>
           )}
           <div ref={enterRef} key={current.s.id} className="presenter-layer presenter-slide presenter-scope">
-            <SlideView slide={current.s} deck={deck} scale={fit(size.w, size.h)} />
+            <SlideView slide={current.s} deck={deck} scale={fit(size.w, size.h)} play />
           </div>
         </div>
       )}

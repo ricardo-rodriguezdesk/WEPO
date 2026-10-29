@@ -6,11 +6,12 @@
 // esa herencia y cada cuadro queda con sus valores propios, listos para dibujar.
 
 import JSZip from "jszip";
-import type { ChartElement, Deck, ImageElement, LayoutId, Line, Para, Role, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
+import type { ChartElement, Deck, ImageElement, Media, LayoutId, Line, Para, Role, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Theme } from "./model";
 import { DEFAULT_THEME, EMU_PER_PX, uid } from "./model";
 import { readChartXml } from "./charts";
 import { readTransition } from "./transitions";
-import { readTiming } from "./animations";
+import { readMediaTiming, readTiming } from "./animations";
+import { audioIcon, mediaMime } from "./media";
 
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const P = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -470,6 +471,27 @@ class PptxReader {
     return `data:${mime};base64,${await file.async("base64")}`;
   }
 
+  /** Video o audio de un <p:pic> (si lo tiene y viene dentro del archivo). */
+  async media(pic: Element, part: Part): Promise<Media | null> {
+    const nvPr = path(pic, "nvPicPr", "nvPr");
+    const file = child(nvPr, "videoFile") ?? child(nvPr, "audioFile") ?? child(nvPr, "quickTimeFile") ?? child(nvPr, "wavAudioFile");
+    if (!file) return null;
+    const type: Media["type"] = file.localName === "audioFile" || file.localName === "wavAudioFile" ? "audio" : "video";
+    // El de Office 2010 (p14:media) es el que va dentro del archivo; el otro puede ser un vínculo.
+    const p14 = Array.from(nvPr!.getElementsByTagNameNS("*", "media"))[0];
+    const ids = [p14?.getAttributeNS(R, "embed"), file.getAttributeNS(R, "link"), file.getAttributeNS(R, "embed")].filter((v): v is string => Boolean(v));
+    for (const id of ids) {
+      const rel = part.rels.get(id);
+      if (!rel || rel.external) continue;
+      const zipped = this.zip.file(rel.target);
+      const mime = mediaMime(rel.target.split(".").pop() ?? "");
+      if (!zipped || !mime) continue;
+      return { type, src: `data:${mime};base64,${await zipped.async("base64")}` };
+    }
+    this.unsupported.add(type === "video" ? "videos vinculados o en formatos que WEPO no reproduce" : "audios vinculados o en formatos que WEPO no reproduce");
+    return null;
+  }
+
   async elements(tree: Element | undefined, part: Part, layout: Part | null, master: Part | null, inheritedOnly = false): Promise<SlideElement[]> {
     const out: SlideElement[] = [];
     const mark = (source: Element, element: SlideElement) => {
@@ -511,13 +533,17 @@ class PptxReader {
       } else if (name === "pic") {
         const ph = phOf(el);
         if (inheritedOnly && ph) continue;
-        if (path(el, "nvPicPr", "nvPr", "videoFile") || path(el, "nvPicPr", "nvPr", "audioFile")) this.unsupported.add("videos o audio");
+        const media = await this.media(el, part);
         const embed = path(el, "blipFill", "blip")?.getAttributeNS(R, "embed");
-        const src = await this.image(embed ? part.rels.get(embed) : undefined);
+        const src = (await this.image(embed ? part.rels.get(embed) : undefined)) ?? (media ? audioIcon() : null);
         if (path(el, "blipFill", "srcRect")) this.unsupported.add("imágenes recortadas");
         const fromLayout = ph && layout ? findPlaceholder(layout, ph) : undefined;
         if (src) {
           const image = { id: uid(), kind: "image", src, ...this.box(child(el, "spPr"), [child(fromLayout, "spPr")]) } as ImageElement;
+          if (media) {
+            image.media = media;
+            image.name = path(el, "nvPicPr", "cNvPr")?.getAttribute("name") ?? undefined;
+          }
           mark(el, image);
           out.push(image);
         }
@@ -697,7 +723,11 @@ class PptxReader {
       const ids = this.shapeIds;
       this.shapeIds = null;
       const timing = readTiming(slide.root, (spid) => ids.get(spid));
-      if (timing.skipped) this.unsupported.add("animaciones de salida, de énfasis o con trayectoria");
+      for (const [spid, opts] of readMediaTiming(slide.root)) {
+        const target = own.find((e) => e.id === ids.get(spid));
+        if (target?.kind === "image" && target.media) target.media = { ...target.media, ...opts };
+      }
+      if (timing.skipped) this.unsupported.add("animaciones con trayectoria u otras que WEPO no tiene");
       if (timing.approximated) this.unsupported.add("algunas animaciones de entrada (se cambian por Desvanecer)");
       const bg = await this.background([slide, layout, master]);
       slides.push({

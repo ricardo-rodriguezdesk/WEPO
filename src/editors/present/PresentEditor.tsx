@@ -13,7 +13,7 @@ import type { MenuItem } from "../../components/ContextMenu";
 import { AlignIcon, ColorButton, FONTS, Popover, Separator, ToolButton } from "../sheets/FormatBar";
 import ZoomControl from "../sheets/ZoomControl";
 import { clampZoom, stepZoom } from "../sheets/layout";
-import type { AnimEffect, Animation, Deck, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Transition } from "./model";
+import type { AnimClass, AnimEffect, Animation, Deck, ImageElement, Media, LayoutId, Para, Run, ShapeElement, Slide, SlideElement, TableElement, TextBody, Transition } from "./model";
 import { LAYOUTS, THEMES, cloneElement, cloneSlide, isEmptyText, layoutElements, newSlide, placeholderHint, slideTitle, uid } from "./model";
 import { SHAPES, isLine, shapePath } from "./geometry";
 import SlideView, { textDefaults } from "./SlideView";
@@ -25,10 +25,11 @@ import Presenter from "./Presenter";
 import ChartEditor from "./ChartEditor";
 import { newChart } from "./charts";
 import { DIRECTIONS, DURATIONS, TRANSITIONS, playTransition, transitionName } from "./transitions";
-import { ANIM_DIRECTIONS, EFFECTS, TRIGGERS, animationSteps, effectName, newAnimation, playStep, textParagraphs } from "./animations";
+import { ANIM_DIRECTIONS, CLASSES, EXIT_DIRECTIONS, TRIGGERS, animationSteps, clsOf, effectName, effectsFor, newAnimation, playStep, textParagraphs } from "./animations";
 import PrintSlides, { PresentPrintDialog, sheetSize } from "./PrintSlides";
 import type { SlidePrintJob } from "./PrintSlides";
 import { imageDataUrl } from "../../lib/write";
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, audioIcon, mediaKindOf, mediaMime, videoPoster } from "./media";
 import { extensionOf, fileNameOf } from "../../lib/documents";
 import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
 import { onCommand, runCommand } from "../../lib/commands";
@@ -330,15 +331,16 @@ export default function PresentEditor(props: Props) {
 
   // ───────────── animaciones ─────────────
 
-  /** Pone, cambia o quita (null) la animación de entrada de un elemento. */
-  function setAnimation(target: string, anim: Animation | null) {
+  /** Pone, cambia o quita (null) la animación de entrada, énfasis o salida de un elemento. */
+  function setAnimation(target: string, cls: AnimClass, anim: Animation | null) {
     const d = deckRef.current;
-    const before = d.slides[current].animations?.find((a) => a.target === target);
+    const same = (a: Animation) => a.target === target && clsOf(a) === cls;
+    const before = d.slides[current].animations?.find(same);
     commit(
       withSlide(d, current, (s) => {
         const list = s.animations ?? [];
-        const at = list.findIndex((a) => a.target === target);
-        const next = anim ? (at >= 0 ? list.map((a, i) => (i === at ? anim : a)) : [...list, anim]) : list.filter((a) => a.target !== target);
+        const at = list.findIndex(same);
+        const next = anim ? (at >= 0 ? list.map((a, i) => (i === at ? anim : a)) : [...list, anim]) : list.filter((a) => !same(a));
         return { ...s, animations: next.length ? next : undefined };
       }),
     );
@@ -405,6 +407,55 @@ export default function PresentEditor(props: Props) {
     } catch (e) {
       setStatus({ text: `No se pudo insertar la imagen: ${e}`, error: true });
     }
+  }
+
+  /** Video o audio: se guarda dentro de la presentación (como hace PowerPoint al insertarlo). */
+  async function addMedia() {
+    const file = await openDialog({
+      multiple: false,
+      filters: [
+        { name: "Video o audio", extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
+        { name: "Video", extensions: VIDEO_EXTENSIONS },
+        { name: "Audio", extensions: AUDIO_EXTENSIONS },
+      ],
+    });
+    if (!file) return;
+    const ext = extensionOf(file);
+    const type = mediaKindOf(ext);
+    const mime = mediaMime(ext);
+    if (!type || !mime) {
+      setStatus({ text: "Ese archivo no es un video ni un audio que WEPO pueda poner.", error: true });
+      return;
+    }
+    try {
+      setStatus({ text: type === "video" ? "Insertando el video…" : "Insertando el audio…" });
+      const src = `data:${mime};base64,${await invoke<string>("file_read", { path: file })}`;
+      const d = deckRef.current;
+      let poster: string;
+      let w: number;
+      let h: number;
+      if (type === "video") {
+        const info = await videoPoster(src);
+        const k = Math.min((d.width * 0.6) / info.w, (d.height * 0.6) / info.h);
+        poster = info.poster;
+        w = info.w * k;
+        h = info.h * k;
+      } else {
+        poster = audioIcon();
+        w = h = Math.round(Math.min(d.width, d.height) * 0.12);
+      }
+      const x = type === "video" ? (d.width - w) / 2 : d.width - w - d.width * 0.05;
+      const y = type === "video" ? (d.height - h) / 2 : d.height - h - d.height * 0.08;
+      addElement({ id: uid(), kind: "image", src: poster, x, y, w, h, name: fileNameOf(file), media: { type, src, autoplay: type === "audio" ? true : undefined } });
+      setStatus(null);
+    } catch (e) {
+      setStatus({ text: `No se pudo insertar ${type === "video" ? "el video" : "el audio"}: ${e instanceof Error ? e.message : e}`, error: true });
+    }
+  }
+
+  function setMedia(patch: Partial<Media>) {
+    if (!selected) return;
+    updateElement(selected, (e) => (e.kind === "image" && e.media ? ({ ...e, media: { ...e.media, ...patch } } as ImageElement) : e));
   }
 
   function deleteSelected() {
@@ -1169,6 +1220,8 @@ export default function PresentEditor(props: Props) {
         onTextBox={addTextBox}
         onShape={addShape}
         onImage={addImage}
+        onMedia={addMedia}
+        onMediaOptions={setMedia}
         onChart={addChart}
         onEditChart={() => setChartPanel(true)}
         onTransition={setTransition}
@@ -1417,11 +1470,13 @@ type BarProps = {
   onTextBox: () => void;
   onShape: (geom: string) => void;
   onImage: () => void;
+  onMedia: () => void;
+  onMediaOptions: (patch: Partial<Media>) => void;
   onChart: () => void;
   onEditChart: () => void;
   onTransition: (t: Transition | null, all?: boolean) => void;
   onPreviewTransition: () => void;
-  onAnimation: (target: string, anim: Animation | null) => void;
+  onAnimation: (target: string, cls: AnimClass, anim: Animation | null) => void;
   onMoveAnimation: (id: string, delta: number) => void;
   onPreviewAnimation: (id?: string) => void;
   formatRuns: (fn: (r: Run) => Run, tiptap: (ed: Editor) => void) => void;
@@ -1618,6 +1673,12 @@ function PresentBar(props: BarProps) {
           <path d="M21 17l-5-5-9 8" />
         </svg>
       </ToolButton>
+      <ToolButton label="Video o audio" onClick={props.onMedia}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M10 9.5v5l4.5-2.5z" fill="currentColor" />
+        </svg>
+      </ToolButton>
       <Popover
         button={(toggleOpen, open) => (
           <ToolButton label="Tabla" pressed={open} onClick={toggleOpen}>
@@ -1640,6 +1701,7 @@ function PresentBar(props: BarProps) {
       </ToolButton>
       <TransitionMenu slide={props.slide} onChange={props.onTransition} onPreview={props.onPreviewTransition} />
       <AnimationMenu slide={props.slide} selected={props.count === 1 ? selected : null} onChange={props.onAnimation} onMove={props.onMoveAnimation} onPreview={props.onPreviewAnimation} />
+      {selected?.kind === "image" && selected.media && <MediaMenu media={selected.media} onChange={props.onMediaOptions} />}
       {selected?.kind === "chart" && (
         <button type="button" className="fb-button present-theme-btn" onClick={props.onEditChart} title="Tipo, título y datos de la gráfica">
           Datos de la gráfica
@@ -2021,26 +2083,32 @@ function AnimationMenu({
 }: {
   slide: Slide;
   selected: SlideElement | null;
-  onChange: (target: string, anim: Animation | null) => void;
+  onChange: (target: string, cls: AnimClass, anim: Animation | null) => void;
   onMove: (id: string, delta: number) => void;
   onPreview: (id?: string) => void;
 }) {
   const list = slide.animations ?? [];
-  const anim = selected ? (list.find((a) => a.target === selected.id) ?? null) : null;
-  const info = EFFECTS.find((e) => e.id === (anim?.effect ?? null));
+  const mine = selected ? list.filter((a) => a.target === selected.id) : [];
+  // Se abre en la pestaña de lo que ya tiene el elemento (o en Entrada).
+  const [cls, setCls] = useState<AnimClass>(() => (mine[0] ? clsOf(mine[0]) : "entr"));
+  const anim = mine.find((a) => clsOf(a) === cls) ?? null;
+  const effects = effectsFor(cls);
+  const info = effects.find((e) => e.id === (anim?.effect ?? null));
   const paragraphs = textParagraphs(selected ?? undefined).length;
-  const set = (patch: Partial<Animation>) => selected && anim && onChange(selected.id, { ...anim, ...patch });
+  const set = (patch: Partial<Animation>) => selected && anim && onChange(selected.id, cls, { ...anim, ...patch });
   const label = (a: Animation) => {
     const el = slide.elements.find((e) => e.id === a.target);
     const text = el?.kind === "shape" ? el.text?.paras.map((p) => p.runs.map((r) => r.text).join("")).join(" ").trim() : "";
     const kind = el?.kind === "image" ? "Imagen" : el?.kind === "table" ? "Tabla" : el?.kind === "chart" ? "Gráfica" : "Forma";
     return text ? (text.length > 26 ? `${text.slice(0, 25)}…` : text) : (el?.name ?? kind);
   };
+  const summary = mine.map((a) => effectName(a.effect, clsOf(a))).join(" + ");
+  const directions = cls === "exit" ? EXIT_DIRECTIONS : ANIM_DIRECTIONS;
   return (
     <Popover
       button={(toggleOpen, open) => (
-        <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Cómo entra el elemento elegido al presentar">
-          Animación{anim ? `: ${effectName(anim.effect)}` : ""} ▾
+        <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title="Cómo entra, se mueve o sale el elemento elegido al presentar">
+          Animación{summary ? `: ${summary}` : ""} ▾
         </button>
       )}
     >
@@ -2048,22 +2116,39 @@ function AnimationMenu({
         <div className="present-transitions present-animations">
           {selected ? (
             <>
-              <p className="present-menu-title">Entrada del elemento elegido</p>
-              <div className="present-transition-grid" role="radiogroup" aria-label="Animación">
-                {EFFECTS.map((e) => (
+              <div className="present-anim-classes" role="tablist" aria-label="Tipo de animación">
+                {CLASSES.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={cls === c.id}
+                    className={`anim-cls-${c.id}${cls === c.id ? " current" : ""}${mine.some((a) => clsOf(a) === c.id) ? " has" : ""}`}
+                    onClick={() => setCls(c.id)}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+              <p className="present-menu-title">
+                {cls === "entr" ? "Cómo entra el elemento elegido" : cls === "exit" ? "Cómo sale el elemento elegido" : "Cómo se mueve el elemento elegido (ya está a la vista)"}
+              </p>
+              <div className="present-transition-grid" role="radiogroup" aria-label={cls === "entr" ? "Animación" : cls === "exit" ? "Salida" : "Énfasis"}>
+                {effects.map((e) => (
                   <button
                     key={e.id ?? "none"}
                     type="button"
                     role="radio"
                     aria-checked={(anim?.effect ?? null) === e.id}
-                    className={(anim?.effect ?? null) === e.id ? "current" : ""}
+                    className={`anim-cls-${cls}${(anim?.effect ?? null) === e.id ? " current" : ""}`}
                     onClick={() => {
-                      if (!e.id) return onChange(selected.id, null);
-                      const base = anim ? { ...anim, effect: e.id as AnimEffect } : newAnimation(selected.id, e.id as AnimEffect);
-                      onChange(selected.id, {
+                      if (!e.id) return onChange(selected.id, cls, null);
+                      const fresh = newAnimation(selected.id, e.id as AnimEffect, cls);
+                      const base = anim ? { ...anim, effect: e.id as AnimEffect } : fresh;
+                      onChange(selected.id, cls, {
                         ...base,
-                        direction: e.directions ? (base.direction ?? "up") : undefined,
-                        duration: e.id === "appear" ? 0 : base.duration || 500,
+                        direction: e.directions ? (base.direction ?? fresh.direction) : undefined,
+                        duration: e.id === "appear" ? 0 : base.duration || fresh.duration || 500,
                       });
                     }}
                   >
@@ -2088,8 +2173,8 @@ function AnimationMenu({
                     {info?.directions && (
                       <label className="field">
                         Dirección
-                        <select className="input" value={anim.direction ?? "up"} onChange={(e) => set({ direction: e.target.value as Animation["direction"] })}>
-                          {ANIM_DIRECTIONS.map((d) => (
+                        <select className="input" value={anim.direction ?? directions[0].id} onChange={(e) => set({ direction: e.target.value as Animation["direction"] })}>
+                          {directions.map((d) => (
                             <option key={d.id} value={d.id}>
                               {d.name}
                             </option>
@@ -2103,7 +2188,7 @@ function AnimationMenu({
                       <label className="field">
                         Duración
                         <select className="input" value={anim.duration} onChange={(e) => set({ duration: Number(e.target.value) })}>
-                          {[...new Set([250, 500, 750, 1000, 1500, 2000, anim.duration])].sort((a, b) => a - b).map((ms) => (
+                          {[...new Set([250, 500, 750, 1000, 1500, 2000, 3000, anim.duration])].sort((a, b) => a - b).map((ms) => (
                             <option key={ms} value={ms}>
                               {(ms / 1000).toLocaleString("es-MX")} s
                             </option>
@@ -2125,7 +2210,7 @@ function AnimationMenu({
                       />
                     </label>
                   </div>
-                  {paragraphs > 1 && (
+                  {paragraphs > 1 && cls === "entr" && (
                     <label className="radio">
                       <input type="checkbox" checked={Boolean(anim.byParagraph)} onChange={(e) => set({ byParagraph: e.target.checked || undefined })} /> Por párrafo (un clic para cada uno)
                     </label>
@@ -2134,7 +2219,7 @@ function AnimationMenu({
               )}
             </>
           ) : (
-            <p className="hint">Elige un elemento de la diapositiva para darle una animación de entrada.</p>
+            <p className="hint">Elige un elemento de la diapositiva para darle una animación de entrada, de énfasis o de salida.</p>
           )}
           {list.length > 0 && (
             <>
@@ -2142,9 +2227,10 @@ function AnimationMenu({
               <ol className="present-anim-list">
                 {list.map((a, i) => (
                   <li key={a.id} className={a.target === selected?.id ? "current" : ""}>
+                    <span className={`present-anim-dot anim-cls-${clsOf(a)}`} title={CLASSES.find((c) => c.id === clsOf(a))?.name} aria-hidden />
                     <span className="present-anim-when">{TRIGGERS.find((t) => t.id === a.trigger)?.name}</span>
                     <span className="present-anim-name">
-                      {effectName(a.effect)} · {label(a)}
+                      {effectName(a.effect, clsOf(a))} · {label(a)}
                     </span>
                     <button type="button" aria-label="Subir" title="Antes" disabled={i === 0} onClick={() => onMove(a.id, -1)}>
                       ↑
@@ -2152,7 +2238,7 @@ function AnimationMenu({
                     <button type="button" aria-label="Bajar" title="Después" disabled={i === list.length - 1} onClick={() => onMove(a.id, 1)}>
                       ↓
                     </button>
-                    <button type="button" aria-label="Quitar la animación" title="Quitar" onClick={() => onChange(a.target, null)}>
+                    <button type="button" aria-label="Quitar la animación" title="Quitar" onClick={() => onChange(a.target, clsOf(a), null)}>
                       ×
                     </button>
                   </li>
@@ -2187,6 +2273,21 @@ function AnimationIcon({ effect }: { effect: AnimEffect | null }) {
       </g>
     ),
     zoom: <g transform="translate(18 14) scale(0.6) translate(-18 -14)">{star}</g>,
+    pulse: (
+      <g>
+        {star}
+        <circle cx="18" cy="14" r="11" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.5" />
+      </g>
+    ),
+    spin: (
+      <g>
+        {star}
+        <path d="M27 8a11 11 0 01-1 13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      </g>
+    ),
+    grow: <g transform="translate(18 14) scale(1.25) translate(-18 -14)">{star}</g>,
+    teeter: <g transform="rotate(-14 18 14)">{star}</g>,
+    transparency: <g opacity="0.25">{star}</g>,
     wipe: (
       <g>
         <clipPath id="wipe-icon">
@@ -2244,6 +2345,25 @@ function TransitionIcon({ kind }: { kind: Transition["kind"] }) {
     cover: <rect x="12" y="8" width="21" height="15" fill="currentColor" opacity="0.35" />,
     zoom: <rect x="12" y="10" width="12" height="8" fill="currentColor" opacity="0.35" />,
     split: <rect x="13" y="5" width="10" height="18" fill="currentColor" opacity="0.35" />,
+    cube: <path d="M10 8l8-3 8 3v12l-8 3-8-3z M18 5v18 M10 8l8 3 8-3" fill="currentColor" fillOpacity="0.2" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />,
+    flip: <path d="M18 5v18 M18 8c-6 0-9 2-9 6s3 6 9 6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />,
+    gallery: <path d="M7 9l7 2v6l-7 2z M15 8h9v12h-9z M25 11l5-1v8l-5-1z" fill="currentColor" opacity="0.4" />,
+    doors: <path d="M5 7l9 2v10l-9 2z M31 7l-9 2v10l9 2z" fill="currentColor" opacity="0.4" />,
+    curtains: <path d="M4 6c4 3 4 13 0 16h6c-2-4-2-12 0-16z M32 6c-4 3-4 13 0 16h-6c2-4 2-12 0-16z" fill="currentColor" opacity="0.45" />,
+    fallOver: <path d="M6 21h24l-4-9H10z" fill="currentColor" opacity="0.4" />,
+    vortex: <path d="M18 14m-2 0a2 2 0 104 0a4 4 0 10-8 0a6 6 0 1012 0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />,
+    ripple: (
+      <g fill="none" stroke="currentColor" strokeWidth="1.2">
+        <circle cx="18" cy="14" r="3" />
+        <circle cx="18" cy="14" r="6" opacity="0.6" />
+        <circle cx="18" cy="14" r="9" opacity="0.3" />
+      </g>
+    ),
+    wheel: <path d="M18 14V5a9 9 0 019 9z" fill="currentColor" opacity="0.4" />,
+    blinds: <path d="M3 7h30v2H3zM3 11h30v2H3zM3 15h30v2H3zM3 19h30v2H3z" fill="currentColor" opacity="0.4" />,
+    newsflash: <path d="M18 7l2 5h5l-4 3 2 5-5-3-5 3 2-5-4-3h5z" fill="currentColor" opacity="0.45" />,
+    flash: <path d="M20 5l-7 10h5l-2 8 7-11h-5z" fill="currentColor" opacity="0.5" />,
+    ferris: <path d="M5 6a18 18 0 0018 17" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray="2 2" />,
   };
   return (
     <svg width="36" height="28" viewBox="0 0 36 28" aria-hidden>
@@ -2312,3 +2432,32 @@ function LayoutPreview({ id }: { id: LayoutId }) {
 
 
 /** Opciones antes de imprimir: solo diapositivas, o con sus notas. */
+
+/** Cómo se reproduce el video o audio elegido al presentar. */
+function MediaMenu({ media, onChange }: { media: Media; onChange: (patch: Partial<Media>) => void }) {
+  const what = media.type === "video" ? "el video" : "el audio";
+  return (
+    <Popover
+      button={(toggleOpen, open) => (
+        <button type="button" className={`fb-button present-theme-btn${open ? " pressed" : ""}`} onClick={toggleOpen} title={`Cómo se reproduce ${what} al presentar`}>
+          Reproducción ▾
+        </button>
+      )}
+    >
+      {() => (
+        <div className="present-media-menu">
+          <p className="present-menu-title">Al presentar</p>
+          <label className="present-check">
+            <input type="checkbox" checked={Boolean(media.autoplay)} onChange={(e) => onChange({ autoplay: e.target.checked || undefined })} />
+            Empezar solo al llegar a la diapositiva
+          </label>
+          <label className="present-check">
+            <input type="checkbox" checked={Boolean(media.loop)} onChange={(e) => onChange({ loop: e.target.checked || undefined })} />
+            Repetir hasta que se detenga
+          </label>
+          <p className="hint">{media.autoplay ? `Empieza solo; un clic lo pausa.` : `Al presentar, haz clic en ${what} para reproducirlo.`}</p>
+        </div>
+      )}
+    </Popover>
+  );
+}

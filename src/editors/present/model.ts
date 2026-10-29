@@ -65,7 +65,11 @@ export type ShapeElement = Box & {
   placeholder?: { type: string | null; idx: string | null };
 };
 
-export type ImageElement = Box & { kind: "image"; src: string };
+/** Video o audio puesto en la diapositiva: `src` es el archivo (data:); la imagen del elemento es su portada. */
+export type Media = { type: "video" | "audio"; src: string; autoplay?: boolean; loop?: boolean };
+
+/** Imagen; con `media`, es un video o un audio (la imagen es su portada o su ícono). */
+export type ImageElement = Box & { kind: "image"; src: string; media?: Media };
 
 /** `merged`: la celda está tapada por otra combinada a su izquierda ("h") o arriba ("v"). */
 export type TableCell = { text: TextBody; fill: string | null; span?: number; rowSpan?: number; merged?: "h" | "v" };
@@ -92,7 +96,28 @@ export type LayoutId = "title" | "titleContent" | "twoContent" | "titleOnly" | "
 
 /** Cómo entra la diapositiva al presentar. */
 /** "none": sin efecto (sirve para que pase sola después de un tiempo). */
-export type TransitionKind = "none" | "fade" | "push" | "wipe" | "cover" | "zoom" | "split";
+export type TransitionKind =
+  | "none"
+  | "fade"
+  | "push"
+  | "wipe"
+  | "cover"
+  | "zoom"
+  | "split"
+  // Las vistosas (PowerPoint 2010 y 2013 en adelante):
+  | "cube"
+  | "flip"
+  | "gallery"
+  | "doors"
+  | "curtains"
+  | "fallOver"
+  | "vortex"
+  | "ripple"
+  | "wheel"
+  | "blinds"
+  | "newsflash"
+  | "flash"
+  | "ferris";
 export type Direction = "left" | "right" | "up" | "down";
 export type Transition = {
   kind: TransitionKind;
@@ -105,7 +130,10 @@ export type Transition = {
 };
 
 /** Animación de entrada de un elemento de la diapositiva. */
-export type AnimEffect = "appear" | "fade" | "fly" | "zoom" | "wipe";
+/** Efectos de entrada y salida (los mismos, al revés), y de énfasis (el elemento ya está y se mueve). */
+export type AnimEffect = "appear" | "fade" | "fly" | "zoom" | "wipe" | "pulse" | "spin" | "grow" | "teeter" | "transparency";
+/** Entrada, énfasis o salida (como las estrellas verde, amarilla y roja de PowerPoint). */
+export type AnimClass = "entr" | "emph" | "exit";
 export type AnimTrigger = "click" | "with" | "after";
 export type Animation = {
   id: string;
@@ -121,6 +149,8 @@ export type Animation = {
   delay: number;
   /** Un cuadro de texto que entra párrafo por párrafo (un clic cada uno). */
   byParagraph?: boolean;
+  /** Entrada (si no se dice), énfasis o salida. */
+  cls?: AnimClass;
 };
 
 export type Slide = {
