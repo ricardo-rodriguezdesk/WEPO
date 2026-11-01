@@ -19,7 +19,7 @@ export const DOC_KINDS: Record<
   present: {
     name: "WEPO Present",
     newLabel: "Presentación",
-    extensions: ["pptx"],
+    extensions: ["pptx", "odp"],
   },
   // Los PDF no se crean desde cero: la tarjeta del inicio abre uno.
   pdf: {

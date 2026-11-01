@@ -957,3 +957,26 @@
 .sheet-protected .format-bar { opacity: 0.45; pointer-events: none; }
 .sheet-tab-lock { margin-left: 5px; vertical-align: -1px; color: var(--muted); }
 .protect-form { display: flex; flex-direction: column; gap: 8px; }
+
+/* Texto en columnas y buscar objetivo. */
+.split-form, .goal-form { display: flex; flex-direction: column; gap: 12px; }
+.split-modes, .split-delims { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.split-other { width: 48px; margin-left: 6px; }
+.split-dest { max-width: 200px; }
+.split-preview { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.split-preview table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.split-preview th { position: sticky; top: 0; background: var(--chrome); font-weight: 600; color: var(--muted); }
+.split-preview th, .split-preview td { padding: 4px 10px; border-bottom: 1px solid var(--grid-line); border-right: 1px solid var(--grid-line); text-align: left; white-space: nowrap; }
+.goal-result p { margin: 0 0 8px; font-size: 14px; }
+
+/* Minigráficos: ocupan toda la celda. */
+.cell .sparkline, .print-cell .sparkline { position: absolute; left: 0; top: 0; pointer-events: none; }
+.print-cell { position: relative; }
+.spark-form { display: flex; flex-direction: column; gap: 12px; }
+.spark-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.spark-kinds button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.spark-kinds button .sparkline { position: static; }
+.spark-kinds button.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.spark-colors { display: flex; gap: 6px; }
+.spark-colors button { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.spark-colors button.on { border-color: var(--surface); box-shadow: 0 0 0 2px var(--text); }

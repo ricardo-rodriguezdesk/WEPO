@@ -331,4 +331,88 @@ test.describe("WEPO Present", () => {
     await expect(page.locator(".present-notice")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+
+  test("guardar como .odp (LibreOffice) y volver a abrir: queda igual, con transiciones y animaciones", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "presentacion.pptx");
+    // Transición Cubo en la 2 y animaciones (una por párrafo) en su primer cuadro.
+    await page.locator(".present-thumb").nth(1).click();
+    await page.getByRole("button", { name: /^Transición/ }).click();
+    await page.locator(".present-transition-grid").getByRole("radio", { name: "Cubo", exact: true }).click();
+    await page.keyboard.press("Escape");
+    const el = page.locator(".present-main-slide [data-el]").first();
+    const menu = page.locator(".present-animations");
+    for (const [tab, effect] of [["Entrada", "Entrar volando"], ["Énfasis", "Girar"], ["Salida", "Desvanecer"]]) {
+      await el.click();
+      await page.getByRole("button", { name: /^Animación/ }).click();
+      await menu.getByRole("tab", { name: tab }).click();
+      await menu.getByRole("radio", { name: effect, exact: true }).click();
+      await page.keyboard.press("Escape");
+    }
+    await el.click();
+    const summary = () =>
+      page.locator(".present-thumb").evaluateAll((thumbs) =>
+        thumbs.map((t) => ({
+          text: (t as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+          els: t.querySelectorAll("[data-el]").length,
+          tables: t.querySelectorAll(".slide-table td").length,
+          charts: t.querySelectorAll(".slide-chart").length,
+          images: t.querySelectorAll("img").length,
+          hidden: t.classList.contains("hidden-slide"),
+        })),
+      );
+    const before = await summary();
+    const anim = await page.getByRole("button", { name: /^Animación/ }).textContent();
+    expect(before).toHaveLength(7);
+
+    const out = outFile("presentacion-wepo.odp");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".present-footer .sheet-status")).toContainText("Guardado");
+    const { readFileSync } = await import("node:fs");
+    const JSZip = (await import("jszip")).default;
+    const bytes = readFileSync(out);
+    // El tipo va primero y sin comprimir, como pide OpenDocument.
+    expect(bytes.subarray(30, 38).toString()).toBe("mimetype");
+    expect(bytes.subarray(38, 85).toString()).toBe("application/vnd.oasis.opendocument.presentation");
+    const zip = await JSZip.loadAsync(bytes);
+    const content = await zip.file("content.xml")!.async("string");
+    expect(content.match(/<draw:page /g)).toHaveLength(7);
+    expect(content).toContain("<table:table");
+    expect(content).toContain('presentation:visibility="hidden"');
+    expect(content).toContain('smil:type="miscShapeWipe"');
+    expect(content).toContain('presentation:preset-id="ooo-entrance-fly-in"');
+    expect(content).toContain('presentation:preset-id="ooo-emphasis-spin"');
+    expect(content).toContain('presentation:preset-id="ooo-exit-fade-out"');
+
+    // Volver a abrir el .odp: lo mismo.
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".present-thumb")).toHaveCount(7);
+    expect(await summary()).toEqual(before);
+    await expect(page.locator(".present-notice")).toHaveCount(0);
+    await page.locator(".present-thumb").nth(1).click();
+    await expect(page.getByRole("button", { name: /^Transición: Cubo/ })).toBeVisible();
+    await el.click();
+    await expect(page.getByRole("button", { name: /^Animación/ })).toHaveText(anim!);
+    expect(errors).toEqual([]);
+  });
+
+  test("abrir un .odp hecho en LibreOffice Impress", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "presentacion.pptx");
+    const texts = () => page.locator(".present-thumb").evaluateAll((thumbs) => thumbs.map((t) => (t as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+    await expect(page.locator(".present-thumb")).toHaveCount(7);
+    const original = await texts();
+    await openFile(page, "presentacion.odp");
+    await expect(page.locator(".present-thumb")).toHaveCount(7);
+    expect(await texts()).toEqual(original);
+    await expect(page.locator(".present-thumb.hidden-slide")).toHaveCount(1);
+    await expect(page.locator(".present-thumb .slide-table").first()).toBeVisible();
+    // La primera diapositiva tiene su fondo de color (el del archivo).
+    await page.locator(".present-thumb").first().click();
+    await expect(page.getByLabel("Notas del orador")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
 });

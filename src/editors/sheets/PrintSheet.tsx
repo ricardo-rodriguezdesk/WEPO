@@ -14,6 +14,7 @@ import type { Axis } from "./layout";
 import type { MergedCells } from "./regions";
 import type { Layout, ManualBreaks, Margins, Paper, PrintPage, Scaling } from "./printLayout";
 import { HEADER_TEXT_HEIGHT, HEADING_HEIGHT, HEADING_WIDTH, layoutPages } from "./printLayout";
+import SparklineSvg from "./SparklineSvg";
 import "./print.css";
 
 export type PrintOptions = {
@@ -147,6 +148,7 @@ export function SheetPage({ job, layout, index, data }: { job: PrintJob; layout:
     const [text, numeric, styleId] = view.rows[source.r]?.[source.c] ?? ["", false, 0];
     const style = withTableStyle(view.styles[styleId] ?? view.styles[0], tableAt(view.tables ?? [], source.r, source.c), source.r);
     const deco = decorations.get(`${source.r},${source.c}`);
+    const spark = view.sparklines?.find((x) => x.row - 1 === source.r && x.col - 1 === source.c);
     const css = cellCss(style, numeric);
     const overflow = !area && text && !numeric && !style.wrap && (!style.h || style.h === "left") && !deco && spills(r, c);
     const { background, borderTop, borderRight, borderBottom, borderLeft, ...inner } = css;
@@ -169,6 +171,7 @@ export function SheetPage({ job, layout, index, data }: { job: PrintJob; layout:
               ))}
             </span>
           )}
+          {spark && <SparklineSvg spark={spark} width={data.cols.size(c)} height={height} />}
           {(!deco || deco.show_value) && <span className="cell-text">{text}</span>}
         </div>
       </td>

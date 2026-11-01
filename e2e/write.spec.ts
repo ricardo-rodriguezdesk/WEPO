@@ -252,4 +252,121 @@ test.describe("WEPO Write", () => {
     await expect(page.locator(".write-content > p")).toHaveCount(4);
     expect(errors).toEqual([]);
   });
+
+  test("guardar como .odt (LibreOffice) y volver a abrirlo", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "informe.docx");
+    await expect(page.locator(".write-content")).toBeVisible();
+    const out = outFile("informe.odt");
+    await saveAs(page, out);
+    await page.locator(".write-content").click();
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".sheet-status, .write-status").first()).toContainText("Guardado");
+    const JSZip = (await import("jszip")).default;
+    const { readFileSync } = await import("node:fs");
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    expect(await zip.file("mimetype")!.async("string")).toBe("application/vnd.oasis.opendocument.text");
+    const content = await zip.file("content.xml")!.async("string");
+    expect(content).toContain("<text:h");
+    expect(content).toContain(`fo:break-before="page"`);
+    const styles = await zip.file("styles.xml")!.async("string");
+    expect(styles).toContain('fo:page-width="612.00pt"');
+
+    const text = await page.locator(".write-content").innerText();
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".write-content")).toBeVisible();
+    const again = await page.locator(".write-content").innerText();
+    expect(again.replace(/\s+/g, " ").slice(0, 300)).toBe(text.replace(/\s+/g, " ").slice(0, 300));
+    expect(errors).toEqual([]);
+  });
+
+  test("columnas que siguen en la hoja siguiente (en pantalla y en el PDF)", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "columnas-largas.docx");
+    const block = page.locator(".write-content > .write-columns");
+    await expect(block).toHaveAttribute("data-count", "2");
+    // El corte de hoja va dentro de las columnas y ocupa todo el ancho.
+    const inner = block.locator(":scope > .write-gap");
+    await expect(inner.first()).toBeVisible();
+    expect(await inner.first().evaluate((e) => getComputedStyle(e).columnSpan)).toBe("all");
+    // Antes del corte, las dos columnas llenan la primera hoja; después siguen en la otra.
+    const last = block.locator("p").last();
+    const gapBox = (await inner.first().boundingBox())!;
+    expect((await last.boundingBox())!.y).toBeGreaterThan(gapBox.y);
+    const p1 = block.locator("p").first();
+    const p50 = block.locator("p").nth(40);
+    expect(Math.abs((await p1.boundingBox())!.x - (await p50.boundingBox())!.x)).toBeGreaterThan(100);
+    // Ningún renglón queda debajo del final de su hoja (encima del pie).
+    const pages = await page.locator(".write-gap-band").count();
+    expect(pages).toBeGreaterThanOrEqual(1);
+
+    const out = outFile("columnas-largas.pdf");
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(count(page)).toHaveText(`${pages + 1} páginas`);
+    await saveAs(page, out);
+    await page.getByRole("button", { name: "Exportar PDF…" }).click();
+    await finishExport(page, out);
+    const text = await pdfText(out);
+    expect(text.length).toBe(pages + 1);
+    expect(text.join(" ")).toContain("Párrafo 90");
+    expect(text[text.length - 1]).toContain("Final en una columna");
+    expect(errors).toEqual([]);
+  });
+
+  test("hojas horizontales a la mitad del documento", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "horizontal.docx");
+    const breaks = page.locator(".write-section-break");
+    await expect(breaks).toHaveCount(2);
+    await expect(breaks.nth(0)).toHaveAttribute("data-orientation", "landscape");
+    await expect(breaks.nth(1)).toHaveAttribute("data-orientation", "portrait");
+    await expect(page.locator(".write-notice")).toHaveCount(0);
+    // La tabla de la hoja horizontal es más ancha que el texto de las verticales.
+    const table = page.locator(".write-content > .write-alt table, .write-content > .write-alt.tableWrapper table, .write-content .write-alt table").first();
+    const normal = (await page.locator(".write-content > p").first().boundingBox())!;
+    expect((await table.boundingBox())!.width).toBeGreaterThan(normal.width + 100);
+    await expect(page.locator(".write-gap-band[data-alt='1']")).toHaveCount(1);
+    await expect(page.locator(".write-alt-sheet")).toHaveCount(1);
+
+    // En el PDF: tres hojas; la de en medio, horizontal (girada para verse derecha).
+    const out = outFile("horizontal.pdf");
+    await page.getByLabel("Imprimir", { exact: true }).click();
+    await expect(count(page)).toHaveText("3 páginas");
+    await saveAs(page, out);
+    await page.getByRole("button", { name: "Exportar PDF…" }).click();
+    await finishExport(page, out);
+    await expect(page.locator(".write-footer .sheet-status")).toContainText("PDF guardado");
+    const info = await pdfInfo(out);
+    expect(info.map((p) => p.rotation)).toEqual([0, 90, 0]);
+    const text = await pdfText(out);
+    expect(text[1]).toContain("Dato 3.8");
+    expect(text[2]).toContain("Última parte");
+
+    // Se guarda en Word con su sección horizontal.
+    const docx = outFile("horizontal-guardado.docx");
+    await saveAs(page, docx);
+    await page.locator(".write-content").click();
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".write-footer .sheet-status")).toContainText("Guardado");
+    const { readFileSync } = await import("node:fs");
+    const JSZip = (await import("jszip")).default;
+    const xml = await (await JSZip.loadAsync(readFileSync(docx))).file("word/document.xml")!.async("string");
+    expect(xml).toMatch(/<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"\/>/);
+    expect(xml).toContain('<w:type w:val="nextPage"/>');
+
+    // En un documento nuevo, desde la barra.
+    await home(page);
+    await page.locator(".home-card.kind-write").click();
+    await page.locator(".write-content").click();
+    await page.keyboard.type("Antes");
+    await page.getByLabel("Hojas horizontales", { exact: true }).click();
+    await page.getByRole("menuitem", { name: "Hojas horizontales desde aquí" }).click();
+    await page.keyboard.type("En la hoja horizontal");
+    await expect(page.locator(".write-section-break")).toHaveCount(1);
+    await expect(page.locator(".write-content > .write-alt")).toHaveText("En la hoja horizontal");
+    await expect(page.locator(".write-gap-band[data-alt='1']")).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
 });

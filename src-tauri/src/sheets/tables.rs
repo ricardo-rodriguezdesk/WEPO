@@ -157,7 +157,7 @@ impl SheetDocument {
         if steps > 0 {
             self.history.push(Step::Both(steps, before));
             self.future.clear();
-        } else if self.extras.tables != before.tables || self.extras.pages != before.pages || self.extras.pivots != before.pivots || self.extras.outlines != before.outlines || self.extras.protections != before.protections {
+        } else if self.extras.tables != before.tables || self.extras.pages != before.pages || self.extras.pivots != before.pivots || self.extras.outlines != before.outlines || self.extras.protections != before.protections || self.extras.sparklines != before.sparklines {
             self.record_extras(before);
         }
         Ok(())

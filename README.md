@@ -24,11 +24,11 @@ La versión más reciente está en [**Releases**](../../releases): hay instalado
 
 | Editor | Para | Formatos |
 |---|---|---|
-| **WEPO Write** | Documentos de texto | .docx, .txt, .md (y abre .odt) |
+| **WEPO Write** | Documentos de texto | .docx, .odt, .txt, .md |
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
-| **WEPO Present** | Presentaciones | .pptx |
+| **WEPO Present** | Presentaciones | .pptx, .odp |
 | **WEPO PDF** | Ver, editar y convertir PDF (a Write o a Sheets) | .pdf |
-| **WEPO Convertir** | Comprimir, reparar, dividir, recortar, numerar, marca de agua y comparar PDF; JPG y HTML a PDF; PDF a JPG, PowerPoint y PDF/A | .pdf, .jpg, .png, .html → .pdf, .jpg, .pptx |
+| **WEPO Convertir** | Unir, ordenar, girar, comprimir, reparar, dividir, recortar, numerar, proteger, desbloquear, OCR, marca de agua y comparar PDF; JPG, HTML, Word, Excel y PowerPoint a PDF; PDF a JPG, Word, Excel, PowerPoint y PDF/A | .pdf, .jpg, .png, .html, .docx, .xlsx, .pptx → .pdf, .jpg, .docx, .xlsx, .pptx |
 
 ## Tecnología
 
@@ -115,7 +115,7 @@ npm run tauri build
 
 Al terminar quedan en `src-tauri/target/release/bundle/macos/WEPO.app` y `src-tauri/target/release/bundle/dmg/`. Abre el .dmg y arrastra WEPO a la carpeta Aplicaciones.
 
-También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.4.0 && git push origin v0.4.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
+También puedes dejar que GitHub lo haga: al subir una etiqueta de versión (`git tag v0.5.0 && git push origin v0.5.0`) el flujo `.github/workflows/release.yml` crea un borrador en **Releases** con un .dmg para Mac con chip Apple y otro para Mac con Intel.
 
 **Primera vez que la abres:** WEPO todavía no está firmado por Apple, así que macOS no la deja abrir con doble clic. Haz clic derecho sobre WEPO en Aplicaciones → **Abrir** → **Abrir**. Solo hace falta una vez.
 
@@ -291,6 +291,10 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO PDF: reconocer texto en escaneos (OCR), con el del sistema (sin que WEPO pese más)
 - [x] WEPO Convertir: comprimir, reparar, dividir, recortar, números de página, marca de agua (texto o imagen) y comparar PDF
 - [x] WEPO Convertir: JPG y HTML a PDF; PDF a JPG, a PowerPoint (editable) y a PDF/A
+- [x] WEPO Convertir: unir, ordenar, girar, proteger y desbloquear PDF, OCR, PDF a Word y a Excel, y Word, Excel y PowerPoint a PDF (varios archivos a la vez)
+- [x] WEPO Sheets: texto en columnas, buscar objetivo y minigráficos
+- [x] WEPO Write: columnas que siguen en la hoja siguiente y hojas horizontales a la mitad del documento
+- [x] Formatos de LibreOffice: guardar .odt (Write) y .ods (Sheets), y abrir y guardar .odp (Present)
 
 ## Licencia
 

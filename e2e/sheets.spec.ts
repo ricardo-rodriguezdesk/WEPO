@@ -229,4 +229,149 @@ test.describe("WEPO Sheets", () => {
     await expect(page.locator(".grid-scroll.break-preview")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+
+  test("texto en columnas y buscar objetivo", async ({ page }) => {
+    const errors = collectErrors(page);
+    await home(page);
+    await page.locator(".home-card.kind-sheets").click();
+    const type = async (ref: string, text: string) => {
+      const p = await cellPoint(page, ref);
+      await page.mouse.click(p.x, p.y);
+      await page.keyboard.type(text);
+      await page.keyboard.press("Enter");
+    };
+    await type("A1", "Juan Pérez");
+    await type("A2", "Ana María López");
+    await type("A3", "Luis Gómez");
+    const a1 = await cellPoint(page, "A1");
+    await page.mouse.click(a1.x, a1.y);
+    await page.getByLabel("Texto en columnas", { exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Vista previa")).toContainText("López");
+    await dialog.getByRole("button", { name: "Separar en 3 columnas" }).click();
+    await expect.poll(async () => (await sheetCell(page, "B1")).text).toBe("Pérez");
+    expect((await sheetCell(page, "A2")).text).toBe("Ana");
+    expect((await sheetCell(page, "C2")).text).toBe("López");
+    // Se deshace de una vez.
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect.poll(async () => (await sheetCell(page, "A1")).text).toBe("Juan Pérez");
+    expect((await sheetCell(page, "B1")).text).toBe("");
+
+    // Buscar objetivo: ¿qué precio da 580 con IVA?
+    await type("A5", "100");
+    await type("B5", "=A5*1.16");
+    const b5 = await cellPoint(page, "B5");
+    await page.mouse.click(b5.x, b5.y);
+    await page.getByLabel("Buscar objetivo", { exact: true }).click();
+    await expect(dialog.getByLabel("Definir la celda")).toHaveValue("B5");
+    await dialog.getByLabel("Con el valor").fill("580");
+    await dialog.getByLabel("Cambiando la celda").fill("A5");
+    await dialog.getByRole("button", { name: "Buscar" }).click();
+    await expect(dialog.getByRole("status")).toContainText("Se encontró una solución.");
+    await expect(dialog.getByRole("status")).toContainText("A5 = 500");
+    await dialog.getByRole("button", { name: "Aceptar" }).click();
+    expect((await sheetCell(page, "A5")).text).toBe("500");
+    // «Cancelar» regresa al valor de antes.
+    await page.mouse.click(b5.x, b5.y);
+    await page.getByLabel("Buscar objetivo", { exact: true }).click();
+    await dialog.getByLabel("Con el valor").fill("1160");
+    await dialog.getByLabel("Cambiando la celda").fill("A5");
+    await dialog.getByRole("button", { name: "Buscar" }).click();
+    await expect(dialog.getByRole("status")).toContainText("A5 = 1,000");
+    await dialog.getByRole("button", { name: "Cancelar" }).click();
+    await expect.poll(async () => (await sheetCell(page, "A5")).text).toBe("500");
+    expect(errors).toEqual([]);
+  });
+
+  test("minigráficos: se insertan, cambian con los datos y se guardan en Excel", async ({ page }) => {
+    const errors = collectErrors(page);
+    await home(page);
+    await page.locator(".home-card.kind-sheets").click();
+    const click = async (ref: string, shift = false) => {
+      const p = await cellPoint(page, ref);
+      if (shift) await page.keyboard.down("Shift");
+      await page.mouse.click(p.x, p.y);
+      if (shift) await page.keyboard.up("Shift");
+    };
+    const type = async (ref: string, text: string) => {
+      await click(ref);
+      await page.keyboard.type(text);
+      await page.keyboard.press("Enter");
+    };
+    const data = [
+      ["3", "5", "2", "8"],
+      ["6", "4", "7", "1"],
+    ];
+    for (const [r, row] of data.entries()) for (const [c, v] of row.entries()) await type(`${"BCDE"[c]}${r + 1}`, v);
+    await click("B1");
+    await click("E2", true);
+    await page.getByLabel("Minigráficos", { exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Rango de datos")).toHaveValue("B1:E2");
+    await expect(dialog.getByLabel("Ubicación")).toHaveValue("F1:F2");
+    await dialog.getByRole("radio", { name: "Columnas" }).click();
+    await dialog.getByRole("button", { name: "Insertar" }).click();
+    const sparks = page.locator(".grid-scroll .sparkline");
+    await expect(sparks).toHaveCount(2);
+    await expect(sparks.first().locator("rect")).toHaveCount(4);
+
+    // Cambiar a línea desde la celda.
+    await click("F1");
+    await page.getByLabel("Minigráficos", { exact: true }).click();
+    await dialog.getByRole("radio", { name: "Línea" }).click();
+    await dialog.getByRole("button", { name: "Aplicar" }).click();
+    await expect(sparks.first().locator("path")).toHaveCount(1);
+
+    const out = outFile("minigraficos.xlsx");
+    await saveAs(page, out);
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect(page.locator(".sheet-status")).toHaveText("Guardado");
+    const JSZip = (await import("jszip")).default;
+    const { readFileSync } = await import("node:fs");
+    const xml = await (await JSZip.loadAsync(readFileSync(out))).file("xl/worksheets/sheet1.xml")!.async("string");
+    expect(xml).toContain("x14:sparklineGroup");
+    expect(xml).toContain("<xm:sqref>F2</xm:sqref>");
+    expect(xml).toMatch(/<xm:f>[^<]*!B2:E2<\/xm:f>/);
+
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".grid-scroll .sparkline")).toHaveCount(2);
+    expect(errors).toEqual([]);
+  });
+
+  test("guardar como .ods (LibreOffice) y volver a abrirlo", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openFile(page, "ventas.xlsx");
+    const out = outFile("ventas.ods");
+    await saveAs(page, out);
+    const first = await cellPoint(page, "A1");
+    await page.mouse.click(first.x, first.y);
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".sheet-status")).toHaveText("Guardado");
+    const JSZip = (await import("jszip")).default;
+    const { readFileSync } = await import("node:fs");
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    expect(await zip.file("mimetype")!.async("string")).toBe("application/vnd.oasis.opendocument.spreadsheet");
+    const content = await zip.file("content.xml")!.async("string");
+    expect(content).toContain('table:name="Ventas 2026"');
+    expect(content).toMatch(/table:formula="of:=[A-Z]+\(\[\.[A-Z]+\d+/);
+    // Guardar otra vez va directo al mismo .ods (ya es de WEPO), sin preguntar dónde.
+    await page.evaluate(() => ((window as unknown as Record<string, unknown>).__saveDialog = null));
+    const a12 = await cellPoint(page, "A12");
+    await page.mouse.click(a12.x, a12.y);
+    await page.keyboard.type("Nota");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect(page.locator(".sheet-status")).toHaveText("Guardado");
+    expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__saveDialog)).toBeNull();
+
+    await home(page);
+    await page.evaluate((p) => ((window as unknown as Record<string, unknown>).__openPath = p), out);
+    await page.getByText("Abrir archivo…").click();
+    await expect(page.locator(".grid-scroll")).toBeVisible();
+    expect((await sheetCell(page, "A1")).text).toBe("Mes");
+    expect((await sheetCell(page, "D9")).text).toMatch(/148,?300/);
+    expect(errors).toEqual([]);
+  });
 });

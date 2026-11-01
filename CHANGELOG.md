@@ -2,7 +2,9 @@
 
 Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja.
 
-## Próxima versión (sin publicar)
+## 0.5.0 (1 de noviembre de 2026)
+
+Llega WEPO Convertir, con 23 herramientas para PDF, imágenes y documentos de Office que trabajan sin internet; Present suma transiciones vistosas, animaciones de énfasis y salida, video y audio; Write tiene columnas, notas al final y hojas horizontales; Sheets, texto en columnas, buscar objetivo y minigráficos. Y ahora se guarda en los formatos de LibreOffice: .odt, .ods y .odp. Hay 63 pruebas automáticas de la interfaz.
 
 ### WEPO Convertir: herramientas para PDF e imágenes
 - Nueva sección *Convertir* en Inicio, con tarjetas como las de iLovePDF. Todo pasa en la computadora: los archivos no se suben a internet. Se pueden arrastrar desde Finder, y lo que sale se guarda junto al original (varios archivos van a la carpeta que elijas, sin encimar los que ya estén).
@@ -18,6 +20,14 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 - **Recortar PDF**: arrastra las orillas del recuadro o escribe los márgenes en milímetros; en todas las páginas, solo en una, o que cada página quite sus márgenes en blanco.
 - **Marca de agua** de texto o de imagen (tu logo): nueve posiciones o en mosaico, tamaño, transparencia, giro, encima o debajo del contenido y en qué páginas, con vista previa.
 - **Comparar PDF**: dos versiones lado a lado, con lo que se quitó en rojo, lo que se agregó en verde y la lista de cambios; también marca dónde cambió el dibujo (imágenes, colores, formas).
+- **Unir PDF**: varios PDF en uno, en el orden que acomodes.
+- **Ordenar PDF**: las páginas en miniatura para arrastrarlas, girarlas o quitarlas antes de guardar.
+- **Girar PDF**: todas las páginas, o solo las que elijas, 90° o 180°.
+- **Proteger PDF** con contraseña (y permisos para imprimir o copiar) y **Desbloquear PDF** para quitársela.
+- **OCR**: los PDF escaneados quedan con texto que se puede buscar y copiar, con el reconocimiento de texto del sistema.
+- **PDF a Word** y **PDF a Excel** directo, sin abrir el PDF: un .docx con títulos, listas, tablas e imágenes, o un .xlsx con las tablas del PDF y números de verdad.
+- **Word a PDF**, **Excel a PDF** y **PowerPoint a PDF**: .docx, .odt, .xlsx, .ods, .csv, .pptx y .odp como PDF, con el mismo motor de impresión de los editores (encabezados, área de impresión, una diapositiva por hoja).
+- Casi todas trabajan con **varios archivos a la vez**: elige o arrastra varios y cada uno sale con su resultado.
 
 ### Transiciones vistosas en WEPO Present
 - 13 transiciones nuevas, como las «llamativas» de PowerPoint: *Cubo*, *Voltear*, *Galería*, *Puertas*, *Cortinas*, *Caer*, *Remolino*, *Onda*, *Reloj*, *Persianas*, *Noticia*, *Destello* y *Rueda* (varias con dirección).
@@ -39,7 +49,30 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ### Columnas en WEPO Write
 - Botón *Columnas*: lo que elegiste (o el párrafo donde estás) pasa a 2 o 3 columnas que se emparejan solas, como un boletín; el resto del documento sigue igual. *Una columna* lo regresa.
-- Se guarda en .docx como sección continua con columnas (Word y LibreOffice lo abren igual) y se leen las secciones con columnas de Word. Por ahora, un bloque de columnas debe caber en una hoja.
+- Se guarda en .docx como sección continua con columnas (Word y LibreOffice lo abren igual) y se leen las secciones con columnas de Word.
+- Las columnas largas siguen en la hoja siguiente, como en Word: el texto llena la primera columna, pasa a la segunda y luego a la página que sigue.
+
+### Hojas horizontales a la mitad del documento en WEPO Write
+- Botón *Hojas horizontales* → *Hojas horizontales desde aquí*: desde ese punto las hojas se ven acostadas (para una tabla ancha o una gráfica), y *Hojas verticales desde aquí* las regresa, como las secciones de Word.
+- Se imprimen y se exportan a PDF con cada hoja en su orientación, y se guardan en .docx (secciones con su orientación) y en .odt; se leen las de Word.
+
+### Guardar en .odt en WEPO Write
+- *Guardar como* ofrece «Documento de OpenDocument (.odt)», el formato de LibreOffice Writer: títulos, formato del texto, listas, tablas con celdas combinadas y color, imágenes, notas al pie y al final, columnas, saltos de página, hojas horizontales, encabezado y pie, y comentarios. Los cambios registrados se guardan aceptados.
+
+### Texto en columnas y buscar objetivo en WEPO Sheets
+- Botón *Texto en columnas* (también en el clic derecho): separa una columna por tabulación, punto y coma, coma, espacio u otro carácter, o por ancho fijo, con vista previa, como en Excel.
+- Botón *Buscar objetivo* (también en el clic derecho): qué valor debe tener una celda para que una fórmula dé el resultado que quieres (por ejemplo, el precio para llegar a una venta). Se deshace de un solo paso.
+
+### Minigráficos en WEPO Sheets
+- Botón *Minigráficos*: una gráfica pequeña de líneas, columnas o ganancia y pérdida dentro de cada celda, con su color y el punto más alto (y el más bajo) marcado. Se ven también al imprimir.
+- Se guardan en el .xlsx como los de Excel y se leen los de Excel y LibreOffice.
+
+### Guardar en .ods en WEPO Sheets
+- *Guardar como* ofrece «Hoja de cálculo de OpenDocument (.ods)», el formato de LibreOffice Calc: valores, fórmulas (traducidas a las de OpenDocument), formato de celdas y de números, celdas combinadas, ancho de columnas y alto de filas, y varias hojas.
+
+### Abrir y guardar .odp en WEPO Present
+- WEPO Present abre las presentaciones de LibreOffice Impress (.odp): texto con su formato y listas, formas, líneas, imágenes, video y audio, tablas, gráficas con sus datos, notas, fondos, diapositivas ocultas, transiciones y animaciones.
+- *Guardar como* ofrece «Presentación de OpenDocument (.odp)». LibreOffice la abre con todo eso; las transiciones y animaciones van con los efectos de LibreOffice (las que allá no existen, con la más parecida, y en WEPO se vuelven a abrir igual).
 
 ## 0.4.0 (29 de octubre de 2026)
 

@@ -1,6 +1,29 @@
 // Las herramientas de «WEPO Convertir», como las tarjetas de iLovePDF.
 
-export type ToolId = "compress" | "repair" | "jpg2pdf" | "html2pdf" | "pdf2jpg" | "pdf2pptx" | "pdfa" | "split" | "numbers" | "crop" | "watermark" | "compare";
+export type ToolId =
+  | "compress"
+  | "repair"
+  | "ocr"
+  | "jpg2pdf"
+  | "word2pdf"
+  | "excel2pdf"
+  | "ppt2pdf"
+  | "html2pdf"
+  | "pdf2jpg"
+  | "pdf2docx"
+  | "pdf2xlsx"
+  | "pdf2pptx"
+  | "pdfa"
+  | "merge"
+  | "split"
+  | "organize"
+  | "rotate"
+  | "numbers"
+  | "crop"
+  | "watermark"
+  | "protect"
+  | "unlock"
+  | "compare";
 
 export type ToolDef = {
   id: ToolId;
@@ -153,6 +176,135 @@ export const TOOLS: ToolDef[] = [
     action: "Comparar",
   },
 ];
+
+// Lo que ya hacían las apps, ahora también aquí (para varios archivos de una vez).
+TOOLS.push(
+  {
+    id: "merge",
+    name: "Unir PDF",
+    desc: "Junta varios PDF en uno, en el orden que quieras.",
+    group: "Organizar",
+    color: "#c42b45",
+    icon: "M5 4h6v7H5zM13 13h6v7h-6zM8 11v4a2 2 0 0 0 2 2h3M16 13V9a2 2 0 0 0-2-2h-3",
+    accept: PDF,
+    multiple: true,
+    action: "Unir",
+  },
+  {
+    id: "organize",
+    name: "Ordenar PDF",
+    desc: "Mueve, gira o quita páginas viéndolas en miniatura.",
+    group: "Organizar",
+    color: "#c42b45",
+    icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
+    accept: PDF,
+    multiple: false,
+    action: "Guardar el PDF ordenado",
+  },
+  {
+    id: "rotate",
+    name: "Girar PDF",
+    desc: "Gira todas las páginas, o solo algunas, de uno o varios PDF.",
+    group: "Organizar",
+    color: "#c42b45",
+    icon: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
+    accept: PDF,
+    multiple: true,
+    action: "Girar",
+  },
+  {
+    id: "protect",
+    name: "Proteger PDF",
+    desc: "Que pida contraseña para abrirse (cifrado AES de 256 bits).",
+    group: "Seguridad",
+    color: "#2c6db5",
+    icon: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4M12 15v2",
+    accept: PDF,
+    multiple: true,
+    action: "Proteger",
+  },
+  {
+    id: "unlock",
+    name: "Desbloquear PDF",
+    desc: "Quita la contraseña (si la sabes) o los permisos que no dejan imprimir o copiar.",
+    group: "Seguridad",
+    color: "#2c6db5",
+    icon: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 7.5-2M12 15v2",
+    accept: PDF,
+    multiple: true,
+    action: "Desbloquear",
+  },
+  {
+    id: "ocr",
+    name: "OCR PDF",
+    desc: "Los escaneos se vuelven texto que se puede buscar, seleccionar y copiar.",
+    group: "Optimizar",
+    color: "#2f9e6a",
+    icon: "M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 9h8M8 12h8M8 15h5",
+    accept: PDF,
+    multiple: true,
+    action: "Reconocer texto",
+  },
+  {
+    id: "pdf2docx",
+    name: "PDF a Word",
+    desc: "Un documento de Word que se puede editar: títulos, listas, tablas e imágenes.",
+    group: "Convertir desde PDF",
+    color: "#3b6fd8",
+    icon: "M6 3h9l4 4v14H6zM8.5 11l1.5 6 2-4.5 2 4.5 1.5-6",
+    accept: PDF,
+    multiple: true,
+    action: "Convertir a Word",
+  },
+  {
+    id: "pdf2xlsx",
+    name: "PDF a Excel",
+    desc: "Las tablas del PDF en hojas de Excel, con números de verdad.",
+    group: "Convertir desde PDF",
+    color: "#1f8a55",
+    icon: "M6 3h9l4 4v14H6zM9 11l5 6M14 11l-5 6",
+    accept: PDF,
+    multiple: true,
+    action: "Convertir a Excel",
+  },
+  {
+    id: "word2pdf",
+    name: "Word a PDF",
+    desc: "Documentos .docx, .odt, .md o .txt como PDF, igual que se ven en WEPO Write.",
+    group: "Convertir a PDF",
+    color: "#3b6fd8",
+    icon: "M4 4h10l4 4v12H4zM6.5 10l1.5 6 2-4.5 2 4.5 1.5-6",
+    accept: { name: "Documentos (Word, ODT, Markdown, texto)", extensions: ["docx", "odt", "md", "txt"] },
+    multiple: true,
+    action: "Convertir a PDF",
+  },
+  {
+    id: "excel2pdf",
+    name: "Excel a PDF",
+    desc: "Hojas de cálculo como PDF, con su área de impresión, encabezado y saltos de página.",
+    group: "Convertir a PDF",
+    color: "#1f8a55",
+    icon: "M4 4h10l4 4v12H4zM7 10l5 6M12 10l-5 6",
+    accept: { name: "Hojas de cálculo (Excel, ODS, CSV)", extensions: ["xlsx", "xlsm", "xlsb", "xls", "ods", "csv"] },
+    multiple: true,
+    action: "Convertir a PDF",
+  },
+  {
+    id: "ppt2pdf",
+    name: "PowerPoint a PDF",
+    desc: "Presentaciones como PDF, una diapositiva por hoja.",
+    group: "Convertir a PDF",
+    color: "#d9572b",
+    icon: "M4 4h10l4 4v12H4zM8 10h3.5a2 2 0 0 1 0 4H8v-4zM8 14v3",
+    accept: { name: "Presentaciones (PowerPoint, ODP)", extensions: ["pptx", "odp"] },
+    multiple: true,
+    action: "Convertir a PDF",
+  },
+);
+
+const ORDER = ["Organizar", "Optimizar", "Convertir a PDF", "Convertir desde PDF", "Editar", "Seguridad", "Revisar"];
+const RANK: ToolId[] = ["merge", "split", "organize", "rotate", "compress", "repair", "ocr", "jpg2pdf", "word2pdf", "excel2pdf", "ppt2pdf", "html2pdf", "pdf2jpg", "pdf2docx", "pdf2xlsx", "pdf2pptx", "pdfa", "numbers", "crop", "watermark", "protect", "unlock", "compare"];
+TOOLS.sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group) || RANK.indexOf(a.id) - RANK.indexOf(b.id));
 
 export const GROUPS = [...new Set(TOOLS.map((t) => t.group))];
 export const toolById = (id: ToolId) => TOOLS.find((t) => t.id === id)!;

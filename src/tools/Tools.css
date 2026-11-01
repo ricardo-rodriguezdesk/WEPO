@@ -288,3 +288,34 @@
 .home-tools-text b { font-size: 15px; }
 .home-tools-text span { font-size: 12.5px; color: var(--muted); }
 .home-tools-arrow { margin-left: auto; font-size: 20px; color: var(--muted); }
+
+/* Ordenar PDF: miniaturas que se arrastran. */
+.tool-organize-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tool-organize-bar .hint { flex: 1 1 200px; margin: 0; font-size: 12.5px; color: var(--muted); }
+.tool-organize { list-style: none; margin: 0; padding: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; border-radius: 14px; background: var(--chrome); }
+.tool-thumb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px 8px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  cursor: grab;
+  user-select: none;
+}
+.tool-thumb:hover { background: var(--surface); }
+.tool-thumb.on { border-color: var(--tool); background: color-mix(in srgb, var(--tool) 8%, var(--surface)); }
+.tool-thumb.dragging { opacity: 0.4; }
+.tool-thumb.over { box-shadow: -4px 0 0 0 var(--tool); }
+.tool-thumb-page { display: grid; place-items: center; width: 130px; height: 130px; }
+.tool-thumb-page canvas { background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18); transition: transform 0.15s ease; }
+.tool-thumb-num { font-size: 12px; color: var(--muted); }
+.tool-thumb-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 3px; opacity: 0; transition: opacity 0.12s; }
+.tool-thumb:hover .tool-thumb-actions, .tool-thumb:focus-within .tool-thumb-actions { opacity: 1; }
+.tool-thumb-actions button { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }
+.tool-thumb-actions button:hover { border-color: var(--tool); color: var(--tool); }
+
+/* Word, Excel o PowerPoint a PDF: el editor se abre escondido, fuera de la pantalla. */
+.tool-office-host { position: fixed; left: -20000px; top: 0; width: 1280px; height: 900px; overflow: hidden; visibility: hidden; pointer-events: none; }

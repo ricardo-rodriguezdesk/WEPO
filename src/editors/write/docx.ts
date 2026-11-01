@@ -769,22 +769,32 @@ export async function readDocx(data: Uint8Array): Promise<WriteDocument> {
   }
   groups.push({ els: current, sect: sectPr });
   const columnsOf = (sect: Element | undefined) => Math.min(3, Math.max(1, Number(attr(child(sect, "cols"), "num")) || 1));
-  const finalPage = pageFrom(sectPr);
+  // La hoja del documento es la de la primera sección; las que están giradas (horizontal ↔ vertical) llevan una marca de sección.
+  const pages = groups.map((g) => (g.sect ? pageFrom(g.sect) : pageFrom(sectPr)));
+  const basePage = pages[0] ?? pageFrom(sectPr);
+  const orientOf = (p: PageSize) => (p.width > p.height ? "landscape" : "portrait");
   const content: JSONContent[] = [];
-  for (const group of groups) {
+  let currentOrient = orientOf(basePage);
+  for (const [k, group] of groups.entries()) {
     const container = body.ownerDocument.createElementNS(W, "w:body");
     for (const el of group.els) container.appendChild(el.cloneNode(true));
     const blocks = await reader.blocks(container);
+    const p = pages[k];
+    const orient = orientOf(p);
+    const sameSize = (p.width === basePage.width && p.height === basePage.height) || (p.width === basePage.height && p.height === basePage.width);
+    if (!sameSize) reader.unsupported.add("secciones con otro tamaño de hoja");
+    if (orient !== currentOrient && (blocks.length || k < groups.length - 1)) {
+      content.push({ type: "sectionBreak", attrs: { orientation: orient } });
+      currentOrient = orient;
+    }
     const cols = columnsOf(group.sect);
     if (cols > 1 && blocks.length) content.push({ type: "columns", attrs: { count: cols }, content: blocks });
     else content.push(...blocks);
-    const p = pageFrom(group.sect);
-    if (group.sect && (p.width !== finalPage.width || p.height !== finalPage.height)) reader.unsupported.add("secciones con otro tamaño u orientación de hoja");
   }
   const headerFooter = await readHeaderFooter(zip, reader, sectPr);
   return {
     content: { type: "doc", content: content.length ? content : [{ type: "paragraph" }] },
-    page: pageFrom(sectPr),
+    page: basePage,
     headerFooter,
     comments: reader.comments,
     unsupported: [...reader.unsupported],
@@ -813,12 +823,16 @@ class Writer {
   footnotes: string[] = [];
   /** Y el de las notas al final (endnotes.xml). */
   endnotes: string[] = [];
+  /** Orientación de lo que se está escribiendo (cambia con cada sección) y cómo empieza la sección actual. */
+  orient: "p" | "l" = "p";
+  startType: "c" | "n" = "c";
 
   constructor(
     private page: PageSize,
     comments: Comment[] = [],
     content?: JSONContent,
   ) {
+    this.orient = page.width > page.height ? "l" : "p";
     if (!content || !comments.length) return;
     const first = new Map<string, JSONContent>();
     const last = new Map<string, JSONContent>();
@@ -1173,7 +1187,14 @@ class Writer {
         // después, la de columnas (writeDocx pone los datos de la hoja en cada marca).
         const n = Math.min(3, Math.max(2, Number(node.attrs?.count) || 2));
         const inner = (node.content ?? []).map((b) => this.block(b)).join("");
-        return `${SECTION_MARK(1)}${inner}${SECTION_MARK(n)}`;
+        return `${this.mark(1)}${inner}${this.mark(n)}`;
+      }
+      case "sectionBreak": {
+        // Termina la sección de antes; la que sigue empieza en hoja nueva con la otra orientación.
+        const mark = this.mark(1);
+        this.orient = node.attrs?.orientation === "portrait" ? "p" : "l";
+        this.startType = "n";
+        return mark;
       }
       case "tableOfContents":
         return this.tableOfContents(node);
@@ -1189,6 +1210,13 @@ class Writer {
       default:
         return "";
     }
+  }
+
+  /** Fin de la sección actual (con sus columnas, su orientación y cómo empezó). */
+  mark(cols: number): string {
+    const m = SECTION_MARK(cols, this.orient, this.startType);
+    this.startType = "c";
+    return m;
   }
 
   numbering(): string {
@@ -1256,7 +1284,7 @@ ${[1, 2, 3].map((n) => `<w:style w:type="paragraph" w:styleId="TOC${n}"><w:name 
 </w:styles>`;
 
 /** Dónde termina una sección (con cuántas columnas): writeDocx lo cambia por el párrafo con <w:sectPr>. */
-const SECTION_MARK = (cols: number) => `<!--WEPO-SECCION:${cols}-->`;
+const SECTION_MARK = (cols: number, orient: "p" | "l" = "p", start: "c" | "n" = "c") => `<!--WEPO-SECCION:${cols}:${orient}:${start}-->`;
 
 export async function writeDocx(
   content: JSONContent,
@@ -1282,17 +1310,25 @@ export async function writeDocx(
     add("ftr", "default", hf.footer);
     if (hf.skipFirst) add("ftr", "first", null);
   }
-  const pageXml = `<w:pgSz w:w="${page.width}" w:h="${page.height}"/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>`;
-  // Secciones de columnas: sin secciones vacías (al principio o entre dos bloques de columnas seguidos).
-  body = body.replace(/^(?:<!--WEPO-SECCION:1-->)+/, "").replace(/(<!--WEPO-SECCION:\d-->)(?:<!--WEPO-SECCION:1-->)+/g, "$1");
+  // La hoja de cada sección: la del documento o girada (horizontal ↔ vertical).
+  const baseOrient = page.width > page.height ? "l" : "p";
+  const pageXml = (orient: string) => {
+    const [w, h] = orient === baseOrient ? [page.width, page.height] : [page.height, page.width];
+    return `<w:pgSz w:w="${w}" w:h="${h}"${w > h ? ' w:orient="landscape"' : ""}/><w:pgMar w:top="${page.top}" w:right="${page.right}" w:bottom="${page.bottom}" w:left="${page.left}" w:header="708" w:footer="708" w:gutter="0"/>`;
+  };
+  // Sin secciones vacías (al principio o entre dos marcas seguidas); una vacía que empezaba en hoja nueva le pasa eso a la siguiente.
+  body = body.replace(/^(?:<!--WEPO-SECCION:1:[pl]:[cn]-->)+/, "");
+  body = body.replace(/(<!--WEPO-SECCION:\d:[pl]:[cn]-->)((?:<!--WEPO-SECCION:1:[pl]:[cn]-->)+)/g, (_m, keep: string) => keep);
   let sections = 0;
-  body = body.replace(/<!--WEPO-SECCION:(\d)-->/g, (_m, cols: string) => {
+  body = body.replace(/<!--WEPO-SECCION:(\d):([pl]):([cn])-->/g, (_m, cols: string, orient: string, start: string) => {
     const first = sections++ === 0;
     // Cada sección lleva el encabezado y el pie (si no, la primera no tendría); la portada solo en la primera.
-    const sect = `<w:sectPr>${refs}${first ? "" : '<w:type w:val="continuous"/>'}${pageXml}<w:cols w:num="${cols}" w:space="720"/>${first && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
+    const type = first ? "" : start === "n" ? '<w:type w:val="nextPage"/>' : '<w:type w:val="continuous"/>';
+    const sect = `<w:sectPr>${refs}${type}${pageXml(orient)}<w:cols w:num="${cols}" w:space="720"/>${first && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
     return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>${sect}</w:pPr></w:p>`;
   });
-  body += `<w:sectPr>${refs}${sections ? '<w:type w:val="continuous"/>' : ""}${pageXml}${!sections && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
+  const lastType = sections ? (writer.startType === "n" ? '<w:type w:val="nextPage"/>' : '<w:type w:val="continuous"/>') : "";
+  body += `<w:sectPr>${refs}${lastType}${pageXml(writer.orient)}${!sections && hf.skipFirst && refs ? "<w:titlePg/>" : ""}</w:sectPr>`;
   // Comentarios: comments.xml y commentsExtended.xml (resueltos y respuestas).
   const hasNotes = writer.footnotes.length > 0;
   if (hasNotes) writer.rel("footnotes", "footnotes.xml");

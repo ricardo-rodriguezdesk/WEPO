@@ -35,6 +35,9 @@ pub mod drawings;
 mod structure;
 mod tables;
 mod validation;
+mod what_if;
+mod sparklines;
+mod ods_write;
 
 pub use comments::{CommentAction, CommentView};
 pub use outline::{OutlineAction, OutlineView};
@@ -43,6 +46,8 @@ pub use pivot::{PivotLayout, PivotView};
 pub use annotations::{LinkView, NoteView, PasteMode, SelectionStats};
 pub use data::{ColumnFilter, FindMatch, SortKey};
 pub use tables::{PageView, TableView};
+pub use what_if::{GoalSeek, SplitSpec};
+pub use sparklines::{SparkAction, SparklineView};
 pub use validation::{ListSource, ValidationView};
 
 const LOCALE: &str = "en";
@@ -102,6 +107,8 @@ pub struct Extras {
     pub outlines: Vec<outline::Outline>,
     /// Hojas protegidas y sus celdas editables.
     pub protections: Vec<protection::Protection>,
+    /// Minigráficos.
+    pub sparklines: Vec<sparklines::SparkGroup>,
 }
 
 struct InternalClipboard {
@@ -225,6 +232,7 @@ pub struct SheetView {
     pub outline: OutlineView,
     /// Si la hoja está protegida y qué celdas se pueden editar.
     pub protection: ProtectionView,
+    pub sparklines: Vec<SparklineView>,
 }
 
 /// 1 → A, 26 → Z, 27 → AA.
@@ -306,6 +314,7 @@ impl SheetDocument {
                 doc.load_comments(path);
                 doc.load_outline(path);
                 doc.load_protection(path);
+                doc.load_sparklines(path);
                 Ok(doc)
             }
             "csv" => Self::from_csv(path),
@@ -520,6 +529,7 @@ impl SheetDocument {
             comments: self.comment_views(sheet),
             outline: self.outline_view(sheet),
             protection: self.protection_view(sheet),
+            sparklines: self.sparkline_views(sheet),
         })
     }
 
@@ -836,6 +846,7 @@ impl SheetDocument {
         let result = match extension(path).as_str() {
             "xlsx" => self.write_xlsx(&tmp),
             "csv" => self.write_csv(&tmp, sheet),
+            "ods" => self.write_ods(&tmp),
             other => Err(format!("WEPO todavía no puede guardar archivos .{other}")),
         };
         match result {
@@ -861,7 +872,9 @@ impl SheetDocument {
         crate::xlsx_outline::write_outline(path, &self.outline_for_xlsx())?;
         crate::xlsx_protection::write_protection(path, &self.protection_for_xlsx())?;
         // Y las tablas dinámicas, como las escribe Excel.
-        crate::xlsx_pivots::write_pivots(path, &self.pivots_for_xlsx())
+        crate::xlsx_pivots::write_pivots(path, &self.pivots_for_xlsx())?;
+        // Los minigráficos van al último: su <extLst> tiene que ser lo último de la hoja.
+        crate::xlsx_sparklines::write_sparklines(path, &self.sparklines_for_xlsx())
     }
 
     /// Identificador estable de una hoja (no cambia al renombrarla ni moverla).

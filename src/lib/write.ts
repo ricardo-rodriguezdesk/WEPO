@@ -2,6 +2,7 @@
 // Los archivos se leen y escriben enteros desde Rust (ver src-tauri/src/files.rs);
 // la conversión del .docx se hace aquí (ver editors/write/docx.ts).
 
+import { writeOdt } from "../editors/write/odtWrite";
 import { invoke } from "@tauri-apps/api/core";
 import type { JSONContent } from "@tiptap/react";
 import type { WriteDocument } from "../editors/write/docx";
@@ -30,7 +31,7 @@ export function emptyDocument(): WriteDocument {
 }
 
 /** Formatos que WEPO Write sabe guardar tal cual. */
-export const WRITE_SAVE_FORMATS = ["docx", "txt", "md"];
+export const WRITE_SAVE_FORMATS = ["docx", "odt", "txt", "md"];
 
 export async function openWriteDocument(path: string): Promise<WriteDocument> {
   const bytes = fromBase64(await invoke<string>("file_read", { path }));
@@ -55,6 +56,7 @@ export async function saveWriteDocument(
   const ext = extensionOf(path);
   let bytes: Uint8Array;
   if (ext === "docx") bytes = await writeDocx(content, page, title, headerFooter, comments);
+  else if (ext === "odt") bytes = await writeOdt(content, page, title, headerFooter, comments);
   else if (ext === "md") bytes = encoder.encode(writeMarkdown(content));
   else if (ext === "txt") bytes = encoder.encode(plain.endsWith("\n") ? plain : `${plain}\n`);
   else throw new Error(`WEPO Write todavía no guarda archivos .${ext}`);

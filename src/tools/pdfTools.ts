@@ -8,7 +8,8 @@ import type { OcrText } from "../editors/pdf/pdfEdit";
 import { loadPdf } from "../lib/pdf";
 import type { PDFDocumentProxy } from "../lib/pdf";
 
-export type Output = { name: string; bytes: Uint8Array };
+/** Lo que sale de una herramienta. Con `write`, el archivo lo escribe otro (Rust o un editor) en la ruta que se elija. */
+export type Output = { name: string; bytes: Uint8Array; write?: (path: string) => Promise<void> };
 
 // ───────────── abrir ─────────────
 

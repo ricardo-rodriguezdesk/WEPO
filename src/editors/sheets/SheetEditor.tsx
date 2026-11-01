@@ -27,6 +27,8 @@ import type {
   Range,
   SelectionStats,
   SheetView,
+  SparkAction,
+  SparklineView,
   TableStyle,
   TableView,
 } from "../../lib/spreadsheet";
@@ -53,6 +55,11 @@ import ProtectSheetDialog from "./ProtectSheetDialog";
 import { loadAuthor } from "../../lib/write";
 import FunctionDialog from "./FunctionDialog";
 import DuplicatesDialog from "./DuplicatesDialog";
+import TextColumnsDialog from "./TextColumnsDialog";
+import type { SplitSpec } from "./TextColumnsDialog";
+import GoalSeekDialog from "./GoalSeekDialog";
+import SparklineSvg from "./SparklineSvg";
+import SparklineDialog from "./SparklineDialog";
 import type { ColumnSpec } from "./FilterMenu";
 import { conditionHolds } from "./FilterMenu";
 import { tableAt, tableRegion, withTableStyle } from "./tables";
@@ -97,6 +104,8 @@ type Props = {
   recovered?: boolean;
   /** Mensaje al abrir (en lugar del de "documento recuperado"). */
   notice?: string;
+  /** WEPO Convertir: exportar la hoja a PDF en cuanto se abre (con su configuración de página). */
+  autoPdf?: boolean;
 };
 
 /**
@@ -221,6 +230,10 @@ export default function SheetEditor(props: Props) {
   const [pivotClosed, setPivotClosed] = useState<string | null>(null);
   const [fnDialog, setFnDialog] = useState(false);
   const [dupDialog, setDupDialog] = useState<Range | null>(null);
+  const [splitDialog, setSplitDialog] = useState<Range | null>(null);
+  const [goalDialog, setGoalDialog] = useState(false);
+  const [sparkDialog, setSparkDialog] = useState<{ existing: SparklineView | null; data: string; location: string } | null>(null);
+  const goalApplied = useRef(false);
   const [stats, setStats] = useState<SelectionStats | null>(null);
   const [autosave, setAutosave] = useState(loadAutosave);
   // Cuenta los cambios: sirve para saber si hay algo nuevo que autoguardar o recuperar.
@@ -308,6 +321,12 @@ export default function SheetEditor(props: Props) {
     for (const d of view.decorations) map.set(`${d.row - 1},${d.col - 1}`, d);
     return map;
   }, [view.decorations]);
+  // Minigráficos, por celda.
+  const sparklines = useMemo(() => {
+    const map = new Map<string, SparklineView>();
+    for (const s of view.sparklines ?? []) map.set(`${s.row - 1},${s.col - 1}`, s);
+    return map;
+  }, [view.sparklines]);
   // Notas y vínculos, por celda ("fila,columna" desde 0).
   const notes = useMemo(() => {
     const map = new Map<string, NoteView>();
@@ -1170,6 +1189,90 @@ export default function SheetEditor(props: Props) {
     setDupDialog(region);
   }
 
+  // ───────────── texto en columnas y buscar objetivo ─────────────
+
+  function openSplit() {
+    // Una columna: la parte elegida, o todo lo que tiene datos alrededor del cursor.
+    let region: Range = { r1: selection.r1, c1: active.c, r2: selection.r2, c2: active.c };
+    if (selection.r1 === selection.r2) {
+      const around = dataRegion(active.c);
+      region = { r1: around.r1, c1: active.c, r2: around.r2, c2: active.c };
+    }
+    region = { ...region, r2: Math.min(region.r2, rows.length - 1) };
+    if (region.r2 < region.r1 || !rows.slice(region.r1, region.r2 + 1).some((row) => row?.[active.c]?.[0])) {
+      return showStatus({ text: "Elige una columna con texto (por ejemplo, nombres completos)", error: true });
+    }
+    if (selection.c1 !== selection.c2 && !wholeCols) showStatus({ text: `Se separa solo la columna ${columnName(active.c)}` });
+    setSplitDialog(region);
+  }
+
+  async function applySplit(region: Range, spec: SplitSpec, dest: number) {
+    setSplitDialog(null);
+    try {
+      const { columns, view: next } = await sheetApi.textToColumns(sheet, region.c1, region.r1, region.r2, dest, spec);
+      setView(next);
+      markDirty();
+      setActive({ r: region.r1, c: dest });
+      setEnd({ r: region.r2, c: dest + columns - 1 });
+      showStatus({ text: `Separado en ${columns} ${columns === 1 ? "columna" : "columnas"}` });
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+    }
+    focusGrid();
+  }
+
+  function openSparklines() {
+    const existing = sparklines.get(`${active.r},${active.c}`) ?? null;
+    if (existing) {
+      // Las que están juntas (con el mismo tipo) se cambian todas, como un grupo de Excel.
+      let r2 = active.r;
+      while (sparklines.get(`${r2 + 1},${active.c}`)?.kind === existing.kind) r2++;
+      let r1 = active.r;
+      while (r1 > 0 && sparklines.get(`${r1 - 1},${active.c}`)?.kind === existing.kind) r1--;
+      const range = r1 === r2 ? cellName({ r: r1, c: active.c }) : `${cellName({ r: r1, c: active.c })}:${cellName({ r: r2, c: active.c })}`;
+      setSparkDialog({ existing, data: existing.source, location: range });
+      return;
+    }
+    const s = selection;
+    const multi = s.r1 !== s.r2 || s.c1 !== s.c2;
+    const data = multi ? `${cellName({ r: s.r1, c: s.c1 })}:${cellName({ r: s.r2, c: s.c2 })}` : "";
+    const location = multi ? (s.r1 === s.r2 ? cellName({ r: s.r1, c: s.c2 + 1 }) : `${cellName({ r: s.r1, c: s.c2 + 1 })}:${cellName({ r: s.r2, c: s.c2 + 1 })}`) : cellName(active);
+    setSparkDialog({ existing: null, data, location });
+  }
+
+  async function applySparklines(action: SparkAction) {
+    setSparkDialog(null);
+    const ok = await mutate(() => sheetApi.sparkline(sheet, action));
+    if (ok) showStatus({ text: action.action === "remove" ? "Se quitaron los minigráficos" : action.action === "add" ? "Minigráficos insertados" : "Minigráficos cambiados" });
+    focusGrid();
+  }
+
+  async function seekGoal(target: { r: number; c: number }, goal: number, changing: { r: number; c: number }) {
+    try {
+      const { goal: result, view: next } = await sheetApi.goalSeek(sheet, target, goal, changing);
+      setView(next);
+      markDirty();
+      goalApplied.current = true;
+      return result;
+    } catch (e) {
+      showStatus({ text: String(e), error: true });
+      return null;
+    }
+  }
+
+  async function finishGoal(keep: boolean) {
+    setGoalDialog(false);
+    if (goalApplied.current && !keep) {
+      try {
+        setView(await sheetApi.undo(sheet));
+      } catch (e) {
+        showStatus({ text: String(e), error: true });
+      }
+    }
+    goalApplied.current = false;
+    focusGrid();
+  }
+
   async function removeDuplicates(region: Range, cols: number[], header: boolean) {
     try {
       const { removed, view: next } = await sheetApi.removeDuplicates(sheet, region, cols, header);
@@ -1399,9 +1502,11 @@ export default function SheetEditor(props: Props) {
   }
 
   /** ¿Se puede escribir directamente sobre el archivo abierto? (.xls u .ods se guardan como copia) */
+  // Un .ods que WEPO ya guardó se puede volver a guardar encima (uno de otro programa, no: se perdería su formato).
+  const writtenOds = useRef(new Set<string>());
   function canOverwrite(target: string | null): target is string {
     const ext = target ? extensionOf(target) : "";
-    return Boolean(target) && target !== protectedPath && (ext === "xlsx" || ext === "csv");
+    return Boolean(target) && target !== protectedPath && (ext === "xlsx" || ext === "csv" || (ext === "ods" && writtenOds.current.has(target!)));
   }
 
   /** Guarda; devuelve la ruta donde quedó (o null si se canceló o falló). */
@@ -1415,15 +1520,19 @@ export default function SheetEditor(props: Props) {
     }
     const base =
       (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
+    const odsFirst = path ? extensionOf(path) === "ods" : false;
+    const formats = [
+      { name: "Libro de Excel (.xlsx)", extensions: ["xlsx"] },
+      { name: "Hoja de cálculo de OpenDocument (.ods)", extensions: ["ods"] },
+      { name: "CSV (.csv)", extensions: ["csv"] },
+    ];
     const target = await save({
-      defaultPath: `${base}.xlsx`,
-      filters: [
-        { name: "Libro de Excel (.xlsx)", extensions: ["xlsx"] },
-        { name: "CSV (.csv)", extensions: ["csv"] },
-      ],
+      defaultPath: `${base}.${odsFirst ? "ods" : "xlsx"}`,
+      filters: odsFirst ? [formats[1], formats[0], formats[2]] : formats,
     });
     if (!target) return null;
-    const finalPath = /\.(xlsx|csv)$/i.test(target) ? target : `${target}.xlsx`;
+    const finalPath = /\.(xlsx|csv|ods)$/i.test(target) ? target : `${target}.${odsFirst ? "ods" : "xlsx"}`;
+    if (extensionOf(finalPath) === "ods") writtenOds.current.add(finalPath);
     if (finalPath === protectedPath) {
       showStatus({ text: "Elige otro nombre: así no se pierden las gráficas del original.", error: true });
       return null;
@@ -1588,6 +1697,16 @@ export default function SheetEditor(props: Props) {
     );
     return images;
   }
+
+  // WEPO Convertir: la hoja activa, con lo que dice el archivo (área de impresión, encabezado…).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!props.autoPdf || autoStarted.current) return;
+    autoStarted.current = true;
+    const page = view.page ?? { header: "", footer: "", repeat_rows: null, print_area: null };
+    const hasArea = Boolean(page.print_area);
+    void startPrint({ ...loadOptions(hasArea), area: hasArea ? "saved" : "sheet" }, pageForm(page), true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function startPrint(options: PrintOptions, form: PageForm, toPdf = false) {
     setDialog(null);
@@ -2013,6 +2132,9 @@ export default function SheetEditor(props: Props) {
       },
       ...(filter ? [{ label: "Quitar todos los filtros", action: clearAllFilters }] : []),
       { label: "Quitar duplicados…", action: openDuplicates },
+      { label: "Texto en columnas…", action: openSplit },
+      { label: sparklines.has(`${active.r},${active.c}`) ? "Minigráficos…" : "Insertar minigráficos…", action: openSparklines },
+      { label: "Buscar objetivo…", action: () => ((goalApplied.current = false), setGoalDialog(true)) },
       { label: activeTable ? "Opciones de la tabla…" : "Dar formato como tabla…", action: openTableDialog },
       activePivot
         ? { label: "Actualizar la tabla dinámica", action: () => mutate(() => sheetApi.refreshPivot(sheet, activePivot.name)) }
@@ -2367,7 +2489,7 @@ export default function SheetEditor(props: Props) {
     const cell = rows[r]?.[c];
     if (cell && cell[0] !== "") return false;
     if (cell && view.styles[cell[2]]?.fill) return false;
-    return !merged.at(r, c) && !decorations.has(`${r},${c}`);
+    return !merged.at(r, c) && !decorations.has(`${r},${c}`) && !sparklines.has(`${r},${c}`);
   }
 
   /** Dibuja una celda (o un bloque combinado) en la posición indicada. */
@@ -2433,6 +2555,7 @@ export default function SheetEditor(props: Props) {
         onContextMenu={(e) => openMenu(e, "cell", { r, c })}
         title={note || comment ? undefined : link ? `${link.target}\n${keys("⌘")}+clic para abrir` : text}
       >
+        {sparklines.has(`${r},${c}`) && <SparklineSvg spark={sparklines.get(`${r},${c}`)!} width={cellBox.width} height={cellBox.height} />}
         {note && <span className="note-mark" aria-label="Tiene nota" />}
         {comment && (
           <span
@@ -2652,6 +2775,26 @@ export default function SheetEditor(props: Props) {
             <rect x="3" y="4" width="11" height="6" rx="1" />
             <rect x="3" y="14" width="11" height="6" rx="1" strokeDasharray="2 2" />
             <path d="M17 14l4 4M21 14l-4 4" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Minigráficos" onClick={openSparklines}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="6" width="18" height="12" rx="1.5" />
+            <path d="M6 15l3-4 3 2 3-5 3 3" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Texto en columnas" onClick={openSplit}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <rect x="3" y="5" width="7" height="14" rx="1" />
+            <rect x="14" y="5" width="7" height="14" rx="1" />
+            <path d="M10 12h4M12.5 10.5 14 12l-1.5 1.5" />
+          </svg>
+        </ToolButton>
+        <ToolButton label="Buscar objetivo" onClick={() => ((goalApplied.current = false), setGoalDialog(true))}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <circle cx="12" cy="12" r="8" />
+            <circle cx="12" cy="12" r="4" />
+            <circle cx="12" cy="12" r="0.8" fill="currentColor" />
           </svg>
         </ToolButton>
         <ToolButton label="Ordenar por varias columnas" onClick={openSortDialog}>
@@ -3333,6 +3476,34 @@ export default function SheetEditor(props: Props) {
         />
       )}
       {fnDialog && <FunctionDialog language={language} onInsert={insertFunction} onClose={() => setFnDialog(false)} />}
+      {splitDialog && (
+        <TextColumnsDialog
+          region={splitDialog}
+          samples={Array.from({ length: splitDialog.r2 - splitDialog.r1 + 1 }, (_, i) => rows[splitDialog.r1 + i]?.[splitDialog.c1]?.[0] ?? "").filter(Boolean)}
+          occupied={(from, count) => {
+            for (let r = splitDialog.r1; r <= splitDialog.r2; r++) for (let c = from; c < from + count; c++) if (rows[r]?.[c]?.[0]) return true;
+            return false;
+          }}
+          onApply={(spec, dest) => applySplit(splitDialog, spec, dest)}
+          onClose={() => {
+            setSplitDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {sparkDialog && (
+        <SparklineDialog
+          existing={sparkDialog.existing}
+          initialData={sparkDialog.data}
+          initialLocation={sparkDialog.location}
+          onApply={applySparklines}
+          onClose={() => {
+            setSparkDialog(null);
+            focusGrid();
+          }}
+        />
+      )}
+      {goalDialog && <GoalSeekDialog initialTarget={cellName(active)} onSeek={seekGoal} onFinish={finishGoal} />}
       {dupDialog && (
         <DuplicatesDialog
           region={dupDialog}

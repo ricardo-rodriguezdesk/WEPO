@@ -33,6 +33,7 @@ declare module "@tiptap/core" {
       replaceAllMatches: (replacement: string) => ReturnType;
     };
     pagination: { refreshPages: () => ReturnType };
+    sectionBreak: { insertSection: (orientation: "landscape" | "portrait") => ReturnType };
   }
 }
 
@@ -113,6 +114,87 @@ export const PageBreak = Node.create({
   },
   addKeyboardShortcuts() {
     return { "Mod-Enter": () => this.editor.commands.setPageBreak() };
+  },
+});
+
+// ───────────── secciones: hojas horizontales a la mitad del documento ─────────────
+
+/**
+ * A partir de aquí, las hojas van horizontales (o verticales otra vez), como un
+ * «salto de sección: página siguiente» de Word con otra orientación.
+ */
+export const SectionBreak = Node.create({
+  name: "sectionBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  addAttributes: () => ({
+    orientation: {
+      default: "landscape",
+      parseHTML: (el) => (el.getAttribute("data-orientation") === "portrait" ? "portrait" : "landscape"),
+      renderHTML: (attrs) => ({ "data-orientation": attrs.orientation }),
+    },
+  }),
+  parseHTML: () => [{ tag: "div[data-section-break]" }],
+  renderHTML: ({ HTMLAttributes }) => ["div", mergeAttributes(HTMLAttributes, { "data-section-break": "", class: "write-section-break" })],
+  addCommands() {
+    return {
+      insertSection:
+        (orientation: "landscape" | "portrait") =>
+        ({ state, chain }) => {
+          // Después del bloque donde está el cursor.
+          const { $from } = state.selection;
+          const at = $from.depth > 0 ? $from.after(1) : state.doc.content.size;
+          return chain()
+            .insertContentAt(at, [{ type: "sectionBreak", attrs: { orientation } }, { type: "paragraph" }])
+            .setTextSelection(at + 2)
+            .scrollIntoView()
+            .run();
+        },
+    };
+  },
+});
+
+/** La orientación en cada bloque de arriba: horizontal desde una sección horizontal hasta la siguiente vertical. */
+export function orientationAt(doc: PMNode, base: "landscape" | "portrait"): ("landscape" | "portrait")[] {
+  const out: ("landscape" | "portrait")[] = [];
+  let current = base;
+  doc.forEach((node) => {
+    if (node.type.name === "sectionBreak") current = node.attrs.orientation === "portrait" ? "portrait" : "landscape";
+    out.push(current);
+  });
+  return out;
+}
+
+export const sectionsKey = new PluginKey<DecorationSet>("wepo-sections");
+
+/** Los bloques de las hojas que no tienen la orientación del documento llevan la clase write-alt (más anchos o más angostos). */
+export const Sections = Extension.create<{ base: () => "landscape" | "portrait" }>({
+  name: "sections",
+  addOptions: () => ({ base: () => "portrait" as const }),
+  addProseMirrorPlugins() {
+    const options = this.options;
+    const build = (doc: PMNode) => {
+      const base = options.base();
+      const orient = orientationAt(doc, base);
+      const decos: Decoration[] = [];
+      let i = 0;
+      doc.forEach((node, offset) => {
+        if (orient[i] !== base && node.type.name !== "sectionBreak") decos.push(Decoration.node(offset, offset + node.nodeSize, { class: "write-alt" }));
+        i++;
+      });
+      return DecorationSet.create(doc, decos);
+    };
+    return [
+      new Plugin<DecorationSet>({
+        key: sectionsKey,
+        state: {
+          init: (_, state) => build(state.doc),
+          apply: (tr, prev) => (tr.docChanged || tr.getMeta(sectionsKey) ? build(tr.doc) : prev),
+        },
+        props: { decorations: (state) => sectionsKey.getState(state) },
+      }),
+    ];
   },
 });
 
@@ -391,8 +473,9 @@ export type PageLayout = {
 };
 
 /** Dónde empieza una página, cuánto espacio queda libre al pie de la anterior y sus notas al pie. */
-type Break = { pos: number; fill: number; notes: Note[]; notesHeight: number };
-type PageEnd = { fill: number; notes: Note[]; notesHeight: number; endnotes?: Note[] };
+/** `alt`: la hoja que empieza en este corte tiene la otra orientación (horizontal en un documento vertical). */
+type Break = { pos: number; fill: number; notes: Note[]; notesHeight: number; alt?: boolean; prevAlt?: boolean };
+type PageEnd = { fill: number; notes: Note[]; notesHeight: number; endnotes?: Note[]; alt?: boolean };
 type PageState = { breaks: Break[]; end: PageEnd; pages: number; decorations: DecorationSet; stamp: string };
 
 export const pagesKey = new PluginKey<PageState>("wepo-pages");
@@ -410,11 +493,17 @@ export function fillFields(text: string, page: number, pages: number, fileName: 
     .replace(/\[Archivo\]/g, fileName);
 }
 
-function band(kind: "header" | "footer", hf: HeaderFooter, height: number, page: number, pages: number, layout: PageLayout, hidden: boolean) {
+/** Ancho del texto en las hojas con la otra orientación (la hoja girada: su ancho es el alto de la normal). */
+function altTextWidth(layout: PageLayout) {
+  return layout.height - layout.left - layout.right;
+}
+
+function band(kind: "header" | "footer", hf: HeaderFooter, height: number, page: number, pages: number, layout: PageLayout, hidden: boolean, alt = false) {
   const el = document.createElement("div");
   el.className = `write-hf write-hf-${kind}`;
   el.dataset.hf = kind;
   el.style.height = `${height}px`;
+  if (alt) el.style.width = `${altTextWidth(layout)}px`;
   el.style.justifyContent = hf.align === "left" ? "flex-start" : hf.align === "right" ? "flex-end" : "center";
   const text = document.createElement("span");
   text.textContent = hidden ? "" : fillFields(hf.text, page, pages, layout.fileName);
@@ -438,15 +527,34 @@ function gapWidget(end: PageEnd, page: number, pages: number, layout: PageLayout
   el.appendChild(space);
   // Las notas al pie de esta hoja, justo arriba del pie de página.
   if (end.notes.length) el.appendChild(notesBlock(end.notes, end.notesHeight));
-  el.appendChild(band("footer", layout.footer, layout.bottom, page, pages, layout, layout.skipFirst && page === 1));
+  const endAlt = last ? Boolean(end.alt) : Boolean((end as Break).prevAlt);
+  el.appendChild(band("footer", layout.footer, layout.bottom, page, pages, layout, layout.skipFirst && page === 1, endAlt));
   if (!last) {
+    const nextAlt = Boolean((end as Break).alt);
     const between = document.createElement("div");
     between.className = "write-gap-band";
     between.style.marginLeft = `${-layout.left}px`;
-    between.style.marginRight = `${-layout.right}px`;
-    between.innerHTML = `<span>Página ${page + 1}</span>`;
+    // Junto a una hoja horizontal, la franja gris llega hasta su orilla.
+    const extra = endAlt || nextAlt ? Math.max(0, layout.height - layout.width) : 0;
+    between.style.marginRight = `${-layout.right - extra}px`;
+    if (nextAlt) between.dataset.alt = "1";
+    between.innerHTML = `<span>Página ${page + 1}${nextAlt ? " · horizontal" : ""}</span>`;
     el.appendChild(between);
-    el.appendChild(band("header", layout.header, layout.top, page + 1, pages, layout, false));
+    const header = band("header", layout.header, layout.top, page + 1, pages, layout, false, nextAlt);
+    if (nextAlt) {
+      // La hoja con la otra orientación: una hoja blanca detrás del texto, de su tamaño.
+      const sheet = document.createElement("div");
+      sheet.className = "write-alt-sheet";
+      sheet.style.left = `${-layout.left}px`;
+      sheet.style.width = `${layout.height}px`;
+      sheet.style.height = `${layout.width}px`;
+      // Va en un ancla sin alto justo arriba del encabezado: así empieza donde empieza la hoja.
+      const anchor = document.createElement("div");
+      anchor.className = "write-alt-anchor";
+      anchor.appendChild(sheet);
+      el.appendChild(anchor);
+    }
+    el.appendChild(header);
   }
   return el;
 }
@@ -465,13 +573,13 @@ function buildDecorations(doc: PMNode, breaks: Break[], end: PageEnd, layout: Pa
   const pages = breaks.length + 1;
   const v = hash(stamp);
   const decos = breaks.map((b, i) =>
-    Decoration.widget(b.pos, () => gapWidget(b, i + 1, pages, layout, false), { side: -1, ignoreSelection: true, key: `gap-${i}-${b.fill}-${pages}-${v}-${notesKey(b.notes)}` }),
+    Decoration.widget(b.pos, () => gapWidget(b, i + 1, pages, layout, false), { side: -1, ignoreSelection: true, key: `gap-${i}-${b.fill}-${pages}-${v}-${notesKey(b.notes)}-${b.alt ? 1 : 0}${b.prevAlt ? 1 : 0}` }),
   );
   decos.push(
     Decoration.widget(doc.content.size, () => gapWidget(end, pages, pages, layout, true), {
       side: 1,
       ignoreSelection: true,
-      key: `end-${end.fill}-${pages}-${v}-${notesKey(end.notes)}-${notesKey(end.endnotes ?? [])}`,
+      key: `end-${end.fill}-${pages}-${v}-${notesKey(end.notes)}-${notesKey(end.endnotes ?? [])}-${end.alt ? 1 : 0}`,
     }),
   );
   return DecorationSet.create(doc, decos);
@@ -482,7 +590,18 @@ function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): 
   const root = view.dom as HTMLElement;
   const zoom = layout.zoom || 1;
   const rootTop = root.getBoundingClientRect().top;
-  const contentHeight = layout.height - layout.top - layout.bottom;
+  // Hojas con la otra orientación (secciones): la hoja girada mide de alto lo que la normal de ancho.
+  const base: "landscape" | "portrait" = layout.width > layout.height ? "landscape" : "portrait";
+  const orient = orientationAt(view.state.doc, base);
+  let pageAlt = orient[0] !== undefined && orient[0] !== base;
+  let contentHeight = (pageAlt ? layout.width : layout.height) - layout.top - layout.bottom;
+  /** El corte se pone antes del bloque `idx`: la hoja nueva toma su orientación. */
+  const newPage = (idx: number) => {
+    const prevAlt = pageAlt;
+    pageAlt = (orient[idx] ?? base) !== base;
+    contentHeight = (pageAlt ? layout.width : layout.height) - layout.top - layout.bottom;
+    return { alt: pageAlt, prevAlt };
+  };
   const textWidth = layout.width - layout.left - layout.right;
   const notesHeight = (notes: Note[]) => measurer.height(root.parentElement ?? root, textWidth, zoom, notes);
   // Notas al pie de la hoja que se está llenando.
@@ -493,14 +612,18 @@ function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): 
   let gaps = 0;
   for (const el of Array.from(root.children)) {
     if (el.classList.contains("write-gap")) gaps += el.getBoundingClientRect().height / zoom;
-    else before.set(el, gaps);
+    else {
+      before.set(el, gaps);
+      // Los cortes dentro de un bloque de columnas también empujan lo que sigue.
+      for (const inner of Array.from(el.children)) if (inner.classList.contains("write-gap")) gaps += inner.getBoundingClientRect().height / zoom;
+    }
   }
   const breaks: Break[] = [];
   let pageStart = 0;
   let cursor = 0; // donde termina el bloque anterior (con su margen inferior)
   let forced = false;
   let index = 0;
-  view.state.doc.forEach((node, offset) => {
+  view.state.doc.forEach((node, offset, nodeIndex) => {
     const dom = view.nodeDOM(offset) as HTMLElement | null;
     if (!dom || !(dom instanceof HTMLElement)) return;
     const shift = before.get(dom) ?? 0;
@@ -510,15 +633,60 @@ function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): 
     // Las notas de este bloque van al pie de la misma hoja: le quitan espacio al texto.
     const blockNotes = notesIn(node, noteCount + 1);
     noteCount += blockNotes.length;
+    // Texto en columnas más largo que lo que queda de la hoja: sigue en columnas en la hoja siguiente
+    // (el corte va dentro del bloque y ocupa todo el ancho; ver .write-columns > .write-gap).
+    if (node.type.name === "columns") {
+      const n = Math.max(1, Number(node.attrs.count) || 2);
+      const kids: { pos: number; h: number }[] = [];
+      node.forEach((_child, childOffset) => {
+        const el = view.nodeDOM(offset + 1 + childOffset) as HTMLElement | null;
+        if (!el || !(el instanceof HTMLElement)) return;
+        const cs = getComputedStyle(el);
+        // Los márgenes de dos párrafos seguidos se juntan (cuenta el mayor).
+        const h = Array.from(el.getClientRects()).reduce((sum, r) => sum + r.height, 0) / zoom + Math.max(parseFloat(cs.marginTop) || 0, parseFloat(cs.marginBottom) || 0);
+        kids.push({ pos: offset + 1 + childOffset, h });
+      });
+      const total = kids.reduce((sum, k) => sum + k.h, 0);
+      if (index > 0 && (forced || (top + total / n - pageStart > contentHeight - notesHeight([...pageNotes, ...blockNotes]) + 0.5 && top + (kids[0]?.h ?? 0) / n - pageStart > contentHeight)) && cursor > pageStart + 1) {
+        // Ni el primer renglón cabe: el bloque empieza en la hoja siguiente.
+        const h = notesHeight(pageNotes);
+        const fill = Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h));
+        breaks.push({ pos: offset, fill, notes: pageNotes, notesHeight: h, ...newPage(nodeIndex) });
+        pageStart = cursor;
+        pageNotes = [];
+      }
+      pageNotes = [...pageNotes, ...blockNotes];
+      let segStart = Math.max(top, pageStart);
+      let acc = 0;
+      for (const k of kids) {
+        const limit = pageStart + contentHeight - notesHeight(pageNotes);
+        if (acc > 0 && segStart + (acc + k.h) / n > limit + 0.5) {
+          const used = segStart + acc / n;
+          const h = notesHeight(pageNotes);
+          const fill = Math.max(0, Math.round(pageStart + contentHeight - used - SAFETY - h));
+          breaks.push({ pos: k.pos, fill, notes: pageNotes, notesHeight: h, ...newPage(nodeIndex) });
+          pageStart = used;
+          segStart = used;
+          pageNotes = [];
+          acc = 0;
+        }
+        acc += k.h;
+      }
+      forced = false;
+      cursor = segStart + acc / n + (parseFloat(getComputedStyle(dom).marginBottom) || 0);
+      index++;
+      return;
+    }
     const overflows = bottom - pageStart > contentHeight - notesHeight([...pageNotes, ...blockNotes]) + 0.5;
     if (index > 0 && (forced || (overflows && cursor > pageStart + 1))) {
       const h = notesHeight(pageNotes);
-      breaks.push({ pos: offset, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h });
+      const fill = Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h));
+      breaks.push({ pos: offset, fill, notes: pageNotes, notesHeight: h, ...newPage(nodeIndex) });
       pageStart = cursor;
       pageNotes = [];
     }
     pageNotes = [...pageNotes, ...blockNotes];
-    forced = node.type.name === "pageBreak";
+    forced = node.type.name === "pageBreak" || node.type.name === "sectionBreak";
     const margin = parseFloat(getComputedStyle(dom).marginBottom) || 0;
     cursor = Math.max(bottom + margin, top);
     // Un bloque más alto que una hoja (una tabla enorme) sigue de largo. Se mide con el
@@ -532,12 +700,12 @@ function measure(view: EditorView, layout: PageLayout, measurer: NoteMeasurer): 
   const endHeight = endnotes.length ? measurer.height(root.parentElement ?? root, textWidth, zoom, endnotes) + ENDNOTES_TOP : 0;
   if (endHeight && cursor + endHeight > pageStart + contentHeight - notesHeight(pageNotes) + 0.5 && cursor > pageStart + 1) {
     const h = notesHeight(pageNotes);
-    breaks.push({ pos: view.state.doc.content.size, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h });
+    breaks.push({ pos: view.state.doc.content.size, fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h)), notes: pageNotes, notesHeight: h, alt: pageAlt, prevAlt: pageAlt });
     pageStart = cursor;
     pageNotes = [];
   }
   const h = notesHeight(pageNotes);
-  return { breaks, end: { fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h - endHeight)), notes: pageNotes, notesHeight: h, endnotes } };
+  return { breaks, end: { fill: Math.max(0, Math.round(pageStart + contentHeight - cursor - SAFETY - h - endHeight)), notes: pageNotes, notesHeight: h, endnotes, alt: pageAlt } };
 }
 
 export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: (pages: number) => void }>({
@@ -599,7 +767,8 @@ export const Pagination = Extension.create<{ layout: () => PageLayout; onPages: 
               Math.abs(end.fill - prev.end.fill) < 2 &&
               sameNotes(end.notes, prev.end.notes) &&
               sameNotes(end.endnotes ?? [], prev.end.endnotes ?? []) &&
-              breaks.every((b, i) => b.pos === prev.breaks[i].pos && Math.abs(b.fill - prev.breaks[i].fill) < 2 && sameNotes(b.notes, prev.breaks[i].notes));
+              Boolean(end.alt) === Boolean(prev.end.alt) &&
+              breaks.every((b, i) => b.pos === prev.breaks[i].pos && Math.abs(b.fill - prev.breaks[i].fill) < 2 && sameNotes(b.notes, prev.breaks[i].notes) && Boolean(b.alt) === Boolean(prev.breaks[i].alt));
             if (same || rounds > 6) return;
             rounds++;
             view.dispatch(view.state.tr.setMeta(pagesKey, { breaks, end, stamp }).setMeta("addToHistory", false));

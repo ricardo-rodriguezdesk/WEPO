@@ -322,6 +322,22 @@ fn main() {
                             d.set_page_breaks(sheet, &rows, &cols)?;
                             view(d, sheet)
                         }
+                        "sheet_text_to_columns" => {
+                            let spec = serde_json::from_value(a["spec"].clone()).map_err(|e| e.to_string())?;
+                            let n = d.text_to_columns(sheet, a["col"].as_i64().unwrap_or(1) as i32, a["row1"].as_i64().unwrap_or(1) as i32, a["row2"].as_i64().unwrap_or(1) as i32, a["dest"].as_i64().unwrap_or(1) as i32, &spec)?;
+                            Ok(json!({"columns": n, "view": view(d, sheet)?}))
+                        }
+                        "sheet_sparkline" => {
+                            let action = serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
+                            d.sparkline_action(sheet, action)?;
+                            view(d, sheet)
+                        }
+                        "sheet_goal_seek" => {
+                            let target: (i32, i32) = serde_json::from_value(a["target"].clone()).map_err(|e| e.to_string())?;
+                            let changing: (i32, i32) = serde_json::from_value(a["changing"].clone()).map_err(|e| e.to_string())?;
+                            let g = d.goal_seek(sheet, target, a["goal"].as_f64().unwrap_or(0.0), changing)?;
+                            Ok(json!({"goal": g, "view": view(d, sheet)?}))
+                        }
                         "sheet_remove_duplicates" => {
                             let cols: Vec<i32> = serde_json::from_value(a["cols"].clone()).map_err(|e| e.to_string())?;
                             let n = d.remove_duplicates(sheet, rect, &cols, a["header"].as_bool().unwrap_or(true))?;

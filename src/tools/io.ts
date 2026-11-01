@@ -63,7 +63,7 @@ export type Saved = { paths: string[]; folder: string };
  * Guarda lo que salió: un archivo, con «Guardar como»; varios, en la carpeta
  * que se elija (sin encimar los que ya estén ahí). null si se canceló.
  */
-export async function saveOutputs(outputs: Output[], near: string | null, filterName: string, ext: string): Promise<Saved | null> {
+export async function saveOutputs(outputs: Output[], near: string | null, filterName: string, ext: string, onEach?: (done: number, total: number) => void): Promise<Saved | null> {
   if (!outputs.length) return null;
   if (outputs.length === 1) {
     const [out] = outputs;
@@ -71,17 +71,20 @@ export async function saveOutputs(outputs: Output[], near: string | null, filter
     let target = await save({ defaultPath, filters: [{ name: filterName, extensions: [ext] }] });
     if (!target) return null;
     if (!target.toLowerCase().endsWith(`.${ext}`)) target += `.${ext}`;
-    await invoke("file_write", { path: target, data: toBase64(out.bytes) });
+    if (out.write) await out.write(target);
+    else await invoke("file_write", { path: target, data: toBase64(out.bytes) });
     return { paths: [target], folder: folderOf(target) };
   }
   const folder = await open({ directory: true, defaultPath: near ? folderOf(near) : undefined, title: `Elige la carpeta para los ${outputs.length} archivos` });
   if (!folder || Array.isArray(folder)) return null;
   const taken = new Set<string>();
   const paths: string[] = [];
-  for (const out of outputs) {
+  for (const [k, out] of outputs.entries()) {
+    onEach?.(k + 1, outputs.length);
     const path = await freeName(folder, out.name, taken);
     taken.add(path);
-    await invoke("file_write", { path, data: toBase64(out.bytes) });
+    if (out.write) await out.write(path);
+    else await invoke("file_write", { path, data: toBase64(out.bytes) });
     paths.push(path);
   }
   return { paths, folder };

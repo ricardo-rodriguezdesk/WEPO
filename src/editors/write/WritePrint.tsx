@@ -16,18 +16,23 @@ import "../sheets/print.css";
 const px = (twips: number) => twips / 15;
 
 /** Copia de las páginas tal como se ven, y dónde empieza cada una (px, sin zoom). */
-export type Snapshot = { html: string; tops: number[]; width: number; height: number };
+/** `alts`: qué páginas tienen la otra orientación (secciones horizontales en un documento vertical). */
+export type Snapshot = { html: string; tops: number[]; width: number; height: number; alts?: boolean[] };
 
 export function snapshotPages(pageEl: HTMLElement, page: PageSize): Snapshot {
   const rect = pageEl.getBoundingClientRect();
   const k = rect.height / Math.max(1, pageEl.offsetHeight);
-  const tops = [0, ...Array.from(pageEl.querySelectorAll(".write-gap-band")).map((b) => (b.getBoundingClientRect().bottom - rect.top) / k)];
+  const bands = Array.from(pageEl.querySelectorAll<HTMLElement>(".write-gap-band"));
+  const tops = [0, ...bands.map((b) => (b.getBoundingClientRect().bottom - rect.top) / k)];
+  const alts = [false, ...bands.map((b) => b.dataset.alt === "1")];
   const clone = pageEl.cloneNode(true) as HTMLElement;
   clone.style.zoom = "1";
   clone.style.margin = "0";
   clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
+  // La hoja blanca de las horizontales solo sirve en pantalla (al imprimir cada hoja ya es blanca).
+  clone.querySelectorAll(".write-alt-anchor").forEach((el) => el.remove());
   clone.querySelectorAll(".ProseMirror-selectednode, .write-match, .ProseMirror-focused").forEach((el) => el.classList.remove("ProseMirror-selectednode", "write-match", "ProseMirror-focused"));
-  return { html: clone.outerHTML, tops, width: px(page.width), height: px(page.height) };
+  return { html: clone.outerHTML, tops, width: px(page.width), height: px(page.height), alts };
 }
 
 /** "1-3, 5" → [0, 1, 2, 4] (desde 0). null si no se entiende o se sale del documento. */
@@ -46,11 +51,26 @@ export function parsePages(text: string, total: number): number[] | null {
 
 /** Una hoja del documento: la copia recortada a esa página. */
 function DocPage({ snap, index, comments }: { snap: Snapshot; index: number; comments: boolean }) {
+  if (snap.alts?.[index]) {
+    // Hoja con la otra orientación: se dibuja girada en una hoja como las demás (el PDF luego la endereza).
+    return (
+      <section className={`write-print-frame${comments ? "" : " no-comments"}`} style={{ width: snap.width, height: snap.height - 1 }}>
+        <div className="write-print-turned" style={{ width: snap.height, height: snap.width, transform: `translateY(${snap.height}px) rotate(-90deg)` }}>
+          <div style={{ marginTop: -snap.tops[index] }} dangerouslySetInnerHTML={{ __html: snap.html }} />
+        </div>
+      </section>
+    );
+  }
   return (
     <section className={`write-print-frame${comments ? "" : " no-comments"}`} style={{ width: snap.width, height: snap.height - 1 }}>
       <div style={{ marginTop: -snap.tops[index] }} dangerouslySetInnerHTML={{ __html: snap.html }} />
     </section>
   );
+}
+
+/** Qué hojas del PDF (en el orden en que salen) hay que girar para que las horizontales se vean derechas. */
+export function turnedPages(job: WritePrintJob): number[] {
+  return job.pages.map((p, i) => (job.snap.alts?.[p] ? i : -1)).filter((i) => i >= 0);
 }
 
 export type CommentEntry = { comment: Comment; quote: string };

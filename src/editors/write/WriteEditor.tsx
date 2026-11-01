@@ -19,7 +19,7 @@ import { clampZoom, stepZoom } from "../sheets/layout";
 import type { HeaderFooterSet, PageSize, WriteDocument } from "./docx";
 import { LETTER, NO_HEADER_FOOTER } from "./docx";
 import type { PageLayout, ParagraphFormat } from "./extensions";
-import { ColoredCell, ColoredHeader, Columns, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, columnsAt, currentParagraphFormat, fillFields } from "./extensions";
+import { ColoredCell, ColoredHeader, Columns, SectionBreak, Sections, sectionsKey, WepoStrike, PAGE_GAP, PageBreak, Pagination, ParagraphFormatExtension, Search, columnsAt, currentParagraphFormat, fillFields } from "./extensions";
 import HeaderFooterDialog from "./HeaderFooterDialog";
 import FootnoteDialog from "./FootnoteDialog";
 import { Footnote, TableOfContents, footnoteAt, footnotePos, withTocCache } from "./notes";
@@ -31,12 +31,12 @@ import { CommentMark, DeletionMark, InsertionMark, Review, initialsOf, newId } f
 import { docxBase64, imageDataUrl, loadAuthor, saveAuthor, saveWriteDocument } from "../../lib/write";
 import { recoveryApi } from "../../lib/recovery";
 import { extensionOf, fileNameOf } from "../../lib/documents";
-import { askPdfPath, printReady, writePdf } from "../../lib/exportPdf";
+import { askPdfPath, printReady, turnPdfPages, writePdf } from "../../lib/exportPdf";
 import { onCommand, runCommand } from "../../lib/commands";
 import { hasModifier, isMac, isWindows, keys } from "../../lib/platform";
 import { loadZoom, saveZoom } from "../../lib/zoom";
 import "../sheets/FormatBar.css";
-import WritePrintDialog, { WritePrintPortal, snapshotPages } from "./WritePrint";
+import WritePrintDialog, { WritePrintPortal, snapshotPages, turnedPages } from "./WritePrint";
 import type { CommentEntry, WritePrintJob } from "./WritePrint";
 import "./WriteEditor.css";
 
@@ -52,6 +52,8 @@ type Props = {
   recovered?: boolean;
   /** Mensaje al abrir (en lugar del de "documento recuperado"). */
   notice?: string;
+  /** WEPO Convertir: exportar a PDF en cuanto se acomoden las páginas (sin preguntar nada). */
+  autoPdf?: boolean;
 };
 
 const AUTOSAVE_KEY = "wepo.autosave";
@@ -98,6 +100,8 @@ export default function WriteEditor(props: Props) {
   const [path, setPath] = useState(props.path);
   const [fileName, setFileName] = useState(props.fileName);
   const [page, setPage] = useState<PageSize>(initial.page ?? LETTER);
+  const pageRef = useRef(page);
+  pageRef.current = page;
   const [dirty, setDirty] = useState(Boolean(props.recovered));
   const [autosave, setAutosave] = useState(loadAutosave);
   /** Cuenta los cambios: así se sabe si la copia de recuperación o el archivo ya están al día. */
@@ -166,6 +170,8 @@ export default function WriteEditor(props: Props) {
       ColoredCell,
       CharacterCount,
       PageBreak,
+      SectionBreak,
+      Sections.configure({ base: () => (pageRef.current.width > pageRef.current.height ? "landscape" : "portrait") }),
       Columns,
       Footnote.configure({ onEdit: (pos) => editNote.current(pos) }),
       TableOfContents,
@@ -218,6 +224,7 @@ export default function WriteEditor(props: Props) {
 
   // Con otra hoja, otro encabezado o zoom, las páginas se vuelven a cortar.
   useEffect(() => {
+    if (editor) editor.view.dispatch(editor.state.tr.setMeta(sectionsKey, true).setMeta("addToHistory", false));
     editor?.commands.refreshPages();
   }, [editor, page, headerFooter, zoom, fileName]);
 
@@ -306,22 +313,25 @@ export default function WriteEditor(props: Props) {
 
   /** Se puede guardar encima del archivo sin preguntar. */
   function canOverwrite(target: string | null): target is string {
-    return Boolean(target && target !== protectedPath && ["docx", "md", "txt"].includes(extensionOf(target)));
+    return Boolean(target && target !== protectedPath && ["docx", "odt", "md", "txt"].includes(extensionOf(target)));
   }
 
   async function saveDocument(saveAs = false) {
     if (!saveAs && canOverwrite(path)) return saveTo(path);
     const base = (fileName.replace(/\.[^.]+$/, "") || "Sin título") + (protectedPath && path === protectedPath ? " (copia)" : "");
+    const odtFirst = path ? extensionOf(path) === "odt" : false;
+    const formats = [
+      { name: "Documento de Word (.docx)", extensions: ["docx"] },
+      { name: "Documento de OpenDocument (.odt)", extensions: ["odt"] },
+      { name: "Markdown (.md)", extensions: ["md"] },
+      { name: "Texto (.txt)", extensions: ["txt"] },
+    ];
     const target = await save({
-      defaultPath: `${base}.docx`,
-      filters: [
-        { name: "Documento de Word (.docx)", extensions: ["docx"] },
-        { name: "Markdown (.md)", extensions: ["md"] },
-        { name: "Texto (.txt)", extensions: ["txt"] },
-      ],
+      defaultPath: `${base}.${odtFirst ? "odt" : "docx"}`,
+      filters: odtFirst ? [formats[1], formats[0], formats[2], formats[3]] : formats,
     });
     if (!target) return false;
-    const finalPath = /\.(docx|md|txt)$/i.test(target) ? target : `${target}.docx`;
+    const finalPath = /\.(docx|odt|md|txt)$/i.test(target) ? target : `${target}.${odtFirst ? "odt" : "docx"}`;
     if (finalPath === protectedPath) {
       setStatus({ text: "Elige otro nombre: así no se pierde lo que WEPO no conserva del original.", error: true });
       return false;
@@ -414,6 +424,19 @@ export default function WriteEditor(props: Props) {
   const print = () => openPrint("print");
   const exportPdf = () => openPrint("pdf");
 
+  // WEPO Convertir: el PDF de todo el documento, en cuanto las páginas están acomodadas.
+  // Se imprime la copia de las páginas (no la ventana), porque el editor no se ve.
+  useEffect(() => {
+    if (!props.autoPdf || !editor) return;
+    const timer = setTimeout(async () => {
+      const target = await askPdfPath(path, fileName);
+      if (!target || !pageEl.current) return;
+      const snap = snapshotPages(pageEl.current, page);
+      setPrintJob({ job: { snap, pages: snap.tops.map((_, i) => i), comments: [], commentPages: [], page }, pdf: target });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /** PDF de todo el documento, tal como se ve (el camino directo de siempre). */
   async function exportAll(target: string) {
     setStatus({ text: "Creando el PDF…" });
@@ -434,6 +457,8 @@ export default function WriteEditor(props: Props) {
       target = await askPdfPath(path, fileName);
       if (!target) return;
     }
+    // Con hojas horizontales se imprime la copia de las páginas (cada una de su tamaño), no la ventana.
+    if (all && job.snap.alts?.some(Boolean)) all = false;
     if (all) {
       if (target) await exportAll(target);
       else invoke("print_window").catch(() => window.print());
@@ -453,7 +478,8 @@ export default function WriteEditor(props: Props) {
       if (printJob.pdf) {
         try {
           const { snap } = printJob.job;
-          const name = await writePdf(printJob.pdf, { width: (snap.width * 72) / 96, height: (snap.height * 72) / 96, margin: 0 });
+          const target = printJob.pdf;
+          const name = await writePdf(target, { width: (snap.width * 72) / 96, height: (snap.height * 72) / 96, margin: 0 }, () => turnPdfPages(target, turnedPages(printJob.job)));
           setStatus({ text: `PDF guardado: ${name}` });
         } catch (e) {
           setStatus({ text: `No se pudo exportar el PDF: ${e}`, error: true });
@@ -685,7 +711,7 @@ export default function WriteEditor(props: Props) {
         <div
           ref={pageEl}
           className="write-page"
-          style={{ width: px(page.width), padding: `0 ${px(page.right)}px`, zoom, ["--page-gap" as string]: `${PAGE_GAP}px` }}
+          style={{ width: px(page.width), padding: `0 ${px(page.right)}px`, zoom, ["--page-gap" as string]: `${PAGE_GAP}px`, ["--write-alt-width" as string]: `${px(page.height) - px(page.left) - px(page.right)}px` }}
           onMouseDown={onContentMouseDown}
           onDoubleClick={onPageDoubleClick}
         >
@@ -1119,6 +1145,30 @@ function WriteBar(props: {
                 </button>
               ))}
               <p className="write-menu-hint">Lo que elegiste (o el párrafo) va en columnas; lo demás sigue igual.</p>
+            </div>
+          )}
+        </Popover>
+        <Popover
+          button={(toggle, open) => (
+            <ToolButton label="Hojas horizontales" pressed={open} onClick={toggle}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+                <rect x="3" y="7" width="18" height="12" rx="1.5" />
+                <path d="M7 4h4v3M9 4v0" />
+              </svg>
+            </ToolButton>
+          )}
+        >
+          {(close) => (
+            <div className="write-menu" role="menu" aria-label="Hojas horizontales">
+              <button type="button" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => (chain().insertSection("landscape").run(), close())}>
+                <span className="write-menu-check" />
+                Hojas horizontales desde aquí
+              </button>
+              <button type="button" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => (chain().insertSection("portrait").run(), close())}>
+                <span className="write-menu-check" />
+                Hojas verticales desde aquí
+              </button>
+              <p className="write-menu-hint">Empieza una hoja nueva con esa orientación (como un salto de sección de Word). Para regresar, pon otra más abajo.</p>
             </div>
           )}
         </Popover>

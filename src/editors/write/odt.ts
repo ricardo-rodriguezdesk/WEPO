@@ -2,7 +2,7 @@
 //
 // Un .odt es un ZIP con content.xml (el texto) y styles.xml (estilos, página,
 // encabezado y pie). Se convierte al mismo formato del editor que el .docx.
-// WEPO no escribe .odt: al guardar se crea un .docx (el original no se toca).
+// Para guardar en .odt, ver odtWrite.ts.
 
 import JSZip from "jszip";
 import type { JSONContent } from "@tiptap/react";

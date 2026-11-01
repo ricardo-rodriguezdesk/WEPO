@@ -46,6 +46,8 @@ type Props = {
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (path: string) => void;
   recovered?: boolean;
+  /** WEPO Convertir: exportar a PDF (una diapositiva por hoja) en cuanto se abre. */
+  autoPdf?: boolean;
 };
 
 const AUTOSAVE_KEY = "wepo.autosave";
@@ -910,7 +912,7 @@ export default function PresentEditor(props: Props) {
   // ───────────── guardar ─────────────
 
   function canOverwrite(target: string | null): target is string {
-    return Boolean(target && target !== protectedPath && extensionOf(target) === "pptx");
+    return Boolean(target && target !== protectedPath && ["pptx", "odp"].includes(extensionOf(target)));
   }
 
   async function saveTo(target: string, quiet = false) {
@@ -938,9 +940,13 @@ export default function PresentEditor(props: Props) {
   async function saveDocument(saveAs = false) {
     if (!saveAs && canOverwrite(path)) return saveTo(path);
     const base = (fileName.replace(/\.[^.]+$/, "") || "Presentación") + (protectedPath && path === protectedPath ? " (copia)" : "");
-    const target = await save({ defaultPath: `${base}.pptx`, filters: [{ name: "Presentación de PowerPoint (.pptx)", extensions: ["pptx"] }] });
+    // Se propone el mismo formato que tiene el archivo (PowerPoint si es nuevo).
+    const odp = extensionOf(path ?? "") === "odp";
+    const pptxFilter = { name: "Presentación de PowerPoint (.pptx)", extensions: ["pptx"] };
+    const odpFilter = { name: "Presentación de OpenDocument (.odp)", extensions: ["odp"] };
+    const target = await save({ defaultPath: `${base}.${odp ? "odp" : "pptx"}`, filters: odp ? [odpFilter, pptxFilter] : [pptxFilter, odpFilter] });
     if (!target) return false;
-    const finalPath = /\.pptx$/i.test(target) ? target : `${target}.pptx`;
+    const finalPath = /\.(pptx|odp)$/i.test(target) ? target : `${target}.${odp ? "odp" : "pptx"}`;
     if (finalPath === protectedPath) {
       setStatus({ text: "Elige otro nombre: así no se pierde lo que WEPO no conserva del original.", error: true });
       return false;
@@ -996,6 +1002,15 @@ export default function PresentEditor(props: Props) {
     setEditingCell(null);
     setPresenting(fromStart ? deckRef.current.slides.findIndex((x) => !x.hidden) : current);
   }
+
+  // WEPO Convertir: una diapositiva por hoja, las ocultas no.
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!props.autoPdf || autoStarted.current) return;
+    autoStarted.current = true;
+    const slides = deckRef.current.slides.map((s, i) => (s.hidden ? -1 : i)).filter((i) => i >= 0);
+    void startPrint({ layout: "slides", slides, paper: "letter" }, true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function startPrint(job: SlidePrintJob, toPdf: boolean) {
     setPrintDialog(false);

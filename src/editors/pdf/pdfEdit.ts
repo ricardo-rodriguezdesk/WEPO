@@ -11,6 +11,8 @@ import {
   PDFDropdown,
   PDFName,
   PDFNumber,
+  PDFRawStream,
+  PDFInvalidObject,
   PDFOptionList,
   PDFRadioGroup,
   PDFHexString,
@@ -458,7 +460,12 @@ async function drawWatermark(page: PDFPage, p: PageRef, out: PDFDocument, mark: 
 export function dropOldEncryption(doc: PDFDocument) {
   for (const [ref, obj] of doc.context.enumerateIndirectObjects()) {
     if (obj instanceof PDFDict && obj.has(PDFName.of("O")) && obj.has(PDFName.of("U")) && obj.get(PDFName.of("Filter")) === PDFName.of("Standard")) doc.context.delete(ref);
+    // La tabla de referencias vieja (que nombra el cifrado) no hace falta: al guardar se escribe otra.
+    else if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of("Type")) === PDFName.of("XRef")) doc.context.delete(ref);
+    else if (obj instanceof PDFInvalidObject && /\/Type\s*\/XRef/.test(new TextDecoder("latin1").decode((obj as unknown as { data: Uint8Array }).data.subarray(0, 400)))) doc.context.delete(ref);
   }
+  // Y el final del archivo deja de apuntar a él.
+  (doc.context.trailerInfo as { Encrypt?: unknown }).Encrypt = undefined;
 }
 
 function fillForm(doc: PDFDocument, values: FormValues) {

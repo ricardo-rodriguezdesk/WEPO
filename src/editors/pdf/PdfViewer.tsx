@@ -74,7 +74,7 @@ async function withoutText(source: Source, pages: PageRef[]): Promise<PageRef[]>
 type OcrLine = { text: string; x: number; y: number; w: number; h: number };
 
 /** Dibuja la página (con su giro del archivo), la manda al OCR del sistema y pasa los renglones a puntos del PDF. */
-async function ocrPage(source: Source, index: number): Promise<OcrText[]> {
+export async function ocrPage(source: Source, index: number): Promise<OcrText[]> {
   const page = await source.doc.getPage(index + 1);
   const base = page.getViewport({ scale: 1 });
   // Unos 200 puntos por pulgada, sin pasar de lo que acepta el OCR de Windows.

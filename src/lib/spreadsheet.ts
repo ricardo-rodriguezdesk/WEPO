@@ -124,6 +124,7 @@ export type SheetView = {
   outline?: OutlineView;
   /** Si la hoja está protegida y qué celdas se pueden editar. */
   protection?: ProtectionView;
+  sparklines?: SparklineView[];
   /** Encabezado, pie, filas que se repiten y área de impresión. */
   page: PageView;
 };
@@ -219,6 +220,13 @@ export type DrawingPatch = {
   /** Nuevo rango de datos, como "A1:C7". */
   data?: string;
 };
+
+/** Minigráfico de una celda (fila y columna desde 1). */
+export type SparklineView = { row: number; col: number; kind: "line" | "column" | "winloss"; color: string; markers: boolean; values: (number | null)[]; source: string };
+export type SparkAction =
+  | { action: "add"; data: string; row1: number; col1: number; row2: number; col2: number; kind: SparklineView["kind"]; color: string; markers: boolean }
+  | { action: "update"; row1: number; col1: number; row2: number; col2: number; kind: SparklineView["kind"]; color: string; markers: boolean }
+  | { action: "remove"; row1: number; col1: number; row2: number; col2: number };
 
 export type Decoration = {
   row: number;
@@ -420,6 +428,18 @@ export const sheetApi = {
   refreshPivot: (sheet: number, name: string) => invoke<SheetView>("sheet_pivot_refresh", { sheet, name }),
   deletePivot: (sheet: number, name: string) => invoke<SheetView>("sheet_pivot_delete", { sheet, name }),
   /** Quita las filas repetidas según `cols` (desde 0). */
+  sparkline: (sheet: number, action: SparkAction) => invoke<SheetView>("sheet_sparkline", { sheet, action }),
+  /** Texto en columnas: la columna `col` (desde 0), filas r1..r2; lo partido va desde la columna `dest`. */
+  textToColumns: (sheet: number, col: number, r1: number, r2: number, dest: number, spec: object) =>
+    invoke<{ columns: number; view: SheetView }>("sheet_text_to_columns", { sheet, col: col + 1, row1: r1 + 1, row2: r2 + 1, dest: dest + 1, spec }),
+  /** Buscar objetivo (celdas desde 0). */
+  goalSeek: (sheet: number, target: { r: number; c: number }, goal: number, changing: { r: number; c: number }) =>
+    invoke<{ goal: { found: boolean; value: number; result: number; before: string }; view: SheetView }>("sheet_goal_seek", {
+      sheet,
+      target: [target.r + 1, target.c + 1],
+      goal,
+      changing: [changing.r + 1, changing.c + 1],
+    }),
   removeDuplicates: (sheet: number, range: Range, cols: number[], header: boolean) =>
     invoke<{ removed: number; view: SheetView }>("sheet_remove_duplicates", {
       sheet,

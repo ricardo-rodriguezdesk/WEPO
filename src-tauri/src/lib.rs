@@ -15,6 +15,7 @@ mod xlsx_pivots;
 mod xlsx_comments;
 mod xlsx_outline;
 mod xlsx_protection;
+mod xlsx_sparklines;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -408,6 +409,54 @@ struct Deduplicated {
     view: SheetView,
 }
 
+#[derive(Serialize)]
+struct SplitDone {
+    columns: usize,
+    view: SheetView,
+}
+
+/// Texto en columnas: parte las celdas de la columna `col` (filas row1..=row2) y las pone desde `dest`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn sheet_text_to_columns(
+    window: tauri::Window, state: State<OpenSheet>,
+    sheet: u32,
+    col: i32,
+    row1: i32,
+    row2: i32,
+    dest: i32,
+    spec: sheets::SplitSpec,
+) -> Result<SplitDone, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.get_mut(window.label()).ok_or(NO_SHEET)?;
+    let columns = doc.text_to_columns(sheet, col, row1, row2, dest, &spec)?;
+    Ok(SplitDone { columns, view: doc.view(sheet)? })
+}
+
+#[derive(Serialize)]
+struct GoalDone {
+    goal: sheets::GoalSeek,
+    view: SheetView,
+}
+
+/// Buscar objetivo: `target` y `changing` son (fila, columna) desde 1.
+#[tauri::command]
+fn sheet_goal_seek(window: tauri::Window, state: State<OpenSheet>, sheet: u32, target: (i32, i32), goal: f64, changing: (i32, i32)) -> Result<GoalDone, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.get_mut(window.label()).ok_or(NO_SHEET)?;
+    let goal = doc.goal_seek(sheet, target, goal, changing)?;
+    Ok(GoalDone { goal, view: doc.view(sheet)? })
+}
+
+/// Minigráficos: agregar, cambiar o quitar.
+#[tauri::command]
+fn sheet_sparkline(window: tauri::Window, state: State<OpenSheet>, sheet: u32, action: sheets::SparkAction) -> Result<SheetView, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let doc = guard.get_mut(window.label()).ok_or(NO_SHEET)?;
+    doc.sparkline_action(sheet, action)?;
+    doc.view(sheet)
+}
+
 /// Quita filas repetidas según las columnas `cols` (desde 1).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -790,6 +839,9 @@ pub fn run() {
             sheet_outline,
             sheet_protect,
             sheet_remove_duplicates,
+            sheet_text_to_columns,
+            sheet_goal_seek,
+            sheet_sparkline,
             sheet_link,
             sheet_stats,
             sheet_paste_special,

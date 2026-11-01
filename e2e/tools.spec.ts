@@ -331,6 +331,161 @@ test.describe("WEPO Convertir", () => {
     expect(text).not.toContain("WEPO Convertir");
     const bytes = readFileSync(out).toString("latin1");
     expect(bytes).toMatch(/\/Subtype\s*\/Image/);
+    // El iframe de la vista previa no deja correr nada; Chromium a veces avisa cuando las
+    // herramientas de prueba se asoman a él (la página ya va sin scripts, ver arriba).
+    expect(errors.filter((e) => !e.includes("about:srcdoc"))).toEqual([]);
+  });
+
+  test("unir, girar y ordenar", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openTool(page, "Unir PDF");
+    await chooseFiles(page, ["hojas-a.pdf", "hojas-b.pdf"], /^Elegir archivos$/);
+    await page.getByRole("button", { name: "Subir hojas-b.pdf" }).click();
+    const merged = outFile("unido.pdf");
+    await set(page, "__savePath", merged);
+    await page.getByRole("button", { name: "Unir", exact: true }).click();
+    await expect(page.locator(".tool-result")).toContainText("2 PDF unidos en uno");
+    const text = await pdfText(merged);
+    expect(text.length).toBe(5);
+    expect(text[0]).toContain("Hoja B1");
+    expect(text[2]).toContain("Hoja A1");
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^Girar PDF/ }).click();
+    await chooseFiles(page, ["hojas-b.pdf"], /^Elegir archivos$/);
+    await page.getByText("Darle la vuelta (180°)").click();
+    await page.getByLabel("Páginas que se giran").fill("2");
+    const turned = outFile("girado.pdf");
+    await set(page, "__savePath", turned);
+    await page.getByRole("button", { name: "Girar", exact: true }).click();
+    await expect(page.locator(".tool-result")).toContainText("Páginas 2 giradas 180°");
+    expect((await pdfInfo(turned)).map((p) => p.rotation)).toEqual([0, 180]);
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^Ordenar PDF/ }).click();
+    await chooseFiles(page, ["hojas-a.pdf"]);
+    const thumbs = page.locator(".tool-thumb");
+    await expect(thumbs).toHaveCount(3);
+    // La 3 se arrastra al principio, la 2 se quita y la 1 se gira.
+    await thumbs.nth(2).dragTo(thumbs.nth(0));
+    await expect(thumbs.nth(0)).toHaveAttribute("data-page", "3");
+    await page.getByRole("button", { name: "Quitar la página 2" }).click({ force: true });
+    await page.getByRole("button", { name: "Girar la página 1 a la derecha" }).click({ force: true });
+    await expect(thumbs).toHaveCount(2);
+    const ordered = outFile("ordenado.pdf");
+    await set(page, "__savePath", ordered);
+    await page.getByRole("button", { name: "Guardar el PDF ordenado" }).click();
+    await expect(page.locator(".tool-result")).toContainText("2 páginas, 1 quitada, 1 girada");
+    const t2 = await pdfText(ordered);
+    expect(t2[0]).toContain("Hoja A3");
+    expect(t2[1]).toContain("Hoja A1");
+    expect((await pdfInfo(ordered)).map((p) => p.rotation)).toEqual([0, 90]);
+    expect(errors).toEqual([]);
+  });
+
+  test("proteger y desbloquear", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openTool(page, "Proteger PDF");
+    await chooseFiles(page, ["hojas-b.pdf"], /^Elegir archivos$/);
+    await page.getByLabel("Contraseña nueva").fill("clave1");
+    await page.getByLabel("Repetir la contraseña").fill("clave2");
+    await expect(page.getByText("Las dos no coinciden.")).toBeVisible();
+    await page.getByLabel("Repetir la contraseña").fill("clave1");
+    const locked = outFile("protegido-herramienta.pdf");
+    await set(page, "__savePath", locked);
+    await page.getByRole("button", { name: "Proteger", exact: true }).click();
+    await expect(page.locator(".tool-result")).toContainText("pide contraseña");
+    await expect(pdfInfo(locked)).rejects.toThrow();
+    expect((await pdfInfo(locked, "clave1")).length).toBe(2);
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^Desbloquear PDF/ }).click();
+    await chooseFiles(page, ["protegido.pdf", "permisos.pdf"], /^Elegir archivos$/);
+    await page.getByLabel("Contraseña del PDF").fill("mala");
+    const dir = emptyFolder("desbloqueados");
+    await set(page, "__folderPath", dir);
+    await page.getByRole("button", { name: "Desbloquear", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("La contraseña de protegido.pdf no es correcta");
+    await page.getByLabel("Contraseña del PDF").fill("wepo");
+    await page.getByRole("button", { name: "Desbloquear", exact: true }).click();
+    await expect(page.locator(".tool-result")).toContainText("protegido.pdf: se quitó la contraseña");
+    await expect(page.locator(".tool-result")).toContainText("permisos.pdf: se quitaron los permisos");
+    expect((await pdfInfo(join(dir, "protegido (desbloqueado).pdf"))).length).toBe(3);
+    expect(readFileSync(join(dir, "permisos (desbloqueado).pdf")).toString("latin1")).not.toContain("/Encrypt");
+    expect(errors).toEqual([]);
+  });
+
+  test("OCR, PDF a Word y PDF a Excel", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openTool(page, "OCR PDF");
+    await chooseFiles(page, ["escaneo.pdf"], /^Elegir archivos$/);
+    const ocr = outFile("escaneo-texto.pdf");
+    await set(page, "__savePath", ocr);
+    await page.getByRole("button", { name: "Reconocer texto" }).click();
+    await expect(page.locator(".tool-result")).toContainText("se reconoció el texto de 1 página", { timeout: 30_000 });
+    expect((await pdfText(ocr))[0].length).toBeGreaterThan(20);
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^PDF a Word/ }).click();
+    await chooseFiles(page, ["tablas.pdf"], /^Elegir archivos$/);
+    const docx = outFile("tablas.docx");
+    await set(page, "__savePath", docx);
+    await page.getByRole("button", { name: "Convertir a Word" }).click();
+    await expect(page.locator(".tool-result")).toContainText("Un documento de Word");
+    const JSZip = (await import("jszip")).default;
+    const xml = await (await JSZip.loadAsync(readFileSync(docx))).file("word/document.xml")!.async("string");
+    expect(xml).toContain("Reporte de prueba para WEPO");
+    expect(xml).toContain("<w:tbl>");
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^PDF a Excel/ }).click();
+    await chooseFiles(page, ["tablas.pdf"], /^Elegir archivos$/);
+    const xlsx = outFile("tablas.xlsx");
+    await set(page, "__savePath", xlsx);
+    await page.getByRole("button", { name: "Convertir a Excel" }).click();
+    await expect(page.locator(".tool-result")).toContainText("4 tablas, una por hoja");
+    const book = await JSZip.loadAsync(readFileSync(xlsx));
+    expect(Object.keys(book.files).filter((f) => /^xl\/worksheets\/sheet\d+\.xml$/.test(f)).length).toBe(4);
+    await page.getByRole("button", { name: "Abrir en WEPO Sheets" }).click();
+    await expect(page.locator(".sheet-tabs button[title=\"Doble clic para renombrar\"]")).toHaveCount(4);
+    expect(errors).toEqual([]);
+  });
+
+  test("Word, Excel y PowerPoint a PDF", async ({ page }) => {
+    const errors = collectErrors(page);
+    await openTool(page, "Word a PDF");
+    await chooseFiles(page, ["informe.docx"], /^Elegir archivos$/);
+    const word = outFile("informe-herramienta.pdf");
+    await set(page, "__savePath", word);
+    await page.getByRole("button", { name: "Convertir a PDF" }).click();
+    await finishExport(page, word);
+    await expect(page.locator(".tool-result")).toContainText("informe.docx quedó como PDF");
+    expect((await pdfInfo(word)).length).toBe(3);
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^Excel a PDF/ }).click();
+    await chooseFiles(page, ["ventas.xlsx"], /^Elegir archivos$/);
+    const excel = outFile("ventas-herramienta.pdf");
+    await set(page, "__savePath", excel);
+    await page.getByRole("button", { name: "Convertir a PDF" }).click();
+    await finishExport(page, excel);
+    await expect(page.locator(".tool-result")).toContainText("ventas.xlsx quedó como PDF");
+    expect((await pdfText(excel)).join(" ").length).toBeGreaterThan(20);
+
+    await page.getByRole("button", { name: "← Herramientas" }).click();
+    await page.getByRole("button", { name: /^PowerPoint a PDF/ }).click();
+    await chooseFiles(page, ["presentacion.pptx"], /^Elegir archivos$/);
+    const ppt = outFile("presentacion-herramienta.pdf");
+    await set(page, "__savePath", ppt);
+    await page.getByRole("button", { name: "Convertir a PDF" }).click();
+    await finishExport(page, ppt);
+    await expect(page.locator(".tool-result")).toContainText("presentacion.pptx quedó como PDF");
+    // 7 diapositivas, una oculta: 6 hojas horizontales.
+    const info = await pdfInfo(ppt);
+    expect(info.length).toBe(6);
+    expect(info[0].width).toBeGreaterThan(info[0].height);
+    // Lo escondido de la app no sale en el PDF.
+    expect((await pdfText(ppt)).join(" ")).not.toContain("WEPO Convertir");
     expect(errors).toEqual([]);
   });
 });

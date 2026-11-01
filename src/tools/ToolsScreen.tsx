@@ -13,6 +13,9 @@ import { pickFiles, readInput, saveOutputs, sizeLabel } from "./io";
 import type { CompressLevel, ImageFormat, ImagesOptions, MarkOptions, MarkPosition, NumberFormat, NumberOptions, NumberPosition, Output, SplitMode } from "./pdfTools";
 import { addPageNumbers, baseName, compressPdf, imagesToPdf, numberText, parseRanges, pdfToImages, proxyOf, repairPdf, splitPdf, watermarkPdf } from "./pdfTools";
 import { toPdfA } from "./pdfa";
+import { mergePdfs, ocrPdf, pdfToDocx, pdfToXlsx, protectPdf, rotatePdf, unlockPdf } from "./moreTools";
+import OrganizeTool from "./OrganizeTool";
+import OfficePdfTool from "./OfficePdfTool";
 import { pdfToPptx } from "./pdfToPptx";
 import CropTool from "./CropTool";
 import CompareTool from "./CompareTool";
@@ -251,6 +254,8 @@ export function PagePreview({ bytes, page = 0, width = 300, children, onSize, op
 // ───────────── la herramienta abierta ─────────────
 
 function ToolView({ def, onBack, onOpenPath, setDropHandler }: { def: ToolDef; onBack: () => void; onOpenPath: (p: string) => void; setDropHandler: (h: DropHandler) => void }) {
+  if (def.id === "organize") return <OrganizeTool def={def} onBack={onBack} onOpenPath={onOpenPath} setDropHandler={setDropHandler} />;
+  if (def.id === "word2pdf" || def.id === "excel2pdf" || def.id === "ppt2pdf") return <OfficePdfTool def={def} onBack={onBack} onOpenPath={onOpenPath} setDropHandler={setDropHandler} />;
   if (def.id === "crop") return <CropTool def={def} onBack={onBack} onOpenPath={onOpenPath} setDropHandler={setDropHandler} />;
   if (def.id === "compare") return <CompareTool def={def} onBack={onBack} setDropHandler={setDropHandler} />;
   if (def.id === "html2pdf") return <HtmlTool def={def} onBack={onBack} onOpenPath={onOpenPath} setDropHandler={setDropHandler} />;
@@ -279,6 +284,10 @@ function SimpleTool({ def, onBack, onOpenPath, setDropHandler }: { def: ToolDef;
   const [mark, setMark] = useState<MarkOptions>(DEFAULT_MARK);
   const [markImage, setMarkImage] = useState<{ name: string; url: string } | null>(null);
   const [pages, setPages] = useState(0);
+  const [angle, setAngle] = useState(90);
+  const [rotatePages, setRotatePages] = useState("");
+  const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
 
   const total = files.reduce((n, f) => n + f.bytes.length, 0);
   const first = files[0];
@@ -386,6 +395,64 @@ function SimpleTool({ def, onBack, onOpenPath, setDropHandler }: { def: ToolDef;
           lines.push(mark.kind === "text" ? `Marca de agua «${mark.text.trim()}» puesta.` : "Marca de agua con imagen puesta.");
           break;
         }
+        case "merge": {
+          if (files.length < 2) throw new Error("Agrega al menos dos PDF para unirlos");
+          setBusy("Uniendo…");
+          outputs.push({ name: `${baseName(first.name)} (unido).pdf`, bytes: await mergePdfs(files) });
+          lines.push(`${files.length} PDF unidos en uno, en el orden de la lista.`);
+          break;
+        }
+        case "rotate": {
+          await each(async (f) => {
+            outputs.push({ name: `${baseName(f.name)} (girado).pdf`, bytes: await rotatePdf(f.bytes, f.name, angle, rotatePages) });
+          });
+          lines.push(`${rotatePages.trim() ? `Páginas ${rotatePages.trim()}` : "Todas las páginas"} giradas ${angle === 270 ? "90° a la izquierda" : angle === 180 ? "180°" : "90° a la derecha"}.`);
+          break;
+        }
+        case "protect": {
+          if (password.length < 4) throw new Error("La contraseña debe tener al menos 4 caracteres");
+          if (password !== password2) throw new Error("Las dos contraseñas no coinciden");
+          await each(async (f) => {
+            outputs.push({ name: `${baseName(f.name)} (protegido).pdf`, bytes: await protectPdf(f.bytes, f.name, password) });
+          });
+          lines.push(`Ahora ${files.length === 1 ? "pide" : "piden"} contraseña para abrirse (AES de 256 bits). Guárdala bien: no hay manera de recuperarla.`);
+          break;
+        }
+        case "unlock": {
+          await each(async (f) => {
+            const r = await unlockPdf(f.bytes, f.name, password);
+            outputs.push({ name: `${baseName(f.name)} (desbloqueado).pdf`, bytes: r.bytes });
+            lines.push(`${f.name}: ${r.had === "password" ? "se quitó la contraseña" : r.had === "permissions" ? "se quitaron los permisos (ya se puede imprimir, copiar y editar)" : "no tenía contraseña ni permisos"}.`);
+          });
+          break;
+        }
+        case "ocr": {
+          await each(async (f, i) => {
+            const r = await ocrPdf(f.bytes, f.name, (d, t) => setBusy(`Reconociendo texto${files.length > 1 ? ` (${i + 1} de ${files.length})` : ""}… página ${d} de ${t}`));
+            outputs.push({ name: `${baseName(f.name)} (con texto).pdf`, bytes: r.bytes });
+            lines.push(r.pages ? `${f.name}: se reconoció el texto de ${r.pages} ${r.pages === 1 ? "página" : "páginas"}.` : `${f.name}: ya tenía texto en todas sus páginas.`);
+          });
+          break;
+        }
+        case "pdf2docx": {
+          ext = "docx";
+          filter = "Documento de Word";
+          await each(async (f) => {
+            outputs.push({ name: `${baseName(f.name)}.docx`, bytes: await pdfToDocx(f.bytes, f.name, (d, t) => setBusy(`Convirtiendo… página ${d} de ${t}`)) });
+          });
+          lines.push(`${files.length === 1 ? "Un documento" : `${files.length} documentos`} de Word que se ${files.length === 1 ? "puede" : "pueden"} editar.`);
+          break;
+        }
+        case "pdf2xlsx": {
+          ext = "xlsx";
+          filter = "Libro de Excel";
+          await each(async (f) => {
+            const out = await pdfToXlsx(f.bytes, f.name, (d, t) => setBusy(`Convirtiendo… página ${d} de ${t}`));
+            outputs.push(out);
+            lines.push(`${f.name}: ${out.tables} ${out.tables === 1 ? "tabla" : "tablas"}, una por hoja.`);
+          });
+          break;
+        }
         default:
           return;
       }
@@ -394,6 +461,8 @@ function SimpleTool({ def, onBack, onOpenPath, setDropHandler }: { def: ToolDef;
       if (!saved) return;
       if (saved.paths.length > 1) lines.push(`Se guardaron ${saved.paths.length} archivos en la carpeta que elegiste.`);
       if (def.id === "pdf2pptx") open = { path: saved.paths[0], label: "Abrir en WEPO Present" };
+      else if (def.id === "pdf2docx" && saved.paths.length === 1) open = { path: saved.paths[0], label: "Abrir en WEPO Write" };
+      else if (def.id === "pdf2xlsx" && saved.paths.length === 1) open = { path: saved.paths[0], label: "Abrir en WEPO Sheets" };
       else if (ext === "pdf" && saved.paths.length === 1) open = { path: saved.paths[0], label: "Abrir en WEPO PDF" };
       setResult({ lines, saved, open });
     } catch (e) {
@@ -557,6 +626,80 @@ function SimpleTool({ def, onBack, onOpenPath, setDropHandler }: { def: ToolDef;
           <div className="tool-options tool-note">
             <p>Se lee todo lo que se pueda del PDF y se escribe uno nuevo, limpio.</p>
             <p className="hint">El original no se toca: el reparado se guarda aparte.</p>
+          </div>
+        );
+      case "merge":
+        return (
+          <div className="tool-options tool-note">
+            <p>Se juntan en el orden de la lista: con ↑ ↓ lo cambias.</p>
+            {files.length < 2 && <p className="hint">Agrega al menos dos PDF.</p>}
+          </div>
+        );
+      case "rotate":
+        return (
+          <fieldset className="tool-options" disabled={!!busy}>
+            <legend>Cómo girar</legend>
+            {(
+              [
+                [90, "90° a la derecha"],
+                [270, "90° a la izquierda"],
+                [180, "Darle la vuelta (180°)"],
+              ] as [number, string][]
+            ).map(([a, name]) => (
+              <label key={a} className={`tool-choice${angle === a ? " on" : ""}`}>
+                <input type="radio" name="angle" checked={angle === a} onChange={() => setAngle(a)} />
+                <span>
+                  <b>{name}</b>
+                </span>
+              </label>
+            ))}
+            <label className="tool-field">
+              Páginas
+              <input className="input" value={rotatePages} placeholder="Todas (o por ejemplo 1-3, 5)" aria-label="Páginas que se giran" onChange={(e) => setRotatePages(e.target.value)} />
+            </label>
+          </fieldset>
+        );
+      case "protect":
+        return (
+          <fieldset className="tool-options" disabled={!!busy}>
+            <legend>Contraseña</legend>
+            <label className="tool-field">
+              Contraseña para abrirlo
+              <input className="input" type="password" value={password} autoComplete="new-password" aria-label="Contraseña nueva" onChange={(e) => setPassword(e.target.value)} />
+            </label>
+            <label className="tool-field">
+              Escríbela otra vez
+              <input className="input" type="password" value={password2} autoComplete="new-password" aria-label="Repetir la contraseña" onChange={(e) => setPassword2(e.target.value)} />
+            </label>
+            {password && password.length < 4 && <p className="tool-error">Usa al menos 4 caracteres.</p>}
+            {password2 && password !== password2 && <p className="tool-error">Las dos no coinciden.</p>}
+            <p className="hint">Si se te olvida, no hay manera de recuperarla.</p>
+          </fieldset>
+        );
+      case "unlock":
+        return (
+          <fieldset className="tool-options" disabled={!!busy}>
+            <legend>Contraseña</legend>
+            <label className="tool-field">
+              La contraseña del PDF
+              <input className="input" type="password" value={password} aria-label="Contraseña del PDF" onChange={(e) => setPassword(e.target.value)} />
+            </label>
+            <p className="hint">Si solo tiene permisos (no deja imprimir o copiar) no hace falta escribir nada.</p>
+          </fieldset>
+        );
+      case "ocr":
+        return (
+          <div className="tool-options tool-note">
+            <p>Se lee el texto de las páginas escaneadas con el reconocimiento de texto de tu sistema (en español e inglés).</p>
+            <p className="hint">Las páginas se ven igual; el texto queda invisible encima, para buscar y copiar.</p>
+          </div>
+        );
+      case "pdf2docx":
+      case "pdf2xlsx":
+        return (
+          <div className="tool-options tool-note">
+            <p>{def.id === "pdf2docx" ? "Títulos, párrafos, listas, tablas, imágenes, encabezado y pie se vuelven parte del documento de Word." : "Cada tabla con bordes del PDF va en su propia hoja, con números de verdad y celdas combinadas."}</p>
+            <p className="hint">Si el PDF es un escaneo, primero pásalo por «OCR PDF».</p>
           </div>
         );
       default:
