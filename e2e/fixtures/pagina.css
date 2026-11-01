@@ -1,0 +1,6 @@
+body { font-family: Helvetica, Arial, sans-serif; color: #222; }
+h1 { color: #3b6fd8; font-size: 28px; }
+.logo { width: 64px; height: 64px; }
+table { border-collapse: collapse; margin-top: 16px; }
+th, td { border: 1px solid #999; padding: 6px 14px; }
+th { background: #e8effc; }

@@ -2,7 +2,8 @@
 type W = Window & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const w = () => window as unknown as W;
 
-export async function open(options?: { filters?: { name: string }[] }) {
+export async function open(options?: { filters?: { name: string }[]; directory?: boolean }) {
+  if (options?.directory) return w().__folderPath ?? null;
   if (options?.filters?.[0]?.name === "Imágenes") return w().__imagePath ?? null;
   return w().__openPath ?? null;
 }

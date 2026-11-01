@@ -20,18 +20,22 @@ export type Command =
   | "zoom-reset";
 
 const EVENT = "wepo-command";
-let last: { command: string; time: number } = { command: "", time: 0 };
+let last: { command: string; source: Source; time: number } = { command: "", source: "key", time: 0 };
 
-export function runCommand(command: Command) {
+/** De dónde llega la orden: el atajo dentro de la página o el menú nativo. */
+export type Source = "key" | "menu";
+
+export function runCommand(command: Command, source: Source = "key") {
   const now = performance.now();
-  // El zoom se puede pulsar varias veces seguidas; los demás abren diálogos.
-  const window_ = command.startsWith("zoom") ? 120 : 400;
+  // La misma pulsación llega por los dos caminos casi al mismo tiempo: la segunda se ignora.
+  // Por el mismo camino solo se ignora si es la tecla que se quedó apretada (se repite muy rápido);
+  // dos «Guardar como» seguidos a propósito sí cuentan.
+  const window_ = command.startsWith("zoom") ? 120 : source === last.source ? 120 : 400;
   if (last.command === command && now - last.time < window_) return;
-  last = { command, time: now };
+  last = { command, source, time: now };
   window.dispatchEvent(new CustomEvent<Command>(EVENT, { detail: command }));
 }
 
-/** Escucha las órdenes; devuelve la función para dejar de escuchar. */
 export function onCommand(handler: (command: Command) => void): () => void {
   const listener = (e: Event) => handler((e as CustomEvent<Command>).detail);
   window.addEventListener(EVENT, listener);

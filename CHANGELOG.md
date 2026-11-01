@@ -4,6 +4,21 @@ Todos los cambios importantes de WEPO, de la versión más nueva a la más vieja
 
 ## Próxima versión (sin publicar)
 
+### WEPO Convertir: herramientas para PDF e imágenes
+- Nueva sección *Convertir* en Inicio, con tarjetas como las de iLovePDF. Todo pasa en la computadora: los archivos no se suben a internet. Se pueden arrastrar desde Finder, y lo que sale se guarda junto al original (varios archivos van a la carpeta que elijas, sin encimar los que ya estén).
+- **Comprimir PDF**: las fotos se vuelven a guardar más ligeras (poca, recomendada o mucha compresión) y lo demás queda igual.
+- **Reparar PDF**: reescribe un PDF dañado; si está muy roto, lo rehace desde lo que se alcanza a ver, con el texto para buscar y copiar.
+- **JPG a PDF**: JPG, PNG, HEIC, GIF y más, en el orden que quieras, del tamaño de la imagen, carta o A4, con margen (las fotos del teléfono salen derechas).
+- **HTML a PDF**: una página web guardada en la computadora, con sus estilos e imágenes y sin ejecutar sus scripts.
+- **PDF a JPG**: cada página como JPG o PNG a 72, 150 o 300 puntos por pulgada.
+- **PDF a PowerPoint**: una diapositiva por página, con el texto en cuadros que se pueden cambiar (letra, tamaño y color como en el PDF) y el resto de fondo; o cada página como imagen. Se abre directo en WEPO Present.
+- **PDF a PDF/A** (PDF/A-2b, para archivar): metadatos XMP, perfil de color sRGB, identificador del archivo, sin JavaScript ni adjuntos; las páginas con letras que no vienen dentro del PDF quedan como imagen con su texto.
+- **Dividir PDF**: un archivo por página, por rangos (1-3, 5, 8-) o cada cierto número de páginas.
+- **Números de página**: seis posiciones, «1», «Página 1», «Página 1 de 10» o «1 / 10», primer número y desde qué página (sin número en la portada), con vista previa.
+- **Recortar PDF**: arrastra las orillas del recuadro o escribe los márgenes en milímetros; en todas las páginas, solo en una, o que cada página quite sus márgenes en blanco.
+- **Marca de agua** de texto o de imagen (tu logo): nueve posiciones o en mosaico, tamaño, transparencia, giro, encima o debajo del contenido y en qué páginas, con vista previa.
+- **Comparar PDF**: dos versiones lado a lado, con lo que se quitó en rojo, lo que se agregó en verde y la lista de cambios; también marca dónde cambió el dibujo (imágenes, colores, formas).
+
 ### Transiciones vistosas en WEPO Present
 - 13 transiciones nuevas, como las «llamativas» de PowerPoint: *Cubo*, *Voltear*, *Galería*, *Puertas*, *Cortinas*, *Caer*, *Remolino*, *Onda*, *Reloj*, *Persianas*, *Noticia*, *Destello* y *Rueda* (varias con dirección).
 - Se guardan en el .pptx como las de PowerPoint 2010 y 2013 (con una transición de respaldo para programas que no las conocen) y se leen las de PowerPoint.

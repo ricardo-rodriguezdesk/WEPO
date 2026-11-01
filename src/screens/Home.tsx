@@ -5,10 +5,14 @@ import appIcon from "../assets/wepo-icon.png";
 import type { RecentFile } from "../lib/recents";
 import { folderLabel, whenLabel } from "../lib/recents";
 import type { RecoveryInfo } from "../lib/recovery";
+import { TOOLS } from "../tools/tools";
+import { ToolIcon } from "../tools/ToolsScreen";
 import "./Home.css";
 
 type Props = {
   onNew: (kind: DocKind) => void;
+  /** Abrir WEPO Convertir (herramientas para PDF e imágenes). */
+  onTools: () => void;
   onOpen: () => void;
   onOpenRecent: (path: string) => void;
   onRemoveRecent: (path: string) => void;
@@ -70,6 +74,24 @@ export default function Home(props: Props) {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="home-section">
+        <h2>Convertir</h2>
+        <button type="button" className="home-tools" onClick={props.onTools}>
+          <span className="home-tools-icons">
+            {TOOLS.filter((t) => ["compress", "jpg2pdf", "pdf2pptx", "compare"].includes(t.id)).map((t) => (
+              <ToolIcon key={t.id} def={t} size={34} />
+            ))}
+          </span>
+          <span className="home-tools-text">
+            <b>WEPO Convertir</b>
+            <span>Comprimir, dividir, recortar, numerar o comparar PDF; de JPG, HTML a PDF y de PDF a JPG, PowerPoint o PDF/A.</span>
+          </span>
+          <span className="home-tools-arrow" aria-hidden>
+            ›
+          </span>
+        </button>
       </section>
 
       <section className="home-section">

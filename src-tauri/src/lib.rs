@@ -774,6 +774,7 @@ pub fn run() {
             windows::quit_app,
             files::file_read,
             files::file_write,
+            files::file_exists,
             files::user_name,
             windows::open_window,
             sheet_note,

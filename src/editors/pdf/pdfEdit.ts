@@ -101,7 +101,7 @@ export function shownSize(p: PageRef): { width: number; height: number } {
   return turn ? { width: p.height, height: p.width } : { width: p.width, height: p.height };
 }
 
-function hexColor(hex: string) {
+export function hexColor(hex: string) {
   const h = hex.replace("#", "");
   return rgb(parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255);
 }
@@ -121,7 +121,7 @@ function PDFText(text: string) {
 }
 
 /** Las fuentes estándar de PDF solo traen el alfabeto latino: lo demás se cambia por "?". */
-function latin(text: string): string {
+export function latin(text: string): string {
   return text.replace(/[^ -~ -ÿ\n]/g, "?");
 }
 
@@ -130,7 +130,7 @@ function latin(text: string): string {
  * hereda transformaciones que el contenido original deja sin cerrar (pasa con
  * PDFs de algunos programas) y los resaltados quedan justo sobre el texto.
  */
-function isolateContent(page: PDFPage, out: PDFDocument) {
+export function isolateContent(page: PDFPage, out: PDFDocument) {
   page.node.normalize();
   const start = out.context.register(out.context.stream("q\n"));
   const end = out.context.register(out.context.stream("\nQ\n"));
@@ -455,7 +455,7 @@ async function drawWatermark(page: PDFPage, p: PageRef, out: PDFDocument, mark: 
  * cifrado se queda entre los objetos: se quita para que el PDF guardado no
  * parezca cifrado (si lleva contraseña, encrypt() pone uno nuevo).
  */
-function dropOldEncryption(doc: PDFDocument) {
+export function dropOldEncryption(doc: PDFDocument) {
   for (const [ref, obj] of doc.context.enumerateIndirectObjects()) {
     if (obj instanceof PDFDict && obj.has(PDFName.of("O")) && obj.has(PDFName.of("U")) && obj.get(PDFName.of("Filter")) === PDFName.of("Standard")) doc.context.delete(ref);
   }
@@ -558,7 +558,7 @@ export async function addOcrText(source: Source, pages: { index: number; lines: 
 }
 
 /** Texto invisible (como el de un escaneo con OCR): se puede buscar y copiar, pero no se ve. */
-async function writeInvisibleText(doc: PDFDocument, page: PDFPage, font: PDFFont, lines: OcrText[]) {
+export async function writeInvisibleText(doc: PDFDocument, page: PDFPage, font: PDFFont, lines: OcrText[]) {
   void doc;
   const name = page.node.newFontDictionary("WepoOcr", font.ref);
   const ops = [pushGraphicsState(), beginText(), setTextRenderingMode(TextRenderingMode.Invisible)];

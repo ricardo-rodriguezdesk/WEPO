@@ -62,6 +62,12 @@ pub fn file_write(path: String, data: String) -> Result<(), String> {
     })
 }
 
+/// ¿Ya existe un archivo con ese nombre? (para no encimar lo que guarda «Convertir»).
+#[tauri::command]
+pub fn file_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
 /// Nombre del usuario de la computadora (para firmar comentarios y cambios).
 #[tauri::command]
 pub fn user_name() -> String {

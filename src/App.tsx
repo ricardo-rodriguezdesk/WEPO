@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,6 +18,8 @@ import type { Converted } from "./lib/pdfConvert";
 import { pdfToWrite } from "./editors/write/fromPdf";
 import { pdfTables, pdfToSheets } from "./editors/sheets/fromPdf";
 import ComingSoon from "./editors/ComingSoon";
+import ToolsScreen from "./tools/ToolsScreen";
+import type { DropHandler } from "./tools/ToolsScreen";
 import type { DocKind } from "./lib/documents";
 import { ALL_EXTENSIONS, DOC_KINDS, extensionOf, fileNameOf, kindFromPath } from "./lib/documents";
 import type { SheetView } from "./lib/spreadsheet";
@@ -54,6 +56,10 @@ export default function App() {
   // Copias que quedaron de documentos sin guardar (si WEPO se cerró de golpe).
   // Solo la primera ventana las ofrece, para no repetirlas en cada ventana nueva.
   const [recovery, setRecovery] = useState<RecoveryInfo[]>([]);
+  // WEPO Convertir (en la pantalla de inicio, sin documento abierto).
+  const [tools, setTools] = useState(false);
+  const toolsDrop = useRef<DropHandler>(null);
+  const setDropHandler = useCallback((h: DropHandler) => (toolsDrop.current = h), []);
   useEffect(() => {
     if (getCurrentWindow().label === "main") recoveryApi.list().then(setRecovery);
   }, []);
@@ -105,6 +111,7 @@ export default function App() {
 
   function show(next: OpenDocument | null, message: string | null = null) {
     dirty.current = false;
+    if (next) setTools(false);
     setError(message);
     setDoc(next);
     setTitle(next?.fileName ?? null);
@@ -217,7 +224,7 @@ export default function App() {
       else if (command === "quit") a.quit();
       // guardar, imprimir y buscar los atiende el editor abierto.
     });
-    const stopMenu = listen<string>("menu", (event) => runCommand(event.payload as Command));
+    const stopMenu = listen<string>("menu", (event) => runCommand(event.payload as Command, "menu"));
     // ⌘O, ⌘N y ⌘Q también desde el teclado (Ctrl en Windows; en macOS además los atiende el menú).
     function onKey(e: KeyboardEvent) {
       if (!hasModifier(e) || e.altKey) return;
@@ -281,6 +288,8 @@ export default function App() {
       else if (type === "leave") setDragging(false);
       else if (type === "drop") {
         setDragging(false);
+        // En una herramienta de WEPO Convertir, los archivos son para ella.
+        if (toolsDrop.current) return toolsDrop.current(event.payload.paths);
         const [first] = event.payload.paths;
         if (first) openPathRef.current(first);
       }
@@ -290,10 +299,15 @@ export default function App() {
     };
   }, []);
 
+  if (!doc && tools) {
+    return <ToolsScreen onHome={() => setTools(false)} onOpenPath={(path) => openPath(path)} setDropHandler={setDropHandler} />;
+  }
+
   if (!doc) {
     return (
       <Home
         onNew={newDocument}
+        onTools={() => setTools(true)}
         onOpen={() => openDialog()}
         onOpenRecent={openPath}
         onRemoveRecent={(path) => {

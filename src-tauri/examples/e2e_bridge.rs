@@ -72,6 +72,7 @@ fn main() {
                 "user_name" => Ok(json!("Prueba")),
                 "file_read" => files::file_read(st("path")).map(Value::from),
                 "file_write" => files::file_write(st("path"), st("data")).map(|_| Value::Null),
+                "file_exists" => Ok(json!(files::file_exists(st("path")))),
                 "ocr_image" => {
                     let langs: Vec<String> = serde_json::from_value(a["langs"].clone()).unwrap_or_default();
                     wepo_lib::ocr::recognize(&files::decode(&st("image"))?, &langs).map(|lines| json!(lines))

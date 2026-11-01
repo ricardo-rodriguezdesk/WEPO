@@ -28,6 +28,7 @@ La versión más reciente está en [**Releases**](../../releases): hay instalado
 | **WEPO Sheets** | Hojas de cálculo | .xlsx, .xlsm, .xlsb, .xls, .ods, .csv |
 | **WEPO Present** | Presentaciones | .pptx |
 | **WEPO PDF** | Ver, editar y convertir PDF (a Write o a Sheets) | .pdf |
+| **WEPO Convertir** | Comprimir, reparar, dividir, recortar, numerar, marca de agua y comparar PDF; JPG y HTML a PDF; PDF a JPG, PowerPoint y PDF/A | .pdf, .jpg, .png, .html → .pdf, .jpg, .pptx |
 
 ## Tecnología
 
@@ -52,6 +53,7 @@ src/                      Interfaz (React + TypeScript)
 │   ├── pdf/              WEPO PDF: visor y edición (pdfEdit.ts guarda con pdf-lib)
 │   ├── write/            WEPO Write: editor, páginas (extensions.ts) y lector/escritor de .docx
 │   └── ComingSoon.tsx    Marcador de los editores en construcción
+├── tools/                WEPO Convertir: herramientas para PDF e imágenes (todo sin internet)
 ├── components/           Piezas compartidas (barra superior, íconos)
 └── lib/                  Tipos de documento, recientes, órdenes del menú y comunicación con Rust
 
@@ -287,6 +289,8 @@ WEPO entiende más de 490 funciones. Puedes escribirlas en español (`=SUMA`, `=
 - [x] WEPO Present: video y audio (se reproducen al presentar y se guardan en el .pptx)
 - [x] WEPO PDF: abrir, editar y guardar PDF con contraseña (y poner o quitar la contraseña)
 - [x] WEPO PDF: reconocer texto en escaneos (OCR), con el del sistema (sin que WEPO pese más)
+- [x] WEPO Convertir: comprimir, reparar, dividir, recortar, números de página, marca de agua (texto o imagen) y comparar PDF
+- [x] WEPO Convertir: JPG y HTML a PDF; PDF a JPG, a PowerPoint (editable) y a PDF/A
 
 ## Licencia
 
