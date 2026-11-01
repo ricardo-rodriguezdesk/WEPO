@@ -293,7 +293,7 @@ function MediaView({ el, play }: { el: ImageElement; play: boolean }) {
         stop(e);
         const a = audio.current;
         if (!a) return;
-        if (a.paused) void a.play();
+        if (a.paused) a.play().catch(() => {});
         else a.pause();
       }}
     >

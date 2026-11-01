@@ -250,9 +250,11 @@ test.describe("WEPO Convertir", () => {
     const errors = collectErrors(page);
     await openTool(page, "Comparar PDF");
     await set(page, "__openPath", fixture("contrato-v1.pdf"));
-    await page.getByRole("button", { name: "Elegir PDF" }).first().click();
+    await page.getByRole("button", { name: "Elegir el PDF de antes" }).click();
+    await expect(page.locator(".tool-compare-slot").first()).toContainText("contrato-v1.pdf");
     await set(page, "__openPath", fixture("contrato-v2.pdf"));
-    await page.getByRole("button", { name: "Elegir PDF" }).click();
+    await page.getByRole("button", { name: "Elegir el PDF de después" }).click();
+    await expect(page.locator(".tool-compare-slot").nth(1)).toContainText("contrato-v2.pdf");
     await page.getByRole("button", { name: "Comparar", exact: true }).click();
     await expect(page.locator(".tool-compare-summary")).toContainText("4 diferencias en el texto: 1 quitada, 1 agregada, 2 cambiadas");
     const list = page.getByLabel("Diferencias");

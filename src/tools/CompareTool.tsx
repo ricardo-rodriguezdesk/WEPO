@@ -109,7 +109,7 @@ export default function CompareTool({ def, onBack, setDropHandler }: { def: Tool
         ) : (
           <ToolIcon def={def} size={40} />
         )}
-        <button type="button" className={`btn${f ? "" : " btn-primary"}`} onClick={async () => fill(await pickFiles("PDF", ["pdf"], false), i)}>
+        <button type="button" className={`btn${f ? "" : " btn-primary"}`} aria-label={`${f ? "Cambiar" : "Elegir"} el PDF de ${i === 0 ? "antes" : "después"}`} onClick={async () => fill(await pickFiles("PDF", ["pdf"], false), i)}>
           {f ? "Cambiar" : "Elegir PDF"}
         </button>
       </div>
